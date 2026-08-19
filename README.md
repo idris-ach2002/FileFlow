@@ -1,68 +1,93 @@
 # FileFlow
 
-FileFlow is a cross-platform desktop application for local file conversion, organisation and automation. The initial desktop targets are **macOS** and **Linux**.
+FileFlow is a local-first desktop application for file conversion, organisation and automation. It is designed to expose powerful file tooling through a simple interface that remains usable by non-technical users.
+
+Initial desktop targets: **macOS** and **Linux**.
+
+## Current capabilities
+
+The repository already contains a working native desktop foundation, not only UI mockups:
+
+- native file/folder pickers and Finder/Linux drag & drop;
+- recursive intake with bounded batches, backpressure, hidden/symlink safeguards and paginated workspaces;
+- magic/extension format detection and grouping by file family;
+- server-side workspace search, filters, sorting, insights and recommendations;
+- conversion capability graph with multi-step route planning;
+- resource-aware scheduler with CPU/RAM/I/O and per-engine quotas;
+- cancellable external processes invoked directly without a shell;
+- safe temporary outputs, conflict handling and atomic finalisation;
+- local SQLite history, favourites and recipes;
+- exact duplicate confirmation using staged SHA-256 hashing;
+- responsive Angular desktop UI, command palette, dark/light themes and native tray navigation;
+- secure post-conversion actions: open, reveal in Finder/file manager and save a copy.
+
+### Locally executable actions
+
+The current runtime wires these actions to real local engines:
+
+- images -> PDF;
+- image conversion and batch conversion;
+- image optimisation and resizing;
+- metadata removal and metadata extraction;
+- Office/OpenDocument -> PDF;
+- PDF merge, split, compression, OCR, text extraction and PDF -> images;
+- image OCR;
+- archive creation and guarded extraction;
+- media compatibility conversion and compression;
+- audio conversion and audio extraction;
+- video -> GIF.
+
+Additional actions are already represented by the capability planner and can be connected without changing the UI/domain architecture.
 
 ## Architecture
 
 - **Angular 22**: desktop UI only.
-- **Tauri 2**: native desktop shell and IPC boundary.
+- **Tauri 2**: native desktop shell, IPC, tray and platform integration.
 - **Rust core**: domain model, workspaces, planning, scheduling, execution and output safety.
-- **Tokio**: async I/O, process orchestration and queues.
-- **Rayon**: CPU-bound parallel work owned by FileFlow.
-- **SQLite / rusqlite**: settings, recipes and history.
-- **External engines**: FFmpeg, libvips, ImageMagick, qpdf, Poppler, Ghostscript, LibreOffice, OCRmyPDF/Tesseract, Pandoc, 7-Zip and ExifTool.
+- **Tokio**: async I/O, child-process orchestration, bounded queues and cancellation.
+- **Bounded CPU workers**: hashing/analysis work is deliberately isolated from the async runtime.
+- **SQLite / rusqlite**: settings, favourites, recipes and history.
+- **External engines**: FFmpeg, libvips, ImageMagick, img2pdf, qpdf, Poppler, Ghostscript, LibreOffice, OCRmyPDF/Tesseract, Pandoc, 7-Zip and ExifTool.
 
 External engines are discovered at runtime. Missing engines disable only their related capabilities; they do not prevent FileFlow from starting.
 
 ## Repository layout
 
 ```text
-frontend/                 Angular UI
-src-tauri/                Tauri application shell / IPC / platform bundling
-crates/fileflow-domain/   Shared domain types and resource profiles
-crates/fileflow-engine/   Engine abstraction and cross-platform executable probing
-crates/fileflow-core/     Engine registry and application core
-crates/fileflow-intake/   File/folder/archive intake
-crates/fileflow-formats/  Format registry and MIME/magic detection
-crates/fileflow-workspace Workspace model and grouping
-crates/fileflow-planner/  Transformation planning / DAG
-crates/fileflow-scheduler Resource-aware scheduling
-crates/fileflow-executor/ Job execution / cancellation
-crates/fileflow-output/   Atomic outputs / naming / conflict handling
-crates/fileflow-storage/  SQLite persistence
-crates/adapters/          Conversion engine adapters
-scripts/                  Portable setup and diagnostics
+frontend/                    Angular UI
+src-tauri/                   Tauri application shell / IPC / platform integration
+crates/fileflow-domain/      Shared domain model
+crates/fileflow-engine/      Engine abstraction and executable probing
+crates/fileflow-core/        Engine registry and application core
+crates/fileflow-intake/      File/folder/archive intake
+crates/fileflow-formats/     Format registry and MIME/magic detection
+crates/fileflow-workspace/   Workspace model, querying and insights
+crates/fileflow-planner/     Action catalog and conversion graph
+crates/fileflow-scheduler/   Resource-aware scheduling
+crates/fileflow-executor/    Real job execution / cancellation
+crates/fileflow-output/      Atomic outputs / naming / conflict handling
+crates/fileflow-analysis/    Duplicate analysis
+crates/fileflow-storage/     SQLite persistence
+crates/adapters/             Conversion-engine adapters
+scripts/                     Portable setup, verification and diagnostics
 ```
 
 ## Toolchain
 
-Angular 22 requires a supported Node version. The repository pins Node `22.22.3` in `.nvmrc` as the recommended development version.
-
-Rust is managed with `rust-toolchain.toml` and uses the stable toolchain.
+The repository pins Node `22.22.3` in `.nvmrc` and pnpm `11.20.0` in `package.json`.
+Rust is pinned by `rust-toolchain.toml`.
 
 ## First setup: macOS or Linux
 
-Use the platform-aware setup entry point:
-
 ```bash
 sh scripts/setup.sh
-```
-
-It detects the host automatically:
-
-- macOS -> `scripts/setup-macos.sh`
-- Linux -> `scripts/setup-linux.sh`
-
-Then bootstrap JavaScript and Rust dependencies:
-
-```bash
 sh scripts/bootstrap.sh
 ```
 
-Check detected conversion engines at any time:
+Check conversion engines:
 
 ```bash
-npm run engines
+pnpm run engines
 ```
 
 Run the desktop application:
@@ -71,92 +96,57 @@ Run the desktop application:
 pnpm run dev
 ```
 
-### macOS notes
+Run the complete quality gate before a merge:
 
-Tauri desktop development on macOS requires Xcode Command Line Tools. `scripts/setup-macos.sh` checks this and can start Apple's installer when they are missing.
+```bash
+pnpm run verify
+```
 
-The conversion engines are installed through Homebrew. LibreOffice is installed as the macOS application bundle and FileFlow also probes `/Applications/LibreOffice.app/Contents/MacOS/soffice` directly.
+The verification gate performs the Angular production build/tests and Rust formatting/check/tests/Clippy with the lockfile enforced.
 
-FileFlow does not rely only on the shell `PATH` when probing conversion engines. This matters for an application started from Finder or the Dock: the engine probe also checks the standard Apple Silicon Homebrew prefix `/opt/homebrew/bin` and the Intel prefix `/usr/local/bin`.
+## macOS
 
-Build a native package for the current Mac architecture:
+The setup helper checks Xcode Command Line Tools and Homebrew engines. FileFlow probes both common Homebrew prefixes (`/opt/homebrew/bin` and `/usr/local/bin`) plus the LibreOffice application bundle, so engine discovery does not rely only on an interactive shell `PATH`.
+
+Current-architecture package:
 
 ```bash
 pnpm run build:mac
 ```
 
-This produces the macOS application bundle and DMG through Tauri.
-
-To build a universal macOS binary for both Apple Silicon and Intel, install both Rust targets once:
+Universal Apple Silicon + Intel package (after installing both Rust targets):
 
 ```bash
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
-ppnpm run build:mac:universal
+pnpm run build:mac:universal
 ```
 
-Signing/notarization is a distribution concern and will be configured when FileFlow is ready to ship to other Mac users.
-
-### Debian / Ubuntu
-
-The portable entry point works here too:
-
-```bash
-sh scripts/setup.sh
-```
-
-Or call the Linux helper directly:
+## Linux
 
 ```bash
 sh scripts/setup-linux.sh
-```
-
-Build Linux packages:
-
-```bash
 pnpm run build:linux
 ```
 
-The Linux Tauri configuration currently targets `.deb` and AppImage.
+The Linux configuration currently targets `.deb` and AppImage.
 
-## Platform-specific Tauri configuration
-
-Tauri automatically merges the matching platform file:
+## Tauri platform configuration
 
 ```text
-src-tauri/tauri.conf.json          common configuration
-src-tauri/tauri.macos.conf.json   .app / .dmg and macOS settings
-src-tauri/tauri.linux.conf.json   .deb / AppImage settings
+src-tauri/tauri.conf.json          shared configuration
+src-tauri/tauri.macos.conf.json   macOS app/DMG settings
+src-tauri/tauri.linux.conf.json   Linux deb/AppImage settings
 ```
 
-This keeps the application runtime architecture shared while allowing native packaging on each operating system.
+Docker is intentionally not part of the runtime or the normal development workflow.
 
-## Quality commands
+## Safety rules
 
-```bash
-npm run frontend:build
-npm run check:rust
-npm run test:rust
-npm run clippy
-npm run fmt
-npm run check
-npm run test
-```
-
-## Git
-
-No Git repository is included intentionally. Initialise it after validating the local toolchain:
-
-```bash
-git init
-git add .
-git commit -m "chore: initialize FileFlow architecture"
-```
-
-Then return the complete project including `.git` so future work can be performed as atomic commits.
-
-## Upstream references
-
-- Tauri prerequisites: https://v2.tauri.app/start/prerequisites/
-- Tauri macOS bundle: https://v2.tauri.app/distribute/macos-application-bundle/
-- Tauri DMG: https://v2.tauri.app/distribute/dmg/
-- Angular version compatibility: https://angular.dev/reference/versions
+1. Originals are never overwritten by default.
+2. Outputs are written to temporary paths and finalised only after successful processing.
+3. Archives are preflighted for traversal, links, extreme entry counts, unpacked size and suspicious compression ratios.
+4. External tools are invoked directly with argument arrays; FileFlow never uses `sh -c` for user paths.
+5. Batch concurrency is bounded by the scheduler instead of launching one heavy process per CPU.
+6. Symlinks are not followed by intake or post-output copy operations by default.
+7. Opening/copying a result from the UI is restricted to paths registered as outputs of the current FileFlow session.
+8. History stores operation metadata only, never document contents.
