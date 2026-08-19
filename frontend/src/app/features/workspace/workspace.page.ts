@@ -9,6 +9,7 @@ import {
   AssetSortKey,
   FormatFamily,
 } from '../../core/ipc/tauri.models';
+import { PreferencesService } from '../../core/preferences/preferences.service';
 import { WorkspaceStore } from './data-access/workspace.store';
 
 @Component({
@@ -204,12 +205,15 @@ import { WorkspaceStore } from './data-access/workspace.store';
 export class WorkspacePage {
   protected readonly store = inject(WorkspaceStore);
   protected readonly capabilities = inject(CapabilityStore);
+  private readonly preferences = inject(PreferencesService);
   private readonly router = inject(Router);
-  protected readonly destination = signal<'subfolder' | 'same' | 'choose'>('subfolder');
+  protected readonly destination = signal<'subfolder' | 'same' | 'choose'>(
+    this.preferences.destination() === 'sameFolder' ? 'same' : this.preferences.destination() === 'ask' ? 'choose' : 'subfolder',
+  );
   protected readonly customDirectory = signal<string | null>(null);
   protected readonly targetFormat = signal<string | null>(null);
   protected readonly quality = signal<'small' | 'balanced' | 'high'>('balanced');
-  protected readonly preserveTree = signal(true);
+  protected readonly preserveTree = signal(this.preferences.preserveTree());
   private searchTimer?: ReturnType<typeof setTimeout>;
 
   protected readonly activeAction = computed(() => this.capabilities.action(this.store.activeActionId()));

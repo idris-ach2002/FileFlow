@@ -1,6 +1,7 @@
 import { computed, inject, Injectable, signal } from '@angular/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { TauriBridgeService } from '../../../core/ipc/tauri-bridge.service';
+import { PreferencesService } from '../../../core/preferences/preferences.service';
 import {
   ActionRecommendation,
   ArchiveInspection,
@@ -38,6 +39,7 @@ const PAGE_SIZE = 200;
 @Injectable({ providedIn: 'root' })
 export class WorkspaceStore {
   private readonly bridge = inject(TauriBridgeService);
+  private readonly preferences = inject(PreferencesService);
   private queryGeneration = 0;
 
   readonly phase = signal<WorkspacePhase>('idle');
@@ -53,7 +55,7 @@ export class WorkspaceStore {
   readonly searchTerm = signal('');
   readonly sortBy = signal<AssetSortKey>('name');
   readonly sortDirection = signal<SortDirection>('ascending');
-  readonly includeHidden = signal(true);
+  readonly includeHidden = signal(this.preferences.showHidden());
   readonly selectedIds = signal<ReadonlySet<string>>(new Set());
   readonly recommendations = signal<ActionRecommendation[]>([]);
   readonly insights = signal<WorkspaceInsights | null>(null);
