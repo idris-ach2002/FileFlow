@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 fileflow-domain = { path = "../fileflow-domain" }
+fileflow-formats = { path = "../fileflow-formats" }
 fileflow-output = { path = "../fileflow-output" }
 fileflow-scheduler = { path = "../fileflow-scheduler" }
 chrono.workspace = true

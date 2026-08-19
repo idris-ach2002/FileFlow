@@ -3,6 +3,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { TauriBridgeService } from '../../../core/ipc/tauri-bridge.service';
 import {
   ActionRecommendation,
+  ArchiveInspection,
   Asset,
   DuplicateReport,
   ExecuteWorkspaceActionRequest,
@@ -60,6 +61,9 @@ export class WorkspaceStore {
   readonly duplicateReport = signal<DuplicateReport | null>(null);
   readonly duplicateScanLoading = signal(false);
   readonly duplicateScanError = signal<string | null>(null);
+  readonly archiveInspection = signal<ArchiveInspection | null>(null);
+  readonly archiveInspectionLoading = signal(false);
+  readonly archiveInspectionError = signal<string | null>(null);
   readonly pendingActionId = signal<string | null>(null);
   readonly activeActionId = signal<string | null>(null);
   readonly executionSummary = signal<ExecutionSummary | null>(null);
@@ -335,6 +339,27 @@ export class WorkspaceStore {
     }
   }
 
+  async inspectArchive(): Promise<void> {
+    const workspaceId = this.workspace()?.id;
+    if (!workspaceId || this.archiveInspectionLoading()) return;
+    const selectedArchive = this.selectedAssets().find((asset) => asset.kind === 'archive');
+    this.archiveInspectionLoading.set(true);
+    this.archiveInspectionError.set(null);
+    try {
+      this.archiveInspection.set(await this.bridge.inspectArchive(workspaceId, selectedArchive?.data.id ?? null));
+    } catch (error) {
+      this.archiveInspectionError.set(errorMessage(error));
+    } finally {
+      this.archiveInspectionLoading.set(false);
+    }
+  }
+
+  async analyzeOutput(index = 0): Promise<boolean> {
+    const output = this.executionSummary()?.outputs[index];
+    if (!output) return false;
+    return this.start([output]);
+  }
+
   private query(offset: number): AssetQuery {
     return {
       offset,
@@ -404,6 +429,8 @@ export class WorkspaceStore {
     this.stats.set({ ...EMPTY_STATS });
     this.assets.set([]);
     this.warnings.set([]);
+    this.archiveInspection.set(null);
+    this.archiveInspectionError.set(null);
     this.error.set(null);
     this.pageTotal.set(0);
     this.familyFilter.set(null);

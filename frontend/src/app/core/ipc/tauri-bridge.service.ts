@@ -2,6 +2,7 @@ import { Injectable } from '@angular/core';
 import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
 import {
   ActionRecommendation,
+  ArchiveInspection,
   AssetPage,
   AssetQuery,
   CapabilityCatalog,
@@ -129,5 +130,9 @@ export class TauriBridgeService {
 
   confirmDuplicates(workspaceId: string): Promise<DuplicateReport> {
     return invoke<DuplicateReport>('confirm_duplicates', { workspaceId });
+  }
+
+  inspectArchive(workspaceId: string, assetId?: string | null): Promise<ArchiveInspection> {
+    return invoke<ArchiveInspection>('inspect_archive', { workspaceId, assetId: assetId ?? null });
   }
 }

@@ -5,7 +5,8 @@
 //! every item must acquire a resource lease from the scheduler first.
 
 use chrono::Utc;
-use fileflow_domain::{JobId, JobState, OutputPolicy, ResourceProfile};
+use fileflow_domain::{FormatFamily, JobId, JobState, OutputPolicy, ResourceProfile};
+use fileflow_formats::FormatRegistry;
 use fileflow_output::{OutputPlan, OutputRequest, OutputResolver};
 use fileflow_scheduler::ResourceScheduler;
 use serde::{Deserialize, Serialize};
@@ -1053,6 +1054,185 @@ async fn finalize_directory_output(plan: &DirectoryOutputPlan) -> Result<(), Exe
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveFamilySummary {
+    pub family: FormatFamily,
+    pub count: usize,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveEntryPreview {
+    pub path: String,
+    pub size_bytes: u64,
+    pub family: FormatFamily,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveInspection {
+    pub entries: usize,
+    pub files: usize,
+    pub directories: usize,
+    pub total_unpacked_bytes: u64,
+    pub families: Vec<ArchiveFamilySummary>,
+    pub samples: Vec<ArchiveEntryPreview>,
+}
+
+pub async fn inspect_archive(
+    engine: &Path,
+    input: &Path,
+    cancellation: &CancellationToken,
+) -> Result<ArchiveInspection, ExecutionError> {
+    let listing = capture_process(
+        engine,
+        &[OsString::from("l"), OsString::from("-slt"), input.as_os_str().into()],
+        cancellation,
+    )
+    .await?;
+    validate_archive_listing(&listing)?;
+    parse_archive_listing(&listing)
+}
+
+fn parse_archive_listing(listing: &str) -> Result<ArchiveInspection, ExecutionError> {
+    #[derive(Default)]
+    struct Entry {
+        path: Option<String>,
+        size: u64,
+        folder: bool,
+        attributes: Option<String>,
+    }
+
+    fn flush(
+        entry: &mut Entry,
+        registry: &FormatRegistry,
+        family_counts: &mut HashMap<FormatFamily, (usize, u64)>,
+        samples: &mut Vec<ArchiveEntryPreview>,
+        files: &mut usize,
+        directories: &mut usize,
+        unpacked: &mut u64,
+    ) -> Result<(), ExecutionError> {
+        let Some(path) = entry.path.take() else {
+            *entry = Entry::default();
+            return Ok(());
+        };
+        validate_archive_path(&path)?;
+        let is_directory = entry.folder
+            || path.ends_with('/')
+            || entry
+                .attributes
+                .as_deref()
+                .is_some_and(|attributes| attributes.starts_with('D'));
+        if is_directory {
+            *directories = directories.saturating_add(1);
+        } else {
+            *files = files.saturating_add(1);
+            *unpacked = unpacked.saturating_add(entry.size);
+            let detected = registry.detect(Path::new(&path), &[]);
+            let family = detected.family;
+            let family_entry = family_counts.entry(family).or_default();
+            family_entry.0 = family_entry.0.saturating_add(1);
+            family_entry.1 = family_entry.1.saturating_add(entry.size);
+            if samples.len() < 24 {
+                samples.push(ArchiveEntryPreview {
+                    path,
+                    size_bytes: entry.size,
+                    family,
+                });
+            }
+        }
+        *entry = Entry::default();
+        Ok(())
+    }
+
+    let registry = FormatRegistry;
+    let mut in_entries = false;
+    let mut entry = Entry::default();
+    let mut family_counts = HashMap::<FormatFamily, (usize, u64)>::new();
+    let mut samples = Vec::new();
+    let mut files = 0_usize;
+    let mut directories = 0_usize;
+    let mut total_unpacked_bytes = 0_u64;
+
+    for raw_line in listing.lines() {
+        let line = raw_line.trim();
+        if line.starts_with("----------") {
+            in_entries = true;
+            continue;
+        }
+        if !in_entries {
+            continue;
+        }
+        if line.is_empty() {
+            flush(
+                &mut entry,
+                &registry,
+                &mut family_counts,
+                &mut samples,
+                &mut files,
+                &mut directories,
+                &mut total_unpacked_bytes,
+            )?;
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("Path = ") {
+            if entry.path.is_some() {
+                flush(
+                    &mut entry,
+                    &registry,
+                    &mut family_counts,
+                    &mut samples,
+                    &mut files,
+                    &mut directories,
+                    &mut total_unpacked_bytes,
+                )?;
+            }
+            entry.path = Some(value.to_owned());
+        } else if let Some(value) = line.strip_prefix("Size = ") {
+            entry.size = value.trim().parse::<u64>().unwrap_or(0);
+        } else if let Some(value) = line.strip_prefix("Folder = ") {
+            entry.folder = matches!(value.trim(), "+" | "1" | "true");
+        } else if let Some(value) = line.strip_prefix("Attributes = ") {
+            entry.attributes = Some(value.to_owned());
+        }
+    }
+    flush(
+        &mut entry,
+        &registry,
+        &mut family_counts,
+        &mut samples,
+        &mut files,
+        &mut directories,
+        &mut total_unpacked_bytes,
+    )?;
+
+    let mut families = family_counts
+        .into_iter()
+        .map(|(family, (count, total_bytes))| ArchiveFamilySummary {
+            family,
+            count,
+            total_bytes,
+        })
+        .collect::<Vec<_>>();
+    families.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| left.family.cmp(&right.family))
+    });
+
+    Ok(ArchiveInspection {
+        entries: files.saturating_add(directories),
+        files,
+        directories,
+        total_unpacked_bytes,
+        families,
+        samples,
+    })
+}
+
 const MAX_ARCHIVE_ENTRIES: usize = 100_000;
 const MAX_ARCHIVE_UNPACKED_BYTES: u64 = 100 * 1024 * 1024 * 1024;
 const MAX_ARCHIVE_RATIO: u64 = 1_000;
@@ -1335,6 +1515,17 @@ mod tests {
         assert!(!is_supported("duplicate-scan"));
         assert!(executable_action_ids().iter().all(|action| is_supported(action)));
     }
+    #[test]
+    fn parses_archive_manifest_by_file_family() {
+        let listing = "Physical Size = 1000\n----------\nPath = photos\nFolder = +\nSize = 0\n\nPath = photos/a.jpg\nFolder = -\nSize = 120\n\nPath = docs/report.pdf\nFolder = -\nSize = 900\n\n";
+        let manifest = parse_archive_listing(listing).unwrap();
+        assert_eq!(manifest.files, 2);
+        assert_eq!(manifest.directories, 1);
+        assert_eq!(manifest.total_unpacked_bytes, 1020);
+        assert!(manifest.families.iter().any(|entry| entry.family == FormatFamily::Image && entry.count == 1));
+        assert!(manifest.families.iter().any(|entry| entry.family == FormatFamily::Pdf && entry.count == 1));
+    }
+
     #[test]
     fn image_pdf_list_is_nul_separated() {
         let inputs = vec![

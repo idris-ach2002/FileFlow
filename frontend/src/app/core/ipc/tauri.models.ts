@@ -388,3 +388,24 @@ export interface DuplicateReport {
   reclaimableBytes: number;
   warnings: AnalysisWarning[];
 }
+
+export interface ArchiveFamilySummary {
+  family: FormatFamily;
+  count: number;
+  totalBytes: number;
+}
+
+export interface ArchiveEntryPreview {
+  path: string;
+  sizeBytes: number;
+  family: FormatFamily;
+}
+
+export interface ArchiveInspection {
+  entries: number;
+  files: number;
+  directories: number;
+  totalUnpackedBytes: number;
+  families: ArchiveFamilySummary[];
+  samples: ArchiveEntryPreview[];
+}

@@ -1207,6 +1207,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "fileflow-domain",
+ "fileflow-formats",
  "fileflow-output",
  "fileflow-scheduler",
  "serde",
