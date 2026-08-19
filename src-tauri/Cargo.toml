@@ -29,6 +29,7 @@ fileflow-domain = { path = "../crates/fileflow-domain" }
 fileflow-intake = { path = "../crates/fileflow-intake" }
 fileflow-workspace = { path = "../crates/fileflow-workspace" }
 fileflow-engine = { path = "../crates/fileflow-engine" }
+fileflow-planner = { path = "../crates/fileflow-planner" }
 fileflow-scheduler = { path = "../crates/fileflow-scheduler" }
 serde.workspace = true
 tauri = { version = "2.11.5", features = ["tray-icon"] }

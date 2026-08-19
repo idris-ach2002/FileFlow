@@ -24,6 +24,7 @@ pub struct EngineProbe {
     pub display_name: String,
     pub available: bool,
     pub executable: Option<PathBuf>,
+    pub resource_profile: ResourceProfile,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -57,6 +58,7 @@ pub trait EngineAdapter: Send + Sync {
             display_name: descriptor.display_name,
             available: executable.is_some(),
             executable,
+            resource_profile: descriptor.resource_profile,
         })
     }
 }

@@ -1,8 +1,10 @@
 use crate::AppState;
 use fileflow_core::WorkspaceIntakeEvent;
-use fileflow_domain::WorkspaceId;
+use fileflow_domain::{ActionRecommendation, WorkspaceId};
 use fileflow_intake::ScanOptions;
-use fileflow_workspace::{AssetPage, AssetQuery, WorkspaceSnapshot};
+use fileflow_workspace::{
+    AssetPage, AssetQuery, WorkspaceInsights, WorkspaceSnapshot,
+};
 use std::path::PathBuf;
 use tauri::{ipc::Channel, State};
 use tokio::sync::mpsc;
@@ -57,5 +59,28 @@ pub fn list_workspace_assets(
     state
         .core
         .list_workspace_assets(workspace_id, query)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn workspace_insights(
+    state: State<'_, AppState>,
+    workspace_id: WorkspaceId,
+) -> Result<WorkspaceInsights, String> {
+    state
+        .core
+        .workspace_insights(workspace_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn workspace_recommendations(
+    state: State<'_, AppState>,
+    workspace_id: WorkspaceId,
+) -> Result<Vec<ActionRecommendation>, String> {
+    state
+        .core
+        .workspace_recommendations(workspace_id)
+        .await
         .map_err(|error| error.to_string())
 }

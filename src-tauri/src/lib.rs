@@ -1,11 +1,12 @@
 mod commands;
 
 use fileflow_core::FileFlowCore;
-use fileflow_scheduler::ResourceBudget;
+use fileflow_scheduler::ResourceScheduler;
 use std::sync::Arc;
 
 pub(crate) struct AppState {
     pub(crate) core: Arc<FileFlowCore>,
+    pub(crate) scheduler: Arc<ResourceScheduler>,
 }
 
 fn build_core() -> Arc<FileFlowCore> {
@@ -33,20 +34,25 @@ pub fn run() {
         )
         .init();
 
-    let budget = ResourceBudget::balanced();
-    tracing::info!(?budget, "resource budget initialized");
+    let scheduler = Arc::new(ResourceScheduler::default());
+    tracing::info!(budget = ?scheduler.budget(), "resource scheduler initialized");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
-        .manage(AppState { core: build_core() })
+        .manage(AppState { core: build_core(), scheduler })
         .invoke_handler(tauri::generate_handler![
             commands::system::health_check,
             commands::system::probe_engines,
+            commands::system::capability_catalog,
+            commands::system::plan_conversion,
+            commands::system::scheduler_status,
             commands::workspace::create_workspace,
             commands::workspace::get_workspace,
             commands::workspace::list_workspace_assets,
+            commands::workspace::workspace_insights,
+            commands::workspace::workspace_recommendations,
         ])
         .run(tauri::generate_context!())
         .expect("error while running FileFlow");

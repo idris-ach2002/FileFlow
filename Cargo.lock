@@ -1142,6 +1142,7 @@ dependencies = [
  "fileflow-domain",
  "fileflow-engine",
  "fileflow-intake",
+ "fileflow-planner",
  "fileflow-scheduler",
  "fileflow-workspace",
  "serde",
