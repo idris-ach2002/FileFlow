@@ -60,6 +60,7 @@ check "FFmpeg" ffmpeg
 check "libvips" vips
 check "ImageMagick" magick convert
 check "qpdf" qpdf
+check "img2pdf" img2pdf
 check "Poppler" pdftoppm
 check "Ghostscript" gs
 check "OCRmyPDF" ocrmypdf
