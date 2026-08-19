@@ -6,3 +6,4 @@ publish.workspace = true
 
 [dependencies]
 fileflow-domain = { path = "../fileflow-domain" }
+serde.workspace = true

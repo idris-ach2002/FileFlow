@@ -1,12 +1,17 @@
 use chrono::{DateTime, Utc};
-use fileflow_domain::{Asset, AssetKind, FormatFamily, WorkspaceId};
+use fileflow_domain::{Asset, AssetId, AssetKind, FormatFamily, SortDirection, WorkspaceId};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    cmp::{Ordering, Reverse},
+    collections::HashMap,
+    path::PathBuf,
+};
 use thiserror::Error;
 
 const MAX_PAGE_SIZE: usize = 500;
 const DEFAULT_PAGE_SIZE: usize = 100;
+const INSIGHT_TOP_ITEMS: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,7 +66,18 @@ pub struct WorkspaceSnapshot {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum AssetSortKey {
+    #[default]
+    Name,
+    Size,
+    Modified,
+    Format,
+    Family,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AssetQuery {
     pub offset: usize,
@@ -69,6 +85,24 @@ pub struct AssetQuery {
     pub family: Option<FormatFamily>,
     pub kind: Option<AssetKind>,
     pub search: Option<String>,
+    pub include_hidden: bool,
+    pub sort_by: AssetSortKey,
+    pub sort_direction: SortDirection,
+}
+
+impl Default for AssetQuery {
+    fn default() -> Self {
+        Self {
+            offset: 0,
+            limit: DEFAULT_PAGE_SIZE,
+            family: None,
+            kind: None,
+            search: None,
+            include_hidden: true,
+            sort_by: AssetSortKey::Name,
+            sort_direction: SortDirection::Ascending,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -79,6 +113,45 @@ pub struct AssetPage {
     pub limit: usize,
     pub total: usize,
     pub items: Vec<Asset>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionCount {
+    pub extension: String,
+    pub count: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetInsight {
+    pub id: AssetId,
+    pub name: String,
+    pub relative_path: PathBuf,
+    pub family: FormatFamily,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateSizeCandidate {
+    pub size_bytes: u64,
+    pub count: usize,
+    pub reclaimable_upper_bound: u64,
+    pub samples: Vec<AssetInsight>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceInsights {
+    pub hidden_assets: u64,
+    pub unknown_assets: u64,
+    pub extension_count: usize,
+    pub extensions: Vec<ExtensionCount>,
+    pub largest: Vec<AssetInsight>,
+    pub duplicate_size_candidates: Vec<DuplicateSizeCandidate>,
+    pub potential_duplicate_bytes: u64,
 }
 
 #[derive(Debug, Error)]
@@ -193,6 +266,14 @@ impl WorkspaceManager {
             .ok_or(WorkspaceError::NotFound(id))
     }
 
+    pub fn family_counts(&self, id: WorkspaceId) -> Result<HashMap<FormatFamily, u64>, WorkspaceError> {
+        self.workspaces
+            .read()
+            .get(&id)
+            .map(|workspace| workspace.families.clone())
+            .ok_or(WorkspaceError::NotFound(id))
+    }
+
     pub fn list_assets(&self, id: WorkspaceId, query: AssetQuery) -> Result<AssetPage, WorkspaceError> {
         let workspaces = self.workspaces.read();
         let workspace = workspaces.get(&id).ok_or(WorkspaceError::NotFound(id))?;
@@ -208,19 +289,16 @@ impl WorkspaceManager {
             .filter(|value| !value.is_empty())
             .map(str::to_lowercase);
 
-        let search = search.as_deref();
-        let family = query.family;
-        let kind = query.kind;
+        let mut filtered = workspace
+            .assets
+            .iter()
+            .filter(|asset| asset_matches(asset, &query, search.as_deref()))
+            .collect::<Vec<_>>();
+        filtered.sort_by(|left, right| compare_assets(left, right, query.sort_by, query.sort_direction));
 
-        let total = workspace
-            .assets
-            .iter()
-            .filter(|asset| asset_matches(asset, family, kind, search))
-            .count();
-        let items = workspace
-            .assets
-            .iter()
-            .filter(|asset| asset_matches(asset, family, kind, search))
+        let total = filtered.len();
+        let items = filtered
+            .into_iter()
             .skip(query.offset)
             .take(limit)
             .cloned()
@@ -234,17 +312,84 @@ impl WorkspaceManager {
             items,
         })
     }
+
+    pub fn insights(&self, id: WorkspaceId) -> Result<WorkspaceInsights, WorkspaceError> {
+        let workspaces = self.workspaces.read();
+        let workspace = workspaces.get(&id).ok_or(WorkspaceError::NotFound(id))?;
+        let mut hidden_assets = 0_u64;
+        let mut unknown_assets = 0_u64;
+        let mut extensions: HashMap<String, (u64, u64)> = HashMap::new();
+        let mut sized_assets = Vec::new();
+        let mut by_size: HashMap<u64, Vec<&Asset>> = HashMap::new();
+
+        for asset in &workspace.assets {
+            hidden_assets += u64::from(asset.common().hidden);
+            unknown_assets += u64::from(asset.family() == FormatFamily::Unknown);
+            let size = asset.size_bytes();
+            if size > 0 {
+                sized_assets.push(asset);
+                by_size.entry(size).or_default().push(asset);
+            }
+            if let Some(extension) = asset_extension(asset) {
+                let entry = extensions.entry(extension.to_owned()).or_default();
+                entry.0 += 1;
+                entry.1 = entry.1.saturating_add(size);
+            }
+        }
+
+        sized_assets.sort_by_key(|asset| Reverse(asset.size_bytes()));
+        let largest = sized_assets
+            .into_iter()
+            .take(INSIGHT_TOP_ITEMS)
+            .map(asset_insight)
+            .collect();
+
+        let mut extension_rows = extensions
+            .into_iter()
+            .map(|(extension, (count, total_bytes))| ExtensionCount {
+                extension,
+                count,
+                total_bytes,
+            })
+            .collect::<Vec<_>>();
+        extension_rows.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.extension.cmp(&b.extension)));
+
+        let mut duplicate_size_candidates = by_size
+            .into_iter()
+            .filter(|(_, assets)| assets.len() > 1)
+            .map(|(size_bytes, assets)| DuplicateSizeCandidate {
+                size_bytes,
+                count: assets.len(),
+                reclaimable_upper_bound: size_bytes.saturating_mul((assets.len() - 1) as u64),
+                samples: assets.into_iter().take(4).map(asset_insight).collect(),
+            })
+            .collect::<Vec<_>>();
+        duplicate_size_candidates.sort_by(|a, b| {
+            b.reclaimable_upper_bound
+                .cmp(&a.reclaimable_upper_bound)
+                .then_with(|| b.count.cmp(&a.count))
+        });
+        duplicate_size_candidates.truncate(INSIGHT_TOP_ITEMS);
+        let potential_duplicate_bytes = duplicate_size_candidates
+            .iter()
+            .fold(0_u64, |total, group| total.saturating_add(group.reclaimable_upper_bound));
+
+        Ok(WorkspaceInsights {
+            hidden_assets,
+            unknown_assets,
+            extension_count: extension_rows.len(),
+            extensions: extension_rows.into_iter().take(12).collect(),
+            largest,
+            duplicate_size_candidates,
+            potential_duplicate_bytes,
+        })
+    }
 }
 
-
-fn asset_matches(
-    asset: &Asset,
-    family: Option<FormatFamily>,
-    kind: Option<AssetKind>,
-    search: Option<&str>,
-) -> bool {
-    family.is_none_or(|family| asset.family() == family)
-        && kind.is_none_or(|kind| asset.kind() == kind)
+fn asset_matches(asset: &Asset, query: &AssetQuery, search: Option<&str>) -> bool {
+    query.family.is_none_or(|family| asset.family() == family)
+        && query.kind.is_none_or(|kind| asset.kind() == kind)
+        && (query.include_hidden || !asset.common().hidden)
         && search.is_none_or(|needle| {
             asset.common().name.to_lowercase().contains(needle)
                 || asset
@@ -254,6 +399,49 @@ fn asset_matches(
                     .to_lowercase()
                     .contains(needle)
         })
+}
+
+fn compare_assets(left: &Asset, right: &Asset, key: AssetSortKey, direction: SortDirection) -> Ordering {
+    let ordering = match key {
+        AssetSortKey::Name => left.common().name.to_lowercase().cmp(&right.common().name.to_lowercase()),
+        AssetSortKey::Size => left.size_bytes().cmp(&right.size_bytes()),
+        AssetSortKey::Modified => left.common().modified_at.cmp(&right.common().modified_at),
+        AssetSortKey::Format => asset_format(left).cmp(asset_format(right)),
+        AssetSortKey::Family => left.family().cmp(&right.family()),
+    }
+    .then_with(|| left.common().relative_path.cmp(&right.common().relative_path));
+
+    match direction {
+        SortDirection::Ascending => ordering,
+        SortDirection::Descending => ordering.reverse(),
+    }
+}
+
+fn asset_format(asset: &Asset) -> &str {
+    match asset {
+        Asset::File(file) => &file.format.id,
+        Asset::Archive(archive) => &archive.format.id,
+        Asset::Directory(_) => "directory",
+        Asset::Symlink(_) => "symlink",
+    }
+}
+
+fn asset_extension(asset: &Asset) -> Option<&str> {
+    match asset {
+        Asset::File(file) => file.format.extension.as_deref(),
+        Asset::Archive(archive) => archive.format.extension.as_deref(),
+        Asset::Directory(_) | Asset::Symlink(_) => None,
+    }
+}
+
+fn asset_insight(asset: &Asset) -> AssetInsight {
+    AssetInsight {
+        id: asset.id(),
+        name: asset.common().name.clone(),
+        relative_path: asset.common().relative_path.clone(),
+        family: asset.family(),
+        size_bytes: asset.size_bytes(),
+    }
 }
 
 #[cfg(test)]
@@ -277,7 +465,7 @@ mod tests {
             size_bytes,
             format: DetectedFormat {
                 id: name.rsplit('.').next().unwrap_or("unknown").into(),
-                extension: None,
+                extension: name.rsplit_once('.').map(|(_, extension)| extension.into()),
                 mime_type: None,
                 family,
                 confidence: DetectionConfidence::Extension,
@@ -321,5 +509,57 @@ mod tests {
 
         assert_eq!(page.total, 2);
         assert_eq!(page.items.len(), 1);
+    }
+
+    #[test]
+    fn sorts_and_searches_without_copying_entire_workspace() {
+        let manager = WorkspaceManager::default();
+        let workspace = manager.create(vec![]);
+        manager
+            .ingest(
+                workspace.id,
+                &[
+                    file("small.jpg", FormatFamily::Image, 1),
+                    file("big.jpg", FormatFamily::Image, 500),
+                    file("document.pdf", FormatFamily::Pdf, 20),
+                ],
+            )
+            .unwrap();
+
+        let page = manager
+            .list_assets(
+                workspace.id,
+                AssetQuery {
+                    search: Some("jpg".into()),
+                    sort_by: AssetSortKey::Size,
+                    sort_direction: SortDirection::Descending,
+                    ..AssetQuery::default()
+                },
+            )
+            .unwrap();
+
+        assert_eq!(page.total, 2);
+        assert_eq!(page.items[0].common().name, "big.jpg");
+    }
+
+    #[test]
+    fn computes_workspace_insights_and_duplicate_size_candidates() {
+        let manager = WorkspaceManager::default();
+        let workspace = manager.create(vec![]);
+        manager
+            .ingest(
+                workspace.id,
+                &[
+                    file("a.jpg", FormatFamily::Image, 100),
+                    file("b.jpg", FormatFamily::Image, 100),
+                    file("large.pdf", FormatFamily::Pdf, 900),
+                ],
+            )
+            .unwrap();
+
+        let insights = manager.insights(workspace.id).unwrap();
+        assert_eq!(insights.largest[0].name, "large.pdf");
+        assert_eq!(insights.duplicate_size_candidates.len(), 1);
+        assert_eq!(insights.potential_duplicate_bytes, 100);
     }
 }

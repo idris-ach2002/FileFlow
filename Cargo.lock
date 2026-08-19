@@ -1113,6 +1113,7 @@ dependencies = [
  "fileflow-domain",
  "fileflow-engine",
  "fileflow-intake",
+ "fileflow-planner",
  "fileflow-workspace",
  "parking_lot",
  "serde",
@@ -1206,7 +1207,12 @@ dependencies = [
 name = "fileflow-output"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "fileflow-domain",
+ "serde",
+ "thiserror 2.0.20",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -1214,25 +1220,34 @@ name = "fileflow-planner"
 version = "0.1.0"
 dependencies = [
  "fileflow-domain",
+ "serde",
 ]
 
 [[package]]
 name = "fileflow-scheduler"
 version = "0.1.0"
 dependencies = [
+ "dashmap",
  "fileflow-domain",
  "serde",
  "sysinfo",
+ "thiserror 2.0.20",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
 name = "fileflow-storage"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "parking_lot",
  "rusqlite",
+ "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

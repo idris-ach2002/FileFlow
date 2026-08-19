@@ -270,3 +270,121 @@ impl ResourceProfile {
         max_parallel_instances: 1,
     };
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OperationCategory {
+    Convert,
+    Pdf,
+    Image,
+    Document,
+    Media,
+    Archive,
+    Extract,
+    Organize,
+    Privacy,
+    Optimize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ActionScope {
+    Single,
+    Batch,
+    Workspace,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionDescriptor {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub category: OperationCategory,
+    pub scopes: Vec<ActionScope>,
+    pub accepts: Vec<FormatFamily>,
+    pub output_format: Option<String>,
+    pub required_engines: Vec<String>,
+    pub batchable: bool,
+    pub destructive: bool,
+    pub featured: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionRecommendation {
+    pub action_id: String,
+    pub score: u16,
+    pub reason: String,
+    pub affected_assets: u64,
+    pub ready: bool,
+    pub missing_engines: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DestinationPolicy {
+    SameFolder,
+    Subfolder,
+    CustomFolder,
+    AskEveryTime,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConflictStrategy {
+    Increment,
+    Skip,
+    Replace,
+    Ask,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NamingStrategy {
+    Original,
+    OperationSuffix,
+    DateSuffix,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputPolicy {
+    pub destination: DestinationPolicy,
+    pub custom_directory: Option<PathBuf>,
+    pub subfolder_name: String,
+    pub preserve_tree: bool,
+    pub conflict: ConflictStrategy,
+    pub naming: NamingStrategy,
+    pub overwrite_original: bool,
+}
+
+impl Default for OutputPolicy {
+    fn default() -> Self {
+        Self {
+            destination: DestinationPolicy::Subfolder,
+            custom_directory: None,
+            subfolder_name: "FileFlow".into(),
+            preserve_tree: true,
+            conflict: ConflictStrategy::Increment,
+            naming: NamingStrategy::Original,
+            overwrite_original: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PerformanceMode {
+    Eco,
+    Balanced,
+    Fast,
+    Custom,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SortDirection {
+    Ascending,
+    Descending,
+}

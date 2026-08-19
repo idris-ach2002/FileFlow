@@ -1,10 +1,17 @@
-use fileflow_domain::{Asset, WorkspaceId};
+use fileflow_domain::{ActionRecommendation, Asset, WorkspaceId};
 use fileflow_engine::{EngineAdapter, EngineProbe};
 use fileflow_intake::{IntakeEvent, IntakeScanner, IntakeStats, IntakeWarning, ScanOptions};
-use fileflow_workspace::{AssetPage, AssetQuery, WorkspaceManager, WorkspaceSnapshot};
+use fileflow_planner::CapabilityCatalog;
+use fileflow_workspace::{
+    AssetPage, AssetQuery, WorkspaceInsights, WorkspaceManager, WorkspaceSnapshot,
+};
 use parking_lot::RwLock;
 use serde::Serialize;
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::Arc,
+};
 use thiserror::Error;
 use tokio::sync::mpsc;
 
@@ -21,19 +28,40 @@ impl EngineRegistry {
 
     pub async fn probe_all(&self) -> Vec<EngineProbe> {
         let adapters: Vec<_> = self.adapters.read().values().cloned().collect();
-        let mut probes = Vec::with_capacity(adapters.len());
+        let mut tasks = Vec::with_capacity(adapters.len());
 
         for adapter in adapters {
-            match adapter.probe().await {
-                Ok(probe) => probes.push(probe),
+            let engine_id = adapter.descriptor().id;
+            tasks.push(tokio::spawn(async move {
+                let result = adapter.probe().await;
+                (engine_id, result)
+            }));
+        }
+
+        let mut probes = Vec::with_capacity(tasks.len());
+        for task in tasks {
+            match task.await {
+                Ok((_, Ok(probe))) => probes.push(probe),
+                Ok((engine_id, Err(error))) => {
+                    tracing::warn!(engine = %engine_id, %error, "engine probe failed");
+                }
                 Err(error) => {
-                    tracing::warn!(engine = %adapter.descriptor().id, %error, "engine probe failed");
+                    tracing::warn!(%error, "engine probe task failed");
                 }
             }
         }
 
         probes.sort_by(|a, b| a.display_name.cmp(&b.display_name));
         probes
+    }
+
+    pub async fn available_ids(&self) -> HashSet<String> {
+        self.probe_all()
+            .await
+            .into_iter()
+            .filter(|probe| probe.available)
+            .map(|probe| probe.id)
+            .collect()
     }
 }
 
@@ -78,6 +106,7 @@ pub enum CoreError {
 pub struct FileFlowCore {
     pub engines: EngineRegistry,
     pub workspaces: WorkspaceManager,
+    pub capabilities: CapabilityCatalog,
     intake: IntakeScanner,
 }
 
@@ -86,6 +115,7 @@ impl Default for FileFlowCore {
         Self {
             engines: EngineRegistry::default(),
             workspaces: WorkspaceManager::default(),
+            capabilities: CapabilityCatalog::default(),
             intake: IntakeScanner::default(),
         }
     }
@@ -184,5 +214,18 @@ impl FileFlowCore {
         query: AssetQuery,
     ) -> Result<AssetPage, CoreError> {
         Ok(self.workspaces.list_assets(id, query)?)
+    }
+
+    pub fn workspace_insights(&self, id: WorkspaceId) -> Result<WorkspaceInsights, CoreError> {
+        Ok(self.workspaces.insights(id)?)
+    }
+
+    pub async fn workspace_recommendations(
+        &self,
+        id: WorkspaceId,
+    ) -> Result<Vec<ActionRecommendation>, CoreError> {
+        let counts = self.workspaces.family_counts(id)?;
+        let available = self.engines.available_ids().await;
+        Ok(self.capabilities.recommendations(&counts, &available))
     }
 }
