@@ -246,19 +246,18 @@ fn unique_copy_destination(base: &Path) -> PathBuf {
         return base.to_path_buf();
     }
     let parent = base.parent().unwrap_or_else(|| Path::new("."));
-    let stem = base.file_stem().and_then(|value| value.to_str()).unwrap_or("copie");
-    let extension = base.extension().and_then(|value| value.to_str());
+    let name = base
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("FileFlow");
     for index in 1..=10_000 {
-        let name = match extension {
-            Some(extension) => format!("{stem} ({index}).{extension}"),
-            None => format!("{stem} ({index})"),
-        };
-        let candidate = parent.join(name);
+        let candidate = parent.join(format!("{name} ({index})"));
         if !candidate.exists() {
             return candidate;
         }
     }
-    parent.join(format!("{stem}-copie"))
+    parent.join(format!("{name}-copie"))
 }
 
 fn copy_output(source: &Path, destination: &Path) -> Result<(), String> {
