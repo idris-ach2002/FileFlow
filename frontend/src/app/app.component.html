@@ -1,0 +1,32 @@
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">F</div>
+      <div>
+        <strong>FileFlow</strong>
+        <span>Local file toolbox</span>
+      </div>
+    </div>
+
+    <nav aria-label="Navigation principale">
+      <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">Accueil</a>
+      <a routerLink="/workspace" routerLinkActive="active">Fichiers</a>
+      <a routerLink="/automations" routerLinkActive="active">Automatisations</a>
+      <a routerLink="/history" routerLinkActive="active">Historique</a>
+      <a routerLink="/settings" routerLinkActive="active">Paramètres</a>
+    </nav>
+
+    <div class="runtime-state">
+      <span class="status-dot"></span>
+      @switch (backendStatus()) {
+        @case ('ready') { Moteur Rust prêt }
+        @case ('browser') { Aperçu navigateur }
+        @default { Initialisation… }
+      }
+    </div>
+  </aside>
+
+  <main class="content">
+    <router-outlet />
+  </main>
+</div>

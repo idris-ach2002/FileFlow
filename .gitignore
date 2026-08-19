@@ -1,0 +1,25 @@
+# Node / Angular
+node_modules/
+frontend/dist/
+.angular/
+
+# Rust / Tauri
+target/
+src-tauri/target/
+**/*.rs.bk
+
+# Runtime data
+*.db
+*.db-shm
+*.db-wal
+.fileflow/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Logs
+*.log
+npm-debug.log*

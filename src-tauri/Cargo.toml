@@ -1,0 +1,37 @@
+[package]
+name = "fileflow-desktop"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "fileflow_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+fileflow-adapter-archive = { path = "../crates/adapters/fileflow-adapter-archive" }
+fileflow-adapter-ffmpeg = { path = "../crates/adapters/fileflow-adapter-ffmpeg" }
+fileflow-adapter-metadata = { path = "../crates/adapters/fileflow-adapter-metadata" }
+fileflow-adapter-imagemagick = { path = "../crates/adapters/fileflow-adapter-imagemagick" }
+fileflow-adapter-poppler = { path = "../crates/adapters/fileflow-adapter-poppler" }
+fileflow-adapter-ghostscript = { path = "../crates/adapters/fileflow-adapter-ghostscript" }
+fileflow-adapter-tesseract = { path = "../crates/adapters/fileflow-adapter-tesseract" }
+fileflow-adapter-pandoc = { path = "../crates/adapters/fileflow-adapter-pandoc" }
+fileflow-adapter-ocr = { path = "../crates/adapters/fileflow-adapter-ocr" }
+fileflow-adapter-office = { path = "../crates/adapters/fileflow-adapter-office" }
+fileflow-adapter-qpdf = { path = "../crates/adapters/fileflow-adapter-qpdf" }
+fileflow-adapter-vips = { path = "../crates/adapters/fileflow-adapter-vips" }
+fileflow-core = { path = "../crates/fileflow-core" }
+fileflow-engine = { path = "../crates/fileflow-engine" }
+fileflow-scheduler = { path = "../crates/fileflow-scheduler" }
+serde.workspace = true
+tauri = { version = "2.11.5", features = ["tray-icon"] }
+tauri-plugin-dialog = "2.7.2"
+tauri-plugin-notification = "2.3.3"
+tauri-plugin-opener = "2.5.4"
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

@@ -1,0 +1,10 @@
+[package]
+name = "fileflow-adapter-ffmpeg"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+fileflow-domain = { path = "../../fileflow-domain" }
+fileflow-engine = { path = "../../fileflow-engine" }

@@ -1,0 +1,15 @@
+:host { display: block; min-height: 100vh; }
+.app-shell { min-height: 100vh; display: grid; grid-template-columns: 248px minmax(0, 1fr); }
+.sidebar { display: flex; flex-direction: column; gap: 30px; padding: 24px 18px; border-right: 1px solid var(--border); background: var(--surface-1); }
+.brand { display: flex; align-items: center; gap: 12px; padding: 0 8px; }
+.brand-mark { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 12px; background: var(--accent); color: white; font-weight: 800; }
+.brand strong, .brand span { display: block; }
+.brand span { margin-top: 2px; color: var(--text-muted); font-size: 12px; }
+nav { display: grid; gap: 6px; }
+nav a { padding: 11px 12px; border-radius: 10px; color: var(--text-muted); text-decoration: none; font-weight: 600; transition: 120ms ease; }
+nav a:hover { color: var(--text); background: var(--surface-2); }
+nav a.active { color: var(--text); background: var(--accent-soft); }
+.runtime-state { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 10px 8px; color: var(--text-muted); font-size: 12px; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+.content { min-width: 0; padding: 38px clamp(28px, 5vw, 72px); }
+@media (max-width: 900px) { .app-shell { grid-template-columns: 190px minmax(0, 1fr); } .sidebar { padding-inline: 12px; } }

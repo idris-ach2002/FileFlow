@@ -1,0 +1,11 @@
+[package]
+name = "fileflow-engine"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+fileflow-domain = { path = "../fileflow-domain" }
+serde.workspace = true
+thiserror.workspace = true

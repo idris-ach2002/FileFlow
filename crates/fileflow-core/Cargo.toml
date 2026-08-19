@@ -1,0 +1,10 @@
+[package]
+name = "fileflow-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+fileflow-engine = { path = "../fileflow-engine" }
+parking_lot.workspace = true
+tracing.workspace = true
