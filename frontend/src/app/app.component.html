@@ -4,7 +4,7 @@
       <div class="brand-mark">F</div>
       <div>
         <strong>FileFlow</strong>
-        <span>Local file toolbox</span>
+        <span>Boîte à outils locale</span>
       </div>
     </div>
 
@@ -29,4 +29,14 @@
   <main class="content">
     <router-outlet />
   </main>
+
+  @if (workspaceStore.dragActive()) {
+    <div class="drop-overlay" aria-hidden="true">
+      <div class="drop-overlay-card">
+        <div class="drop-overlay-icon">+</div>
+        <strong>Déposez dans FileFlow</strong>
+        <span>Fichiers, dossiers et archives sont acceptés.</span>
+      </div>
+    </div>
+  }
 </div>
