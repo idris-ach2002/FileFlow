@@ -40,7 +40,10 @@ pub fn capability_catalog(state: State<'_, AppState>) -> CapabilityCatalog {
 
 #[tauri::command]
 pub fn executable_actions() -> Vec<String> {
-    fileflow_executor::executable_action_ids().into_iter().map(str::to_owned).collect()
+    fileflow_executor::executable_action_ids()
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
 }
 
 #[tauri::command]

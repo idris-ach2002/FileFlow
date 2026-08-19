@@ -1,7 +1,7 @@
 use crate::AppState;
 use fileflow_analysis::{DuplicateInput, DuplicateReport};
-use fileflow_executor::ArchiveInspection;
 use fileflow_domain::{Asset, AssetId, ResourceProfile, WorkspaceId};
+use fileflow_executor::ArchiveInspection;
 use tauri::State;
 use tokio_util::sync::CancellationToken;
 
@@ -42,7 +42,6 @@ pub async fn confirm_duplicates(
         .map_err(|error| format!("Le worker de détection de doublons a échoué : {error}"))
 }
 
-
 #[tauri::command]
 pub async fn inspect_archive(
     state: State<'_, AppState>,
@@ -61,7 +60,9 @@ pub async fn inspect_archive(
             Asset::Archive(archive) => Some(archive.common.path),
             _ => None,
         })
-        .ok_or_else(|| "Aucune archive compatible n’est disponible dans ce workspace.".to_owned())?;
+        .ok_or_else(|| {
+            "Aucune archive compatible n’est disponible dans ce workspace.".to_owned()
+        })?;
 
     let probes = state.core.engines.probe_all().await;
     let engine = probes

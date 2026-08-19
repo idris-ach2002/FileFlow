@@ -69,13 +69,12 @@ pub fn find_executable(executable: &str) -> Option<PathBuf> {
         return Some(candidate.to_path_buf());
     }
 
-    if let Some(path) = env::var_os("PATH") {
-        if let Some(found) = env::split_paths(&path)
+    if let Some(path) = env::var_os("PATH")
+        && let Some(found) = env::split_paths(&path)
             .map(|directory| directory.join(executable))
             .find(|candidate| is_executable_file(candidate))
-        {
-            return Some(found);
-        }
+    {
+        return Some(found);
     }
 
     platform_search_directories()

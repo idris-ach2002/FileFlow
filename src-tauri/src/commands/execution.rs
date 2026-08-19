@@ -1,18 +1,17 @@
 use crate::{AppState, RecentOutputs};
 use chrono::Utc;
 use fileflow_domain::{AssetId, JobId, OutputPolicy, WorkspaceId};
-use fileflow_executor::{EnginePaths, ExecutionEvent, ExecutionInput, ExecutionRequest, ExecutionSummary};
+use fileflow_executor::{
+    EnginePaths, ExecutionEvent, ExecutionInput, ExecutionRequest, ExecutionSummary,
+};
 use fileflow_storage::HistoryEntry;
 use serde::Deserialize;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::{
-        atomic::Ordering,
-        Arc,
-    },
+    sync::{Arc, atomic::Ordering},
 };
-use tauri::{ipc::Channel, AppHandle, State};
+use tauri::{AppHandle, State, ipc::Channel};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::mpsc;
@@ -39,7 +38,10 @@ pub async fn execute_action(
     on_event: Channel<ExecutionEvent>,
 ) -> Result<ExecutionSummary, String> {
     if !fileflow_executor::is_supported(&request.action_id) {
-        return Err(format!("L’action « {} » n’est pas encore reliée à un exécuteur local.", request.action_id));
+        return Err(format!(
+            "L’action « {} » n’est pas encore reliée à un exécuteur local.",
+            request.action_id
+        ));
     }
 
     let action = state
@@ -55,7 +57,11 @@ pub async fn execute_action(
     let assets = state
         .core
         .workspaces
-        .select_assets(request.workspace_id, &request.selected_asset_ids, &action.accepts)
+        .select_assets(
+            request.workspace_id,
+            &request.selected_asset_ids,
+            &action.accepts,
+        )
         .map_err(|error| error.to_string())?;
     if assets.is_empty() {
         return Err("Aucun élément compatible n’est sélectionné pour cette opération.".into());
@@ -64,7 +70,12 @@ pub async fn execute_action(
     let probes = state.core.engines.probe_all().await;
     let engine_paths = probes
         .into_iter()
-        .filter_map(|probe| probe.available.then_some((probe.id, probe.executable)).and_then(|(id, path)| path.map(|path| (id, path))))
+        .filter_map(|probe| {
+            probe
+                .available
+                .then_some((probe.id, probe.executable))
+                .and_then(|(id, path)| path.map(|path| (id, path)))
+        })
         .collect::<HashMap<String, PathBuf>>();
     let missing = action
         .required_engines
@@ -73,7 +84,12 @@ pub async fn execute_action(
         .cloned()
         .collect::<Vec<_>>();
     if !missing.is_empty() {
-        return Err(format!("Moteur{} manquant{} : {}", if missing.len() > 1 { "s" } else { "" }, if missing.len() > 1 { "s" } else { "" }, missing.join(", ")));
+        return Err(format!(
+            "Moteur{} manquant{} : {}",
+            if missing.len() > 1 { "s" } else { "" },
+            if missing.len() > 1 { "s" } else { "" },
+            missing.join(", ")
+        ));
     }
 
     let inputs = assets
@@ -130,7 +146,6 @@ pub fn cancel_job(state: State<'_, AppState>, job_id: JobId) -> bool {
     })
 }
 
-
 const RECENT_OUTPUT_JOB_LIMIT: usize = 64;
 
 fn remember_outputs(state: &AppState, summary: &ExecutionSummary) {
@@ -159,10 +174,9 @@ fn remember_outputs(state: &AppState, summary: &ExecutionSummary) {
 }
 
 fn registered_output(state: &AppState, job_id: JobId, index: usize) -> Result<PathBuf, String> {
-    let outputs = state
-        .recent_outputs
-        .get(&job_id)
-        .ok_or_else(|| "Les sorties de ce traitement ne sont plus disponibles dans la session courante.".to_owned())?;
+    let outputs = state.recent_outputs.get(&job_id).ok_or_else(|| {
+        "Les sorties de ce traitement ne sont plus disponibles dans la session courante.".to_owned()
+    })?;
     let path = outputs
         .paths
         .get(index)
@@ -280,12 +294,13 @@ fn copy_output(source: &Path, destination: &Path) -> Result<(), String> {
     }
 
     let source_canonical = std::fs::canonicalize(source).map_err(|error| error.to_string())?;
-    if let Some(parent) = destination.parent() {
-        if let Ok(parent_canonical) = std::fs::canonicalize(parent) {
-            if parent_canonical.starts_with(&source_canonical) {
-                return Err("La copie d’un dossier ne peut pas être créée à l’intérieur de lui-même.".into());
-            }
-        }
+    if let Some(parent) = destination.parent()
+        && let Ok(parent_canonical) = std::fs::canonicalize(parent)
+        && parent_canonical.starts_with(&source_canonical)
+    {
+        return Err(
+            "La copie d’un dossier ne peut pas être créée à l’intérieur de lui-même.".into(),
+        );
     }
     std::fs::create_dir_all(destination).map_err(|error| error.to_string())?;
     let mut stack = vec![(source.to_path_buf(), destination.to_path_buf())];
@@ -294,9 +309,13 @@ fn copy_output(source: &Path, destination: &Path) -> Result<(), String> {
             let entry = entry.map_err(|error| error.to_string())?;
             let from_path = entry.path();
             let to_path = to.join(entry.file_name());
-            let metadata = std::fs::symlink_metadata(&from_path).map_err(|error| error.to_string())?;
+            let metadata =
+                std::fs::symlink_metadata(&from_path).map_err(|error| error.to_string())?;
             if metadata.file_type().is_symlink() {
-                return Err(format!("Lien symbolique refusé pendant la copie : {}", from_path.display()));
+                return Err(format!(
+                    "Lien symbolique refusé pendant la copie : {}",
+                    from_path.display()
+                ));
             }
             if metadata.is_dir() {
                 std::fs::create_dir_all(&to_path).map_err(|error| error.to_string())?;
@@ -309,7 +328,11 @@ fn copy_output(source: &Path, destination: &Path) -> Result<(), String> {
     Ok(())
 }
 
-async fn record_history(storage: Arc<fileflow_storage::Storage>, summary: &ExecutionSummary, input_bytes: u64) {
+async fn record_history(
+    storage: Arc<fileflow_storage::Storage>,
+    summary: &ExecutionSummary,
+    input_bytes: u64,
+) {
     let output_bytes = output_size(&summary.outputs).await;
     let destination = summary
         .outputs
@@ -345,19 +368,33 @@ async fn output_size(paths: &[PathBuf]) -> u64 {
 }
 
 fn path_size(path: &std::path::Path) -> u64 {
-    let Ok(metadata) = std::fs::symlink_metadata(path) else { return 0; };
-    if metadata.file_type().is_symlink() { return 0; }
-    if metadata.is_file() { return metadata.len(); }
-    if !metadata.is_dir() { return 0; }
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if metadata.file_type().is_symlink() {
+        return 0;
+    }
+    if metadata.is_file() {
+        return metadata.len();
+    }
+    if !metadata.is_dir() {
+        return 0;
+    }
 
     let mut total = 0_u64;
     let mut stack = vec![path.to_path_buf()];
     while let Some(directory) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(directory) else { continue; };
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
-            let Ok(metadata) = std::fs::symlink_metadata(&path) else { continue; };
-            if metadata.file_type().is_symlink() { continue; }
+            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
             if metadata.is_file() {
                 total = total.saturating_add(metadata.len());
             } else if metadata.is_dir() {

@@ -66,7 +66,12 @@ impl EngineRegistry {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "event", content = "data")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "event",
+    content = "data"
+)]
 pub enum WorkspaceIntakeEvent {
     Started {
         workspace_id: WorkspaceId,
@@ -103,22 +108,12 @@ pub enum CoreError {
     EventConsumerDisconnected,
 }
 
+#[derive(Default)]
 pub struct FileFlowCore {
     pub engines: EngineRegistry,
     pub workspaces: WorkspaceManager,
     pub capabilities: CapabilityCatalog,
     intake: IntakeScanner,
-}
-
-impl Default for FileFlowCore {
-    fn default() -> Self {
-        Self {
-            engines: EngineRegistry::default(),
-            workspaces: WorkspaceManager::default(),
-            capabilities: CapabilityCatalog::default(),
-            intake: IntakeScanner::default(),
-        }
-    }
 }
 
 impl FileFlowCore {

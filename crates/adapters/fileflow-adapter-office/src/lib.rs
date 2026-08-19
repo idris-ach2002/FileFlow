@@ -26,9 +26,7 @@ fn known_paths() -> Vec<PathBuf> {
     )];
 
     if let Some(home) = std::env::var_os("HOME") {
-        paths.push(
-            PathBuf::from(home).join("Applications/LibreOffice.app/Contents/MacOS/soffice"),
-        );
+        paths.push(PathBuf::from(home).join("Applications/LibreOffice.app/Contents/MacOS/soffice"));
     }
 
     paths

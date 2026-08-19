@@ -20,7 +20,8 @@ impl FormatRegistry {
             .map(|value| value.to_ascii_lowercase());
 
         let by_extension = extension.as_deref().and_then(extension_descriptor);
-        let by_magic = infer::get(sample).map(|kind| magic_descriptor(kind.mime(), kind.extension()));
+        let by_magic =
+            infer::get(sample).map(|kind| magic_descriptor(kind.mime_type(), kind.extension()));
 
         if let (Some(ext), Some(magic)) = (by_extension, by_magic.as_ref()) {
             if ext.archive_container && magic.family == FormatFamily::Archive {
@@ -32,10 +33,10 @@ impl FormatRegistry {
             }
         }
 
-        if let Some(magic) = by_magic {
-            if magic.family != FormatFamily::Unknown {
-                return magic;
-            }
+        if let Some(magic) = by_magic
+            && magic.family != FormatFamily::Unknown
+        {
+            return magic;
         }
 
         if let Some(ext) = by_extension {
@@ -102,7 +103,7 @@ fn normalize_format_id(extension: &str) -> &str {
 }
 
 fn looks_like_text(sample: &[u8]) -> bool {
-    if sample.is_empty() || sample.iter().any(|byte| *byte == 0) {
+    if sample.is_empty() || sample.contains(&0) {
         return false;
     }
 
@@ -158,7 +159,11 @@ fn extension_descriptor(extension: &str) -> Option<ExtensionDescriptor> {
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             true,
         ),
-        "ods" => spreadsheet("ods", "application/vnd.oasis.opendocument.spreadsheet", true),
+        "ods" => spreadsheet(
+            "ods",
+            "application/vnd.oasis.opendocument.spreadsheet",
+            true,
+        ),
         "csv" => spreadsheet("csv", "text/csv", false),
         "tsv" => spreadsheet("tsv", "text/tab-separated-values", false),
         "numbers" => spreadsheet("numbers", "application/x-iwork-numbers-sffnumbers", true),
@@ -169,7 +174,11 @@ fn extension_descriptor(extension: &str) -> Option<ExtensionDescriptor> {
             "application/vnd.openxmlformats-officedocument.presentationml.presentation",
             true,
         ),
-        "odp" => presentation("odp", "application/vnd.oasis.opendocument.presentation", true),
+        "odp" => presentation(
+            "odp",
+            "application/vnd.oasis.opendocument.presentation",
+            true,
+        ),
         "key" => presentation("keynote", "application/x-iwork-keynote-sffkey", true),
 
         "txt" | "md" | "markdown" | "rst" | "log" => {

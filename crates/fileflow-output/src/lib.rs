@@ -58,8 +58,12 @@ impl OutputResolver {
             .parent()
             .ok_or_else(|| OutputError::MissingParent(request.source.clone()))?;
         let destination_directory = match request.policy.destination {
-            DestinationPolicy::SameFolder | DestinationPolicy::AskEveryTime => source_parent.to_path_buf(),
-            DestinationPolicy::Subfolder => source_parent.join(sanitize_component(&request.policy.subfolder_name)),
+            DestinationPolicy::SameFolder | DestinationPolicy::AskEveryTime => {
+                source_parent.to_path_buf()
+            }
+            DestinationPolicy::Subfolder => {
+                source_parent.join(sanitize_component(&request.policy.subfolder_name))
+            }
             DestinationPolicy::CustomFolder => request
                 .policy
                 .custom_directory
@@ -69,7 +73,9 @@ impl OutputResolver {
 
         let destination_directory = if request.policy.preserve_tree {
             relative_parent(request.source_root.as_deref(), &request.source)
-                .map_or(destination_directory.clone(), |relative| destination_directory.join(relative))
+                .map_or(destination_directory.clone(), |relative| {
+                    destination_directory.join(relative)
+                })
         } else {
             destination_directory
         };
@@ -80,7 +86,11 @@ impl OutputResolver {
             .and_then(|value| value.to_str())
             .filter(|value| !value.is_empty())
             .unwrap_or("resultat");
-        let stem = output_stem(stem, request.policy.naming, request.operation_suffix.as_deref());
+        let stem = output_stem(
+            stem,
+            request.policy.naming,
+            request.operation_suffix.as_deref(),
+        );
         let extension = request
             .desired_extension
             .as_deref()
@@ -93,7 +103,8 @@ impl OutputResolver {
                 extension,
             ));
         }
-        let (final_path, replaces_existing, skipped) = resolve_conflict(&candidate, request.policy.conflict)?;
+        let (final_path, replaces_existing, skipped) =
+            resolve_conflict(&candidate, request.policy.conflict)?;
 
         if !request.policy.overwrite_original && same_path(&final_path, &request.source) {
             return Err(OutputError::SourceOverwrite(final_path));
@@ -120,26 +131,32 @@ impl OutputResolver {
     }
 
     pub async fn prepare(&self, plan: &OutputPlan) -> Result<(), OutputError> {
-        if plan.skipped { return Ok(()); }
+        if plan.skipped {
+            return Ok(());
+        }
         tokio::fs::create_dir_all(&plan.destination_directory).await?;
         Ok(())
     }
 
     pub async fn finalize(&self, plan: &OutputPlan) -> Result<(), OutputError> {
-        if plan.skipped { return Ok(()); }
+        if plan.skipped {
+            return Ok(());
+        }
         if plan.replaces_existing && plan.final_path.exists() {
             tokio::fs::remove_file(&plan.final_path).await?;
         }
 
         match tokio::fs::rename(&plan.temporary_path, &plan.final_path).await {
             Ok(()) => Ok(()),
-            Err(rename_error) => match tokio::fs::copy(&plan.temporary_path, &plan.final_path).await {
-                Ok(_) => {
-                    tokio::fs::remove_file(&plan.temporary_path).await?;
-                    Ok(())
+            Err(rename_error) => {
+                match tokio::fs::copy(&plan.temporary_path, &plan.final_path).await {
+                    Ok(_) => {
+                        tokio::fs::remove_file(&plan.temporary_path).await?;
+                        Ok(())
+                    }
+                    Err(_) => Err(OutputError::Io(rename_error)),
                 }
-                Err(_) => Err(OutputError::Io(rename_error)),
-            },
+            }
         }
     }
 
@@ -148,17 +165,27 @@ impl OutputResolver {
     }
 }
 
-fn output_stem(source_stem: &str, naming: NamingStrategy, operation_suffix: Option<&str>) -> String {
+fn output_stem(
+    source_stem: &str,
+    naming: NamingStrategy,
+    operation_suffix: Option<&str>,
+) -> String {
     match naming {
         NamingStrategy::Original => source_stem.to_owned(),
         NamingStrategy::OperationSuffix => operation_suffix
             .filter(|value| !value.trim().is_empty())
-            .map_or_else(|| source_stem.to_owned(), |suffix| format!("{source_stem}_{}", sanitize_component(suffix))),
+            .map_or_else(
+                || source_stem.to_owned(),
+                |suffix| format!("{source_stem}_{}", sanitize_component(suffix)),
+            ),
         NamingStrategy::DateSuffix => format!("{source_stem}_{}", Local::now().format("%Y-%m-%d")),
     }
 }
 
-fn resolve_conflict(candidate: &Path, strategy: ConflictStrategy) -> Result<(PathBuf, bool, bool), OutputError> {
+fn resolve_conflict(
+    candidate: &Path,
+    strategy: ConflictStrategy,
+) -> Result<(PathBuf, bool, bool), OutputError> {
     if !candidate.exists() {
         return Ok((candidate.to_path_buf(), false, false));
     }
@@ -166,10 +193,15 @@ fn resolve_conflict(candidate: &Path, strategy: ConflictStrategy) -> Result<(Pat
     match strategy {
         ConflictStrategy::Replace => Ok((candidate.to_path_buf(), true, false)),
         ConflictStrategy::Skip => Ok((candidate.to_path_buf(), false, true)),
-        ConflictStrategy::Ask => Err(OutputError::ConflictRequiresDecision(candidate.to_path_buf())),
+        ConflictStrategy::Ask => Err(OutputError::ConflictRequiresDecision(
+            candidate.to_path_buf(),
+        )),
         ConflictStrategy::Increment => {
             let parent = candidate.parent().unwrap_or_else(|| Path::new("."));
-            let stem = candidate.file_stem().and_then(|value| value.to_str()).unwrap_or("resultat");
+            let stem = candidate
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or("resultat");
             let extension = candidate.extension().and_then(|value| value.to_str());
             for index in 1..=MAX_CONFLICT_ATTEMPTS {
                 let next = parent.join(file_name(&format!("{stem} ({index})"), extension));
@@ -192,7 +224,10 @@ fn file_name(stem: &str, extension: Option<&str>) -> String {
 fn relative_parent(root: Option<&Path>, source: &Path) -> Option<PathBuf> {
     let root = root?;
     let relative = source.strip_prefix(root).ok()?;
-    relative.parent().filter(|parent| !parent.as_os_str().is_empty()).map(Path::to_path_buf)
+    relative
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(Path::to_path_buf)
 }
 
 fn same_path(left: &Path, right: &Path) -> bool {
@@ -211,7 +246,11 @@ fn sanitize_component(value: &str) -> String {
             other => other,
         })
         .collect::<String>();
-    if cleaned.is_empty() { "FileFlow".into() } else { cleaned }
+    if cleaned.is_empty() {
+        "FileFlow".into()
+    } else {
+        cleaned
+    }
 }
 
 #[cfg(test)]
@@ -229,7 +268,10 @@ mod tests {
             policy: OutputPolicy::default(),
         };
         let plan = resolver.plan(&request).unwrap();
-        assert_eq!(plan.final_path, PathBuf::from("/tmp/photos/FileFlow/photo.jpg"));
+        assert_eq!(
+            plan.final_path,
+            PathBuf::from("/tmp/photos/FileFlow/photo.jpg")
+        );
         assert_ne!(plan.final_path, request.source);
     }
 
@@ -248,47 +290,60 @@ mod tests {
             },
         };
         let plan = resolver.plan(&request).unwrap();
-        assert_eq!(plan.final_path, PathBuf::from("/output/trip/day1/photo.jpg"));
+        assert_eq!(
+            plan.final_path,
+            PathBuf::from("/output/trip/day1/photo.jpg")
+        );
     }
     #[test]
     fn temporary_file_keeps_final_extension_for_format_aware_engines() {
-        let directory = std::env::temp_dir().join(format!("fileflow-output-test-{}", Uuid::new_v4()));
+        let directory =
+            std::env::temp_dir().join(format!("fileflow-output-test-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         let source = directory.join("photo.heic");
         std::fs::write(&source, b"fixture").unwrap();
         let resolver = OutputResolver;
-        let plan = resolver.plan(&OutputRequest {
-            source,
-            source_root: None,
-            desired_extension: Some("webp".into()),
-            operation_suffix: Some("converti".into()),
-            policy: OutputPolicy::default(),
-        }).unwrap();
-        assert_eq!(plan.temporary_path.extension().and_then(|value| value.to_str()), Some("webp"));
+        let plan = resolver
+            .plan(&OutputRequest {
+                source,
+                source_root: None,
+                desired_extension: Some("webp".into()),
+                operation_suffix: Some("converti".into()),
+                policy: OutputPolicy::default(),
+            })
+            .unwrap();
+        assert_eq!(
+            plan.temporary_path
+                .extension()
+                .and_then(|value| value.to_str()),
+            Some("webp")
+        );
         let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
     fn same_folder_same_extension_falls_back_to_operation_suffix() {
-        let directory = std::env::temp_dir().join(format!("fileflow-output-same-{}", Uuid::new_v4()));
+        let directory =
+            std::env::temp_dir().join(format!("fileflow-output-same-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         let source = directory.join("photo.jpg");
         std::fs::write(&source, b"fixture").unwrap();
         let resolver = OutputResolver;
-        let plan = resolver.plan(&OutputRequest {
-            source: source.clone(),
-            source_root: None,
-            desired_extension: Some("jpg".into()),
-            operation_suffix: Some("optimise".into()),
-            policy: OutputPolicy {
-                destination: DestinationPolicy::SameFolder,
-                naming: NamingStrategy::Original,
-                ..OutputPolicy::default()
-            },
-        }).unwrap();
+        let plan = resolver
+            .plan(&OutputRequest {
+                source: source.clone(),
+                source_root: None,
+                desired_extension: Some("jpg".into()),
+                operation_suffix: Some("optimise".into()),
+                policy: OutputPolicy {
+                    destination: DestinationPolicy::SameFolder,
+                    naming: NamingStrategy::Original,
+                    ..OutputPolicy::default()
+                },
+            })
+            .unwrap();
         assert_eq!(plan.final_path, directory.join("photo_optimise.jpg"));
         assert_ne!(plan.final_path, source);
         let _ = std::fs::remove_dir_all(directory);
     }
-
 }

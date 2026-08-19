@@ -2,11 +2,9 @@ use crate::AppState;
 use fileflow_core::WorkspaceIntakeEvent;
 use fileflow_domain::{ActionRecommendation, WorkspaceId};
 use fileflow_intake::ScanOptions;
-use fileflow_workspace::{
-    AssetPage, AssetQuery, WorkspaceInsights, WorkspaceSnapshot,
-};
+use fileflow_workspace::{AssetPage, AssetQuery, WorkspaceInsights, WorkspaceSnapshot};
 use std::path::PathBuf;
-use tauri::{ipc::Channel, State};
+use tauri::{State, ipc::Channel};
 use tokio::sync::mpsc;
 
 #[tauri::command]

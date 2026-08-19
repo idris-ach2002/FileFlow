@@ -2,8 +2,8 @@
 
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
-use rusqlite::{params, Connection, OptionalExtension};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::path::Path;
 use thiserror::Error;
 use uuid::Uuid;
@@ -87,7 +87,11 @@ impl Storage {
         let json: Option<String> = self
             .connection
             .lock()
-            .query_row("SELECT value_json FROM settings WHERE key = ?1", params![key], |row| row.get(0))
+            .query_row(
+                "SELECT value_json FROM settings WHERE key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
             .optional()?;
         json.map(|value| serde_json::from_str(&value).map_err(StorageError::from))
             .transpose()
@@ -101,16 +105,21 @@ impl Storage {
                 params![action_id, Utc::now().to_rfc3339()],
             )?;
         } else {
-            connection.execute("DELETE FROM favorites WHERE action_id = ?1", params![action_id])?;
+            connection.execute(
+                "DELETE FROM favorites WHERE action_id = ?1",
+                params![action_id],
+            )?;
         }
         Ok(())
     }
 
     pub fn favorites(&self) -> Result<Vec<String>, StorageError> {
         let connection = self.connection.lock();
-        let mut statement = connection.prepare("SELECT action_id FROM favorites ORDER BY created_at ASC")?;
+        let mut statement =
+            connection.prepare("SELECT action_id FROM favorites ORDER BY created_at ASC")?;
         let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(StorageError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StorageError::from)
     }
 
     pub fn record_history(&self, entry: &HistoryEntry) -> Result<(), StorageError> {
@@ -155,7 +164,18 @@ impl Storage {
         })?;
 
         rows.map(|row| {
-            let (id, action_id, input_count, output_count, input_bytes, output_bytes, destination, status, duration_ms, created_at) = row?;
+            let (
+                id,
+                action_id,
+                input_count,
+                output_count,
+                input_bytes,
+                output_bytes,
+                destination,
+                status,
+                duration_ms,
+                created_at,
+            ) = row?;
             Ok(HistoryEntry {
                 id: Uuid::parse_str(&id).unwrap_or_else(|_| Uuid::nil()),
                 action_id,
@@ -242,7 +262,10 @@ fn migrate(connection: &Connection) -> rusqlite::Result<()> {
          CREATE TABLE IF NOT EXISTS history(\n           id TEXT PRIMARY KEY,\n           action_id TEXT NOT NULL,\n           input_count INTEGER NOT NULL,\n           output_count INTEGER NOT NULL,\n           input_bytes INTEGER NOT NULL,\n           output_bytes INTEGER NOT NULL,\n           destination TEXT,\n           status TEXT NOT NULL,\n           duration_ms INTEGER NOT NULL,\n           created_at TEXT NOT NULL\n         );\n         CREATE INDEX IF NOT EXISTS history_created_at ON history(created_at DESC);\n
          CREATE TABLE IF NOT EXISTS recipes(\n           id TEXT PRIMARY KEY,\n           name TEXT NOT NULL,\n           description TEXT NOT NULL,\n           icon TEXT NOT NULL,\n           steps_json TEXT NOT NULL,\n           enabled INTEGER NOT NULL DEFAULT 1,\n           created_at TEXT NOT NULL,\n           updated_at TEXT NOT NULL\n         );",
     )?;
-    connection.execute("UPDATE schema_meta SET version = ?1", params![SCHEMA_VERSION])?;
+    connection.execute(
+        "UPDATE schema_meta SET version = ?1",
+        params![SCHEMA_VERSION],
+    )?;
     Ok(())
 }
 
@@ -264,7 +287,10 @@ mod tests {
     fn round_trips_settings_and_favorites() {
         let storage = Storage::in_memory().unwrap();
         storage.put_json("theme", &"dark").unwrap();
-        assert_eq!(storage.get_json::<String>("theme").unwrap().as_deref(), Some("dark"));
+        assert_eq!(
+            storage.get_json::<String>("theme").unwrap().as_deref(),
+            Some("dark")
+        );
         storage.set_favorite("pdf-merge", true).unwrap();
         assert_eq!(storage.favorites().unwrap(), vec!["pdf-merge"]);
     }

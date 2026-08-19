@@ -18,7 +18,11 @@ async fn scans_large_directory_without_unbounded_ipc_buffering() {
     fs::create_dir_all(&root).unwrap();
 
     for index in 0..file_count {
-        fs::write(root.join(format!("item-{index:06}.txt")), b"FileFlow stress fixture").unwrap();
+        fs::write(
+            root.join(format!("item-{index:06}.txt")),
+            b"FileFlow stress fixture",
+        )
+        .unwrap();
     }
 
     let (tx, mut rx) = mpsc::channel(4);

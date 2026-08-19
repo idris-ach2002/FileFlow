@@ -223,7 +223,9 @@ impl WorkspaceManager {
 
     pub fn ingest(&self, id: WorkspaceId, assets: &[Asset]) -> Result<(), WorkspaceError> {
         let mut workspaces = self.workspaces.write();
-        let workspace = workspaces.get_mut(&id).ok_or(WorkspaceError::NotFound(id))?;
+        let workspace = workspaces
+            .get_mut(&id)
+            .ok_or(WorkspaceError::NotFound(id))?;
 
         for asset in assets {
             workspace.counts.record(asset);
@@ -238,7 +240,9 @@ impl WorkspaceManager {
 
     pub fn mark_ready(&self, id: WorkspaceId) -> Result<WorkspaceSnapshot, WorkspaceError> {
         let mut workspaces = self.workspaces.write();
-        let workspace = workspaces.get_mut(&id).ok_or(WorkspaceError::NotFound(id))?;
+        let workspace = workspaces
+            .get_mut(&id)
+            .ok_or(WorkspaceError::NotFound(id))?;
         workspace.status = WorkspaceStatus::Ready;
         workspace.error = None;
         workspace.updated_at = Utc::now();
@@ -251,7 +255,9 @@ impl WorkspaceManager {
         error: impl Into<String>,
     ) -> Result<WorkspaceSnapshot, WorkspaceError> {
         let mut workspaces = self.workspaces.write();
-        let workspace = workspaces.get_mut(&id).ok_or(WorkspaceError::NotFound(id))?;
+        let workspace = workspaces
+            .get_mut(&id)
+            .ok_or(WorkspaceError::NotFound(id))?;
         workspace.status = WorkspaceStatus::Failed;
         workspace.error = Some(error.into());
         workspace.updated_at = Utc::now();
@@ -266,7 +272,10 @@ impl WorkspaceManager {
             .ok_or(WorkspaceError::NotFound(id))
     }
 
-    pub fn family_counts(&self, id: WorkspaceId) -> Result<HashMap<FormatFamily, u64>, WorkspaceError> {
+    pub fn family_counts(
+        &self,
+        id: WorkspaceId,
+    ) -> Result<HashMap<FormatFamily, u64>, WorkspaceError> {
         self.workspaces
             .read()
             .get(&id)
@@ -274,7 +283,11 @@ impl WorkspaceManager {
             .ok_or(WorkspaceError::NotFound(id))
     }
 
-    pub fn list_assets(&self, id: WorkspaceId, query: AssetQuery) -> Result<AssetPage, WorkspaceError> {
+    pub fn list_assets(
+        &self,
+        id: WorkspaceId,
+        query: AssetQuery,
+    ) -> Result<AssetPage, WorkspaceError> {
         let workspaces = self.workspaces.read();
         let workspace = workspaces.get(&id).ok_or(WorkspaceError::NotFound(id))?;
         let limit = if query.limit == 0 {
@@ -294,7 +307,9 @@ impl WorkspaceManager {
             .iter()
             .filter(|asset| asset_matches(asset, &query, search.as_deref()))
             .collect::<Vec<_>>();
-        filtered.sort_by(|left, right| compare_assets(left, right, query.sort_by, query.sort_direction));
+        filtered.sort_by(|left, right| {
+            compare_assets(left, right, query.sort_by, query.sort_direction)
+        });
 
         let total = filtered.len();
         let items = filtered
@@ -321,7 +336,10 @@ impl WorkspaceManager {
     ) -> Result<Vec<Asset>, WorkspaceError> {
         let workspaces = self.workspaces.read();
         let workspace = workspaces.get(&id).ok_or(WorkspaceError::NotFound(id))?;
-        let selected = selected_ids.iter().copied().collect::<std::collections::HashSet<_>>();
+        let selected = selected_ids
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
         let use_explicit_selection = !selected.is_empty();
         Ok(workspace
             .assets
@@ -377,7 +395,11 @@ impl WorkspaceManager {
                 total_bytes,
             })
             .collect::<Vec<_>>();
-        extension_rows.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.extension.cmp(&b.extension)));
+        extension_rows.sort_by(|a, b| {
+            b.count
+                .cmp(&a.count)
+                .then_with(|| a.extension.cmp(&b.extension))
+        });
 
         let mut duplicate_size_candidates = by_size
             .into_iter()
@@ -397,7 +419,9 @@ impl WorkspaceManager {
         duplicate_size_candidates.truncate(INSIGHT_TOP_ITEMS);
         let potential_duplicate_bytes = duplicate_size_candidates
             .iter()
-            .fold(0_u64, |total, group| total.saturating_add(group.reclaimable_upper_bound));
+            .fold(0_u64, |total, group| {
+                total.saturating_add(group.reclaimable_upper_bound)
+            });
 
         Ok(WorkspaceInsights {
             hidden_assets,
@@ -426,15 +450,28 @@ fn asset_matches(asset: &Asset, query: &AssetQuery, search: Option<&str>) -> boo
         })
 }
 
-fn compare_assets(left: &Asset, right: &Asset, key: AssetSortKey, direction: SortDirection) -> Ordering {
+fn compare_assets(
+    left: &Asset,
+    right: &Asset,
+    key: AssetSortKey,
+    direction: SortDirection,
+) -> Ordering {
     let ordering = match key {
-        AssetSortKey::Name => left.common().name.to_lowercase().cmp(&right.common().name.to_lowercase()),
+        AssetSortKey::Name => left
+            .common()
+            .name
+            .to_lowercase()
+            .cmp(&right.common().name.to_lowercase()),
         AssetSortKey::Size => left.size_bytes().cmp(&right.size_bytes()),
         AssetSortKey::Modified => left.common().modified_at.cmp(&right.common().modified_at),
         AssetSortKey::Format => asset_format(left).cmp(asset_format(right)),
         AssetSortKey::Family => left.family().cmp(&right.family()),
     }
-    .then_with(|| left.common().relative_path.cmp(&right.common().relative_path));
+    .then_with(|| {
+        left.common()
+            .relative_path
+            .cmp(&right.common().relative_path)
+    });
 
     match direction {
         SortDirection::Ascending => ordering,
@@ -472,9 +509,7 @@ fn asset_insight(asset: &Asset) -> AssetInsight {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fileflow_domain::{
-        AssetCommon, AssetId, DetectedFormat, DetectionConfidence, FileAsset,
-    };
+    use fileflow_domain::{AssetCommon, AssetId, DetectedFormat, DetectionConfidence, FileAsset};
 
     fn file(name: &str, family: FormatFamily, size_bytes: u64) -> Asset {
         Asset::File(FileAsset {

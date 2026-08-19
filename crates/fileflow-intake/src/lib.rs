@@ -11,11 +11,7 @@ use std::{
     time::SystemTime,
 };
 use thiserror::Error;
-use tokio::{
-    fs,
-    io::AsyncReadExt,
-    sync::mpsc,
-};
+use tokio::{fs, io::AsyncReadExt, sync::mpsc};
 
 const DEFAULT_BATCH_SIZE: usize = 64;
 const DEFAULT_SAMPLE_BYTES: usize = 16 * 1024;
@@ -98,7 +94,12 @@ pub struct IntakeReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "event", content = "data")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "event",
+    content = "data"
+)]
 pub enum IntakeEvent {
     Started {
         request_id: IntakeRequestId,
@@ -233,12 +234,11 @@ impl IntakeScanner {
                     continue;
                 }
 
-                if options.follow_symlinks {
-                    if let Ok(canonical) = fs::canonicalize(&pending.path).await {
-                        if !visited_directories.insert(canonical) {
-                            continue;
-                        }
-                    }
+                if options.follow_symlinks
+                    && let Ok(canonical) = fs::canonicalize(&pending.path).await
+                    && !visited_directories.insert(canonical)
+                {
+                    continue;
                 }
 
                 let asset = Asset::Directory(DirectoryAsset {
@@ -497,10 +497,7 @@ async fn warning(
     .await
 }
 
-async fn send(
-    events: &mpsc::Sender<IntakeEvent>,
-    event: IntakeEvent,
-) -> Result<(), IntakeError> {
+async fn send(events: &mpsc::Sender<IntakeEvent>, event: IntakeEvent) -> Result<(), IntakeError> {
     events
         .send(event)
         .await
@@ -546,8 +543,16 @@ mod tests {
         assert_eq!(report.stats.archives, 1);
         assert_eq!(report.stats.files, 2);
         assert_eq!(report.stats.directories, 2);
-        assert!(assets.iter().any(|asset| asset.family() == FormatFamily::Image));
-        assert!(assets.iter().any(|asset| asset.kind() == AssetKind::Archive));
+        assert!(
+            assets
+                .iter()
+                .any(|asset| asset.family() == FormatFamily::Image)
+        );
+        assert!(
+            assets
+                .iter()
+                .any(|asset| asset.kind() == AssetKind::Archive)
+        );
 
         stdfs::remove_dir_all(root).unwrap();
     }

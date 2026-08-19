@@ -177,7 +177,9 @@ fn sanitize_budget(budget: ResourceBudget) -> ResourceBudget {
 }
 
 fn memory_permits(memory_mb: u64) -> usize {
-    usize::try_from(memory_mb.min(usize::MAX as u64)).unwrap_or(usize::MAX).max(1)
+    usize::try_from(memory_mb.min(usize::MAX as u64))
+        .unwrap_or(usize::MAX)
+        .max(1)
 }
 
 async fn acquire_many(
@@ -215,7 +217,10 @@ mod tests {
         };
 
         let before = scheduler.snapshot();
-        let lease = scheduler.acquire("test", profile, &cancellation).await.unwrap();
+        let lease = scheduler
+            .acquire("test", profile, &cancellation)
+            .await
+            .unwrap();
         let during = scheduler.snapshot();
         assert_eq!(during.cpu_available, before.cpu_available - 2);
         assert_eq!(during.memory_mb_available, before.memory_mb_available - 256);

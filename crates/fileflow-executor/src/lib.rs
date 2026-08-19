@@ -82,7 +82,12 @@ pub struct ExecutionSummary {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "event", content = "data")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "event",
+    content = "data"
+)]
 pub enum ExecutionEvent {
     Started {
         job_id: JobId,
@@ -182,21 +187,28 @@ impl ActionExecutor {
         if !is_supported(&request.action_id) {
             return Err(ExecutionError::UnsupportedAction(request.action_id));
         }
-        request.target_format = normalize_target_format(&request.action_id, request.target_format.as_deref())?;
+        request.target_format =
+            normalize_target_format(&request.action_id, request.target_format.as_deref())?;
         request.quality = normalize_quality(request.quality.as_deref());
 
         let started = Instant::now();
         let total = request.inputs.len();
-        send(&events, ExecutionEvent::Started {
-            job_id,
-            action_id: request.action_id.clone(),
-            total,
-        }).await?;
+        send(
+            &events,
+            ExecutionEvent::Started {
+                job_id,
+                action_id: request.action_id.clone(),
+                total,
+            },
+        )
+        .await?;
 
         let summary = if is_collective(&request.action_id) {
-            self.execute_collective(job_id, request, engines, cancellation, events.clone()).await?
+            self.execute_collective(job_id, request, engines, cancellation, events.clone())
+                .await?
         } else {
-            self.execute_batch(job_id, request, engines, cancellation, events.clone()).await?
+            self.execute_batch(job_id, request, engines, cancellation, events.clone())
+                .await?
         };
 
         let summary = ExecutionSummary {
@@ -204,7 +216,13 @@ impl ActionExecutor {
             finished_at: Utc::now(),
             ..summary
         };
-        send(&events, ExecutionEvent::Finished { summary: summary.clone() }).await?;
+        send(
+            &events,
+            ExecutionEvent::Finished {
+                summary: summary.clone(),
+            },
+        )
+        .await?;
         Ok(summary)
     }
 
@@ -217,7 +235,12 @@ impl ActionExecutor {
         events: mpsc::Sender<ExecutionEvent>,
     ) -> Result<ExecutionSummary, ExecutionError> {
         let total = request.inputs.len();
-        let window = self.scheduler.budget().cpu_tokens.saturating_mul(2).clamp(1, 16);
+        let window = self
+            .scheduler
+            .budget()
+            .cpu_tokens
+            .saturating_mul(2)
+            .clamp(1, 16);
         let mut join_set = JoinSet::new();
         let mut next_index = 0_usize;
         let mut completed = 0_usize;
@@ -323,7 +346,11 @@ impl ActionExecutor {
                         failures,
                     ));
                 }
-                Ok(Err(ItemExecutionError { index, input, error })) => {
+                Ok(Err(ItemExecutionError {
+                    index,
+                    input,
+                    error,
+                })) => {
                     failures.push(ItemFailure {
                         input: input.clone(),
                         message: error.to_string(),
@@ -457,7 +484,11 @@ impl ActionExecutor {
             &events,
             ExecutionEvent::Progress {
                 job_id,
-                completed: if state == JobState::Cancelled { 0 } else { total },
+                completed: if state == JobState::Cancelled {
+                    0
+                } else {
+                    total
+                },
                 total,
             },
         )
@@ -468,7 +499,11 @@ impl ActionExecutor {
             action_id: request.action_id,
             state,
             total,
-            succeeded: if state == JobState::Completed { total } else { 0 },
+            succeeded: if state == JobState::Completed {
+                total
+            } else {
+                0
+            },
             skipped: 0,
             failed: if state == JobState::Failed { total } else { 0 },
             outputs,
@@ -477,9 +512,10 @@ impl ActionExecutor {
             finished_at: Utc::now(),
         })
     }
-
 }
 
+// Internal summary factory; arguments directly mirror ExecutionSummary data.
+#[allow(clippy::too_many_arguments)]
 fn batch_summary(
     job_id: JobId,
     action_id: String,
@@ -512,6 +548,8 @@ struct ItemExecutionError {
     error: ExecutionError,
 }
 
+// Internal execution boundary; explicit parameters keep per-item job state visible.
+#[allow(clippy::too_many_arguments)]
 async fn execute_item(
     index: usize,
     input: ExecutionInput,
@@ -551,6 +589,8 @@ async fn execute_item(
         })
 }
 
+// Internal engine dispatch boundary; parameters represent the complete execution context.
+#[allow(clippy::too_many_arguments)]
 async fn execute_item_inner(
     input: &Path,
     source_root: Option<&Path>,
@@ -563,21 +603,44 @@ async fn execute_item_inner(
     cancellation: CancellationToken,
     resolver: OutputResolver,
 ) -> Result<(Option<PathBuf>, bool), ExecutionError> {
-    if cancellation.is_cancelled() { return Err(ExecutionError::Cancelled); }
+    if cancellation.is_cancelled() {
+        return Err(ExecutionError::Cancelled);
+    }
     if action_id == "archive-extract" {
-        return execute_archive_extract(input, source_root, output_policy, engines, scheduler, cancellation)
-            .await
-            .map(|(path, skipped)| (Some(path), skipped));
+        return execute_archive_extract(
+            input,
+            source_root,
+            output_policy,
+            engines,
+            scheduler,
+            cancellation,
+        )
+        .await
+        .map(|(path, skipped)| (Some(path), skipped));
     }
     if action_id == "pdf-split" {
-        return execute_pdf_split(input, source_root, output_policy, engines, scheduler, cancellation)
-            .await
-            .map(|(path, skipped)| (Some(path), skipped));
+        return execute_pdf_split(
+            input,
+            source_root,
+            output_policy,
+            engines,
+            scheduler,
+            cancellation,
+        )
+        .await
+        .map(|(path, skipped)| (Some(path), skipped));
     }
     if action_id == "pdf-to-images" {
-        return execute_pdf_to_images(input, source_root, output_policy, engines, scheduler, cancellation)
-            .await
-            .map(|(path, skipped)| (Some(path), skipped));
+        return execute_pdf_to_images(
+            input,
+            source_root,
+            output_policy,
+            engines,
+            scheduler,
+            cancellation,
+        )
+        .await
+        .map(|(path, skipped)| (Some(path), skipped));
     }
 
     let (engine_id, extension, suffix) = item_output(action_id, input, target_format)?;
@@ -596,20 +659,69 @@ async fn execute_item_inner(
         operation_suffix: suffix.map(str::to_owned),
         policy: output_policy.clone(),
     })?;
-    if plan.skipped { return Ok((Some(plan.final_path), true)); }
+    if plan.skipped {
+        return Ok((Some(plan.final_path), true));
+    }
     resolver.prepare(&plan).await?;
 
     let execution = match action_id {
-        "image-convert" | "image-batch-convert" => run_vips_copy(engine, input, &plan.temporary_path, engine_threads, &cancellation).await,
-        "image-optimize" | "image-resize" => run_vips_thumbnail(engine, input, &plan.temporary_path, quality, engine_threads, &cancellation).await,
-        "strip-metadata" => run_exiftool_strip(engine, input, &plan.temporary_path, &cancellation).await,
-        "extract-metadata" => run_exiftool_json(engine, input, &plan.temporary_path, &cancellation).await,
+        "image-convert" | "image-batch-convert" => {
+            run_vips_copy(
+                engine,
+                input,
+                &plan.temporary_path,
+                engine_threads,
+                &cancellation,
+            )
+            .await
+        }
+        "image-optimize" | "image-resize" => {
+            run_vips_thumbnail(
+                engine,
+                input,
+                &plan.temporary_path,
+                quality,
+                engine_threads,
+                &cancellation,
+            )
+            .await
+        }
+        "strip-metadata" => {
+            run_exiftool_strip(engine, input, &plan.temporary_path, &cancellation).await
+        }
+        "extract-metadata" => {
+            run_exiftool_json(engine, input, &plan.temporary_path, &cancellation).await
+        }
         "office-to-pdf" => run_office_to_pdf(engine, input, &plan, &cancellation).await,
-        "pdf-compress" => run_pdf_compress(engine, input, &plan.temporary_path, quality, &cancellation).await,
-        "pdf-extract-text" => run_process(engine, &[input.as_os_str().into(), plan.temporary_path.as_os_str().into()], &cancellation).await,
+        "pdf-compress" => {
+            run_pdf_compress(engine, input, &plan.temporary_path, quality, &cancellation).await
+        }
+        "pdf-extract-text" => {
+            run_process(
+                engine,
+                &[
+                    input.as_os_str().into(),
+                    plan.temporary_path.as_os_str().into(),
+                ],
+                &cancellation,
+            )
+            .await
+        }
         "pdf-ocr" => run_pdf_ocr(engine, input, &plan.temporary_path, &cancellation).await,
         "ocr-image" => run_tesseract(engine, input, &plan.temporary_path, &cancellation).await,
-        "media-compatible" | "media-compress" | "audio-convert" | "extract-audio" | "video-to-gif" => run_ffmpeg(engine, action_id, input, &plan.temporary_path, quality, engine_threads, &cancellation).await,
+        "media-compatible" | "media-compress" | "audio-convert" | "extract-audio"
+        | "video-to-gif" => {
+            run_ffmpeg(
+                engine,
+                action_id,
+                input,
+                &plan.temporary_path,
+                quality,
+                engine_threads,
+                &cancellation,
+            )
+            .await
+        }
         _ => Err(ExecutionError::UnsupportedAction(action_id.into())),
     };
 
@@ -631,18 +743,28 @@ async fn execute_collective_action(
     match request.action_id.as_str() {
         "images-to-pdf" => {
             let engine = engines.get("img2pdf")?;
-            let _lease = scheduler.acquire("img2pdf", ResourceProfile::PDF, &cancellation).await?;
+            let _lease = scheduler
+                .acquire("img2pdf", ResourceProfile::PDF, &cancellation)
+                .await?;
             let first = &request.inputs[0].path;
             let plan = resolver.plan(&OutputRequest {
                 source: first.clone(),
                 source_root: None,
                 desired_extension: Some("pdf".into()),
                 operation_suffix: Some("images".into()),
-                policy: fileflow_domain::OutputPolicy { naming: fileflow_domain::NamingStrategy::OperationSuffix, ..request.output_policy.clone() },
+                policy: fileflow_domain::OutputPolicy {
+                    naming: fileflow_domain::NamingStrategy::OperationSuffix,
+                    ..request.output_policy.clone()
+                },
             })?;
-            if plan.skipped { return Ok(Some(plan.final_path)); }
+            if plan.skipped {
+                return Ok(Some(plan.final_path));
+            }
             resolver.prepare(&plan).await?;
-            let list_path = plan.destination_directory.join(format!(".fileflow-img2pdf-{}.list", Uuid::new_v4().simple()));
+            let list_path = plan.destination_directory.join(format!(
+                ".fileflow-img2pdf-{}.list",
+                Uuid::new_v4().simple()
+            ));
             tokio::fs::write(&list_path, nul_separated_paths(&request.inputs)).await?;
             let args = [
                 OsString::from("--rotation=ifvalid"),
@@ -662,19 +784,28 @@ async fn execute_collective_action(
         }
         "pdf-merge" => {
             let engine = engines.get("qpdf")?;
-            let _lease = scheduler.acquire("qpdf", ResourceProfile::PDF, &cancellation).await?;
+            let _lease = scheduler
+                .acquire("qpdf", ResourceProfile::PDF, &cancellation)
+                .await?;
             let first = &request.inputs[0].path;
             let plan = resolver.plan(&OutputRequest {
                 source: first.clone(),
                 source_root: None,
                 desired_extension: Some("pdf".into()),
                 operation_suffix: Some("fusion".into()),
-                policy: fileflow_domain::OutputPolicy { naming: fileflow_domain::NamingStrategy::OperationSuffix, ..request.output_policy.clone() },
+                policy: fileflow_domain::OutputPolicy {
+                    naming: fileflow_domain::NamingStrategy::OperationSuffix,
+                    ..request.output_policy.clone()
+                },
             })?;
-            if plan.skipped { return Ok(Some(plan.final_path)); }
+            if plan.skipped {
+                return Ok(Some(plan.final_path));
+            }
             resolver.prepare(&plan).await?;
             let mut args = vec![OsString::from("--empty"), OsString::from("--pages")];
-            for input in &request.inputs { args.push(input.path.as_os_str().into()); }
+            for input in &request.inputs {
+                args.push(input.path.as_os_str().into());
+            }
             args.extend([OsString::from("--"), plan.temporary_path.as_os_str().into()]);
             run_process(engine, &args, &cancellation).await?;
             resolver.finalize(&plan).await?;
@@ -682,7 +813,9 @@ async fn execute_collective_action(
         }
         "archive-create" => {
             let engine = engines.get("archive")?;
-            let _lease = scheduler.acquire("archive", ResourceProfile::ARCHIVE, &cancellation).await?;
+            let _lease = scheduler
+                .acquire("archive", ResourceProfile::ARCHIVE, &cancellation)
+                .await?;
             let first = &request.inputs[0].path;
             let target_format = request.target_format.as_deref().unwrap_or("zip");
             let plan = resolver.plan(&OutputRequest {
@@ -690,12 +823,19 @@ async fn execute_collective_action(
                 source_root: None,
                 desired_extension: Some(target_format.into()),
                 operation_suffix: Some("archive".into()),
-                policy: fileflow_domain::OutputPolicy { naming: fileflow_domain::NamingStrategy::OperationSuffix, ..request.output_policy.clone() },
+                policy: fileflow_domain::OutputPolicy {
+                    naming: fileflow_domain::NamingStrategy::OperationSuffix,
+                    ..request.output_policy.clone()
+                },
             })?;
-            if plan.skipped { return Ok(Some(plan.final_path)); }
+            if plan.skipped {
+                return Ok(Some(plan.final_path));
+            }
             resolver.prepare(&plan).await?;
             let mut args = vec![OsString::from("a"), plan.temporary_path.as_os_str().into()];
-            for input in &request.inputs { args.push(input.path.as_os_str().into()); }
+            for input in &request.inputs {
+                args.push(input.path.as_os_str().into());
+            }
             run_process(engine, &args, &cancellation).await?;
             resolver.finalize(&plan).await?;
             Ok(Some(plan.final_path))
@@ -711,9 +851,21 @@ fn item_output<'a>(
 ) -> Result<(&'static str, Option<&'a str>, Option<&'static str>), ExecutionError> {
     let source_extension = input.extension().and_then(|value| value.to_str());
     Ok(match action_id {
-        "image-convert" | "image-batch-convert" => ("vips", Some(target_format.unwrap_or("jpg")), Some("converti")),
-        "image-optimize" => ("vips", Some(target_format.or(source_extension).unwrap_or("jpg")), Some("optimise")),
-        "image-resize" => ("vips", Some(target_format.or(source_extension).unwrap_or("jpg")), Some("redimensionne")),
+        "image-convert" | "image-batch-convert" => (
+            "vips",
+            Some(target_format.unwrap_or("jpg")),
+            Some("converti"),
+        ),
+        "image-optimize" => (
+            "vips",
+            Some(target_format.or(source_extension).unwrap_or("jpg")),
+            Some("optimise"),
+        ),
+        "image-resize" => (
+            "vips",
+            Some(target_format.or(source_extension).unwrap_or("jpg")),
+            Some("redimensionne"),
+        ),
         "strip-metadata" => ("metadata", source_extension, Some("prive")),
         "extract-metadata" => ("metadata", Some("json"), Some("metadonnees")),
         "office-to-pdf" => ("office", Some("pdf"), Some("pdf")),
@@ -721,10 +873,26 @@ fn item_output<'a>(
         "pdf-extract-text" => ("poppler", Some("txt"), Some("texte")),
         "pdf-ocr" => ("ocr", Some("pdf"), Some("ocr")),
         "ocr-image" => ("tesseract", Some("txt"), Some("texte")),
-        "media-compatible" => ("ffmpeg", Some(if is_audio_extension(source_extension) { "m4a" } else { "mp4" }), Some("compatible")),
+        "media-compatible" => (
+            "ffmpeg",
+            Some(if is_audio_extension(source_extension) {
+                "m4a"
+            } else {
+                "mp4"
+            }),
+            Some("compatible"),
+        ),
         "media-compress" => ("ffmpeg", source_extension.or(Some("mp4")), Some("leger")),
-        "audio-convert" => ("ffmpeg", Some(target_format.unwrap_or("mp3")), Some("converti")),
-        "extract-audio" => ("ffmpeg", Some(target_format.unwrap_or("m4a")), Some("audio")),
+        "audio-convert" => (
+            "ffmpeg",
+            Some(target_format.unwrap_or("mp3")),
+            Some("converti"),
+        ),
+        "extract-audio" => (
+            "ffmpeg",
+            Some(target_format.unwrap_or("m4a")),
+            Some("audio"),
+        ),
         "video-to-gif" => ("ffmpeg", Some("gif"), Some("animation")),
         _ => return Err(ExecutionError::UnsupportedAction(action_id.into())),
     })
@@ -756,7 +924,11 @@ async fn run_vips_copy(
 ) -> Result<(), ExecutionError> {
     run_process_with_env(
         engine,
-        &[OsString::from("copy"), input.as_os_str().into(), output.as_os_str().into()],
+        &[
+            OsString::from("copy"),
+            input.as_os_str().into(),
+            output.as_os_str().into(),
+        ],
         &[("VIPS_CONCURRENCY", threads.to_string())],
         cancellation,
     )
@@ -771,18 +943,44 @@ async fn run_vips_thumbnail(
     threads: usize,
     cancellation: &CancellationToken,
 ) -> Result<(), ExecutionError> {
-    let size = match quality { Some("small") => "1280", Some("high") => "2560", _ => "2048" };
+    let size = match quality {
+        Some("small") => "1280",
+        Some("high") => "2560",
+        _ => "2048",
+    };
     run_process_with_env(
         engine,
-        &[OsString::from("thumbnail"), input.as_os_str().into(), output.as_os_str().into(), OsString::from(size), OsString::from("--size"), OsString::from("down")],
+        &[
+            OsString::from("thumbnail"),
+            input.as_os_str().into(),
+            output.as_os_str().into(),
+            OsString::from(size),
+            OsString::from("--size"),
+            OsString::from("down"),
+        ],
         &[("VIPS_CONCURRENCY", threads.to_string())],
         cancellation,
     )
     .await
 }
 
-async fn run_exiftool_strip(engine: &Path, input: &Path, output: &Path, cancellation: &CancellationToken) -> Result<(), ExecutionError> {
-    run_process(engine, &[OsString::from("-all="), OsString::from("-o"), output.as_os_str().into(), input.as_os_str().into()], cancellation).await
+async fn run_exiftool_strip(
+    engine: &Path,
+    input: &Path,
+    output: &Path,
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    run_process(
+        engine,
+        &[
+            OsString::from("-all="),
+            OsString::from("-o"),
+            output.as_os_str().into(),
+            input.as_os_str().into(),
+        ],
+        cancellation,
+    )
+    .await
 }
 
 async fn run_exiftool_json(
@@ -793,7 +991,12 @@ async fn run_exiftool_json(
 ) -> Result<(), ExecutionError> {
     let json = capture_process(
         engine,
-        &[OsString::from("-j"), OsString::from("-G"), OsString::from("-n"), input.as_os_str().into()],
+        &[
+            OsString::from("-j"),
+            OsString::from("-G"),
+            OsString::from("-n"),
+            input.as_os_str().into(),
+        ],
         cancellation,
     )
     .await?;
@@ -801,12 +1004,40 @@ async fn run_exiftool_json(
     Ok(())
 }
 
-async fn run_office_to_pdf(engine: &Path, input: &Path, plan: &OutputPlan, cancellation: &CancellationToken) -> Result<(), ExecutionError> {
-    let staging = plan.destination_directory.join(format!(".fileflow-office-{}", Uuid::new_v4().simple()));
+async fn run_office_to_pdf(
+    engine: &Path,
+    input: &Path,
+    plan: &OutputPlan,
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    let staging = plan
+        .destination_directory
+        .join(format!(".fileflow-office-{}", Uuid::new_v4().simple()));
     tokio::fs::create_dir_all(&staging).await?;
-    let result = run_process(engine, &[OsString::from("--headless"), OsString::from("--convert-to"), OsString::from("pdf"), OsString::from("--outdir"), staging.as_os_str().into(), input.as_os_str().into()], cancellation).await;
-    if let Err(error) = result { let _ = tokio::fs::remove_dir_all(&staging).await; return Err(error); }
-    let generated = staging.join(format!("{}.pdf", input.file_stem().and_then(|value| value.to_str()).unwrap_or("document")));
+    let result = run_process(
+        engine,
+        &[
+            OsString::from("--headless"),
+            OsString::from("--convert-to"),
+            OsString::from("pdf"),
+            OsString::from("--outdir"),
+            staging.as_os_str().into(),
+            input.as_os_str().into(),
+        ],
+        cancellation,
+    )
+    .await;
+    if let Err(error) = result {
+        let _ = tokio::fs::remove_dir_all(&staging).await;
+        return Err(error);
+    }
+    let generated = staging.join(format!(
+        "{}.pdf",
+        input
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("document")
+    ));
     if let Err(rename_error) = tokio::fs::rename(&generated, &plan.temporary_path).await {
         if let Err(copy_error) = tokio::fs::copy(&generated, &plan.temporary_path).await {
             let _ = tokio::fs::remove_dir_all(&staging).await;
@@ -819,24 +1050,79 @@ async fn run_office_to_pdf(engine: &Path, input: &Path, plan: &OutputPlan, cance
     Ok(())
 }
 
-async fn run_pdf_compress(engine: &Path, input: &Path, output: &Path, quality: Option<&str>, cancellation: &CancellationToken) -> Result<(), ExecutionError> {
-    let profile = match quality { Some("small") => "/screen", Some("high") => "/prepress", _ => "/ebook" };
-    run_process(engine, &[
-        OsString::from("-sDEVICE=pdfwrite"), OsString::from("-dCompatibilityLevel=1.4"),
-        OsString::from(format!("-dPDFSETTINGS={profile}")), OsString::from("-dNOPAUSE"), OsString::from("-dQUIET"), OsString::from("-dBATCH"),
-        OsString::from(format!("-sOutputFile={}", output.to_string_lossy())), input.as_os_str().into(),
-    ], cancellation).await
+async fn run_pdf_compress(
+    engine: &Path,
+    input: &Path,
+    output: &Path,
+    quality: Option<&str>,
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    let profile = match quality {
+        Some("small") => "/screen",
+        Some("high") => "/prepress",
+        _ => "/ebook",
+    };
+    run_process(
+        engine,
+        &[
+            OsString::from("-sDEVICE=pdfwrite"),
+            OsString::from("-dCompatibilityLevel=1.4"),
+            OsString::from(format!("-dPDFSETTINGS={profile}")),
+            OsString::from("-dNOPAUSE"),
+            OsString::from("-dQUIET"),
+            OsString::from("-dBATCH"),
+            OsString::from(format!("-sOutputFile={}", output.to_string_lossy())),
+            input.as_os_str().into(),
+        ],
+        cancellation,
+    )
+    .await
 }
 
-async fn run_pdf_ocr(engine: &Path, input: &Path, output: &Path, cancellation: &CancellationToken) -> Result<(), ExecutionError> {
-    run_process(engine, &[OsString::from("--skip-text"), OsString::from("--deskew"), OsString::from("--optimize"), OsString::from("1"), input.as_os_str().into(), output.as_os_str().into()], cancellation).await
+async fn run_pdf_ocr(
+    engine: &Path,
+    input: &Path,
+    output: &Path,
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    run_process(
+        engine,
+        &[
+            OsString::from("--skip-text"),
+            OsString::from("--deskew"),
+            OsString::from("--optimize"),
+            OsString::from("1"),
+            input.as_os_str().into(),
+            output.as_os_str().into(),
+        ],
+        cancellation,
+    )
+    .await
 }
 
-async fn run_tesseract(engine: &Path, input: &Path, output: &Path, cancellation: &CancellationToken) -> Result<(), ExecutionError> {
+async fn run_tesseract(
+    engine: &Path,
+    input: &Path,
+    output: &Path,
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
     let base = output.with_extension("");
-    run_process(engine, &[input.as_os_str().into(), base.as_os_str().into(), OsString::from("-l"), OsString::from("fra+eng"), OsString::from("txt")], cancellation).await?;
+    run_process(
+        engine,
+        &[
+            input.as_os_str().into(),
+            base.as_os_str().into(),
+            OsString::from("-l"),
+            OsString::from("fra+eng"),
+            OsString::from("txt"),
+        ],
+        cancellation,
+    )
+    .await?;
     let generated = base.with_extension("txt");
-    if generated != output { tokio::fs::rename(generated, output).await?; }
+    if generated != output {
+        tokio::fs::rename(generated, output).await?;
+    }
     Ok(())
 }
 
@@ -873,27 +1159,50 @@ async fn run_ffmpeg(
                 push_audio_codec(&mut args, output);
             } else {
                 args.extend([
-                    OsString::from("-c:v"), OsString::from("libx264"),
-                    OsString::from("-preset"), OsString::from("medium"),
-                    OsString::from("-crf"), OsString::from("23"),
-                    OsString::from("-c:a"), OsString::from("aac"),
-                    OsString::from("-b:a"), OsString::from("160k"),
-                    OsString::from("-movflags"), OsString::from("+faststart"),
+                    OsString::from("-c:v"),
+                    OsString::from("libx264"),
+                    OsString::from("-preset"),
+                    OsString::from("medium"),
+                    OsString::from("-crf"),
+                    OsString::from("23"),
+                    OsString::from("-c:a"),
+                    OsString::from("aac"),
+                    OsString::from("-b:a"),
+                    OsString::from("160k"),
+                    OsString::from("-movflags"),
+                    OsString::from("+faststart"),
                 ]);
             }
         }
         "media-compress" if source_audio => {
             args.extend([OsString::from("-vn"), OsString::from("-b:a")]);
-            args.push(OsString::from(if quality == Some("small") { "96k" } else if quality == Some("high") { "192k" } else { "128k" }));
+            args.push(OsString::from(if quality == Some("small") {
+                "96k"
+            } else if quality == Some("high") {
+                "192k"
+            } else {
+                "128k"
+            }));
         }
         "media-compress" => {
-            let crf = if quality == Some("small") { "30" } else if quality == Some("high") { "20" } else { "26" };
+            let crf = if quality == Some("small") {
+                "30"
+            } else if quality == Some("high") {
+                "20"
+            } else {
+                "26"
+            };
             args.extend([
-                OsString::from("-c:v"), OsString::from("libx264"),
-                OsString::from("-preset"), OsString::from("medium"),
-                OsString::from("-crf"), OsString::from(crf),
-                OsString::from("-c:a"), OsString::from("aac"),
-                OsString::from("-b:a"), OsString::from("128k"),
+                OsString::from("-c:v"),
+                OsString::from("libx264"),
+                OsString::from("-preset"),
+                OsString::from("medium"),
+                OsString::from("-crf"),
+                OsString::from(crf),
+                OsString::from("-c:a"),
+                OsString::from("aac"),
+                OsString::from("-b:a"),
+                OsString::from("128k"),
             ]);
         }
         "audio-convert" | "extract-audio" => {
@@ -913,13 +1222,38 @@ async fn run_ffmpeg(
 }
 
 fn push_audio_codec(args: &mut Vec<OsString>, output: &Path) {
-    match output.extension().and_then(|value| value.to_str()).map(str::to_ascii_lowercase).as_deref() {
-        Some("mp3") => args.extend([OsString::from("-c:a"), OsString::from("libmp3lame"), OsString::from("-q:a"), OsString::from("2")]),
-        Some("opus") => args.extend([OsString::from("-c:a"), OsString::from("libopus"), OsString::from("-b:a"), OsString::from("128k")]),
-        Some("ogg") => args.extend([OsString::from("-c:a"), OsString::from("libvorbis"), OsString::from("-q:a"), OsString::from("5")]),
+    match output
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("mp3") => args.extend([
+            OsString::from("-c:a"),
+            OsString::from("libmp3lame"),
+            OsString::from("-q:a"),
+            OsString::from("2"),
+        ]),
+        Some("opus") => args.extend([
+            OsString::from("-c:a"),
+            OsString::from("libopus"),
+            OsString::from("-b:a"),
+            OsString::from("128k"),
+        ]),
+        Some("ogg") => args.extend([
+            OsString::from("-c:a"),
+            OsString::from("libvorbis"),
+            OsString::from("-q:a"),
+            OsString::from("5"),
+        ]),
         Some("flac") => args.extend([OsString::from("-c:a"), OsString::from("flac")]),
         Some("wav") => args.extend([OsString::from("-c:a"), OsString::from("pcm_s16le")]),
-        _ => args.extend([OsString::from("-c:a"), OsString::from("aac"), OsString::from("-b:a"), OsString::from("192k")]),
+        _ => args.extend([
+            OsString::from("-c:a"),
+            OsString::from("aac"),
+            OsString::from("-b:a"),
+            OsString::from("192k"),
+        ]),
     }
 }
 
@@ -932,14 +1266,23 @@ async fn execute_archive_extract(
     cancellation: CancellationToken,
 ) -> Result<(PathBuf, bool), ExecutionError> {
     let engine = engines.get("archive")?;
-    let _lease = scheduler.acquire("archive", ResourceProfile::ARCHIVE, &cancellation).await?;
+    let _lease = scheduler
+        .acquire("archive", ResourceProfile::ARCHIVE, &cancellation)
+        .await?;
     validate_archive(engine, input, &cancellation).await?;
     let plan = prepare_directory_output(input, source_root, policy, "extrait").await?;
-    if plan.skipped { return Ok((plan.final_path, true)); }
+    if plan.skipped {
+        return Ok((plan.final_path, true));
+    }
     let output_arg = OsString::from(format!("-o{}", plan.temporary_path.to_string_lossy()));
     let result = run_process(
         engine,
-        &[OsString::from("x"), input.as_os_str().into(), output_arg, OsString::from("-y")],
+        &[
+            OsString::from("x"),
+            input.as_os_str().into(),
+            output_arg,
+            OsString::from("-y"),
+        ],
         &cancellation,
     )
     .await;
@@ -960,13 +1303,21 @@ async fn execute_pdf_split(
     cancellation: CancellationToken,
 ) -> Result<(PathBuf, bool), ExecutionError> {
     let engine = engines.get("qpdf")?;
-    let _lease = scheduler.acquire("qpdf", ResourceProfile::PDF, &cancellation).await?;
+    let _lease = scheduler
+        .acquire("qpdf", ResourceProfile::PDF, &cancellation)
+        .await?;
     let plan = prepare_directory_output(input, source_root, policy, "pages").await?;
-    if plan.skipped { return Ok((plan.final_path, true)); }
+    if plan.skipped {
+        return Ok((plan.final_path, true));
+    }
     let pattern = plan.temporary_path.join("page-%d.pdf");
     let result = run_process(
         engine,
-        &[OsString::from("--split-pages"), input.as_os_str().into(), pattern.as_os_str().into()],
+        &[
+            OsString::from("--split-pages"),
+            input.as_os_str().into(),
+            pattern.as_os_str().into(),
+        ],
         &cancellation,
     )
     .await;
@@ -987,13 +1338,23 @@ async fn execute_pdf_to_images(
     cancellation: CancellationToken,
 ) -> Result<(PathBuf, bool), ExecutionError> {
     let engine = engines.get("poppler")?;
-    let _lease = scheduler.acquire("poppler", ResourceProfile::PDF, &cancellation).await?;
+    let _lease = scheduler
+        .acquire("poppler", ResourceProfile::PDF, &cancellation)
+        .await?;
     let plan = prepare_directory_output(input, source_root, policy, "images").await?;
-    if plan.skipped { return Ok((plan.final_path, true)); }
+    if plan.skipped {
+        return Ok((plan.final_path, true));
+    }
     let prefix = plan.temporary_path.join("page");
     let result = run_process(
         engine,
-        &[OsString::from("-png"), OsString::from("-r"), OsString::from("150"), input.as_os_str().into(), prefix.as_os_str().into()],
+        &[
+            OsString::from("-png"),
+            OsString::from("-r"),
+            OsString::from("150"),
+            input.as_os_str().into(),
+            prefix.as_os_str().into(),
+        ],
         &cancellation,
     )
     .await;
@@ -1020,21 +1381,30 @@ async fn prepare_directory_output(
 ) -> Result<DirectoryOutputPlan, ExecutionError> {
     let source_parent = input.parent().unwrap_or_else(|| Path::new("."));
     let mut parent = match policy.destination {
-        fileflow_domain::DestinationPolicy::SameFolder | fileflow_domain::DestinationPolicy::AskEveryTime => source_parent.to_path_buf(),
-        fileflow_domain::DestinationPolicy::Subfolder => source_parent.join(safe_folder_name(&policy.subfolder_name)),
-        fileflow_domain::DestinationPolicy::CustomFolder => policy.custom_directory.clone().ok_or(fileflow_output::OutputError::MissingCustomDirectory)?,
-    };
-    if policy.preserve_tree {
-        if let Some(root) = source_root {
-            if let Ok(relative) = input.strip_prefix(root) {
-                if let Some(relative_parent) = relative.parent().filter(|path| !path.as_os_str().is_empty()) {
-                    parent = parent.join(relative_parent);
-                }
-            }
+        fileflow_domain::DestinationPolicy::SameFolder
+        | fileflow_domain::DestinationPolicy::AskEveryTime => source_parent.to_path_buf(),
+        fileflow_domain::DestinationPolicy::Subfolder => {
+            source_parent.join(safe_folder_name(&policy.subfolder_name))
         }
+        fileflow_domain::DestinationPolicy::CustomFolder => policy
+            .custom_directory
+            .clone()
+            .ok_or(fileflow_output::OutputError::MissingCustomDirectory)?,
+    };
+    if policy.preserve_tree
+        && let Some(root) = source_root
+        && let Ok(relative) = input.strip_prefix(root)
+        && let Some(relative_parent) = relative
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+    {
+        parent = parent.join(relative_parent);
     }
     tokio::fs::create_dir_all(&parent).await?;
-    let stem = input.file_stem().and_then(|value| value.to_str()).unwrap_or("document");
+    let stem = input
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("document");
     let base = parent.join(format!("{stem}_{suffix}"));
     let target = resolve_directory_conflict(base, policy.conflict).await?;
     let skipped = target.exists() && policy.conflict == fileflow_domain::ConflictStrategy::Skip;
@@ -1045,11 +1415,17 @@ async fn prepare_directory_output(
     if !skipped {
         tokio::fs::create_dir_all(&temporary_path).await?;
     }
-    Ok(DirectoryOutputPlan { final_path: target, temporary_path, skipped })
+    Ok(DirectoryOutputPlan {
+        final_path: target,
+        temporary_path,
+        skipped,
+    })
 }
 
 async fn finalize_directory_output(plan: &DirectoryOutputPlan) -> Result<(), ExecutionError> {
-    if plan.skipped { return Ok(()); }
+    if plan.skipped {
+        return Ok(());
+    }
     tokio::fs::rename(&plan.temporary_path, &plan.final_path).await?;
     Ok(())
 }
@@ -1088,7 +1464,11 @@ pub async fn inspect_archive(
 ) -> Result<ArchiveInspection, ExecutionError> {
     let listing = capture_process(
         engine,
-        &[OsString::from("l"), OsString::from("-slt"), input.as_os_str().into()],
+        &[
+            OsString::from("l"),
+            OsString::from("-slt"),
+            input.as_os_str().into(),
+        ],
         cancellation,
     )
     .await?;
@@ -1244,7 +1624,11 @@ async fn validate_archive(
 ) -> Result<(), ExecutionError> {
     let output = capture_process(
         engine,
-        &[OsString::from("l"), OsString::from("-slt"), input.as_os_str().into()],
+        &[
+            OsString::from("l"),
+            OsString::from("-slt"),
+            input.as_os_str().into(),
+        ],
         cancellation,
     )
     .await?;
@@ -1272,23 +1656,31 @@ fn validate_archive_listing(listing: &str) -> Result<(), ExecutionError> {
         if let Some(value) = line.strip_prefix("Path = ") {
             entries = entries.saturating_add(1);
             if entries > MAX_ARCHIVE_ENTRIES {
-                return Err(ExecutionError::UnsafeArchive(format!("plus de {MAX_ARCHIVE_ENTRIES} entrées")));
+                return Err(ExecutionError::UnsafeArchive(format!(
+                    "plus de {MAX_ARCHIVE_ENTRIES} entrées"
+                )));
             }
             validate_archive_path(value)?;
         } else if let Some(value) = line.strip_prefix("Size = ") {
             unpacked = unpacked.saturating_add(value.trim().parse::<u64>().unwrap_or(0));
             if unpacked > MAX_ARCHIVE_UNPACKED_BYTES {
-                return Err(ExecutionError::UnsafeArchive("taille décompressée supérieure à 100 Gio".into()));
+                return Err(ExecutionError::UnsafeArchive(
+                    "taille décompressée supérieure à 100 Gio".into(),
+                ));
             }
         } else if line.starts_with("Symbolic Link = ") || line.starts_with("Hard Link = ") {
-            return Err(ExecutionError::UnsafeArchive("les liens contenus dans une archive ne sont pas extraits automatiquement".into()));
+            return Err(ExecutionError::UnsafeArchive(
+                "les liens contenus dans une archive ne sont pas extraits automatiquement".into(),
+            ));
         }
     }
 
     if physical_size > 0 && unpacked > 1024 * 1024 * 1024 {
         let ratio = unpacked / physical_size.max(1);
         if ratio > MAX_ARCHIVE_RATIO {
-            return Err(ExecutionError::UnsafeArchive(format!("ratio de compression suspect ({ratio}:1)")));
+            return Err(ExecutionError::UnsafeArchive(format!(
+                "ratio de compression suspect ({ratio}:1)"
+            )));
         }
     }
     Ok(())
@@ -1296,13 +1688,18 @@ fn validate_archive_listing(listing: &str) -> Result<(), ExecutionError> {
 
 fn validate_archive_path(value: &str) -> Result<(), ExecutionError> {
     let normalized = value.replace('\\', "/");
-    let drive_prefix = normalized.as_bytes().get(1).is_some_and(|value| *value == b':');
+    let drive_prefix = normalized
+        .as_bytes()
+        .get(1)
+        .is_some_and(|value| *value == b':');
     if normalized.starts_with('/')
         || normalized.starts_with("//")
         || drive_prefix
         || normalized.split('/').any(|part| part == "..")
     {
-        return Err(ExecutionError::UnsafeArchive(format!("chemin non sûr : {value}")));
+        return Err(ExecutionError::UnsafeArchive(format!(
+            "chemin non sûr : {value}"
+        )));
     }
     Ok(())
 }
@@ -1311,14 +1708,25 @@ async fn resolve_directory_conflict(
     base: PathBuf,
     strategy: fileflow_domain::ConflictStrategy,
 ) -> Result<PathBuf, ExecutionError> {
-    if !base.exists() || matches!(strategy, fileflow_domain::ConflictStrategy::Skip | fileflow_domain::ConflictStrategy::Replace) {
+    if !base.exists()
+        || matches!(
+            strategy,
+            fileflow_domain::ConflictStrategy::Skip | fileflow_domain::ConflictStrategy::Replace
+        )
+    {
         return Ok(base);
     }
     if strategy == fileflow_domain::ConflictStrategy::Ask {
-        return Err(ExecutionError::Destination(format!("la destination existe déjà : {}", base.display())));
+        return Err(ExecutionError::Destination(format!(
+            "la destination existe déjà : {}",
+            base.display()
+        )));
     }
     let parent = base.parent().unwrap_or_else(|| Path::new("."));
-    let stem = base.file_name().and_then(|value| value.to_str()).unwrap_or("extraction");
+    let stem = base
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("extraction");
     for index in 1..=10_000 {
         let candidate = parent.join(format!("{stem} ({index})"));
         if !candidate.exists() {
@@ -1332,9 +1740,16 @@ fn safe_folder_name(value: &str) -> String {
     let value = value.trim();
     let cleaned = value
         .chars()
-        .map(|character| match character { '/' | '\\' | ':' | '\0' => '-', other => other })
+        .map(|character| match character {
+            '/' | '\\' | ':' | '\0' => '-',
+            other => other,
+        })
         .collect::<String>();
-    if cleaned.is_empty() { "FileFlow".into() } else { cleaned }
+    if cleaned.is_empty() {
+        "FileFlow".into()
+    } else {
+        cleaned
+    }
 }
 
 async fn capture_process(
@@ -1352,7 +1767,11 @@ async fn capture_process(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let program = engine.file_name().and_then(|value| value.to_str()).unwrap_or("engine").to_owned();
+    let program = engine
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("engine")
+        .to_owned();
     let future = command.output();
     tokio::pin!(future);
     let output = tokio::select! {
@@ -1375,7 +1794,9 @@ async fn run_process_with_env(
     env: &[(&str, String)],
     cancellation: &CancellationToken,
 ) -> Result<(), ExecutionError> {
-    if cancellation.is_cancelled() { return Err(ExecutionError::Cancelled); }
+    if cancellation.is_cancelled() {
+        return Err(ExecutionError::Cancelled);
+    }
     let mut command = Command::new(engine);
     command
         .args(args)
@@ -1384,37 +1805,77 @@ async fn run_process_with_env(
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let program = engine.file_name().and_then(|value| value.to_str()).unwrap_or("engine").to_owned();
+    let program = engine
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("engine")
+        .to_owned();
     let future = command.output();
     tokio::pin!(future);
     let output = tokio::select! {
         result = &mut future => result?,
         _ = cancellation.cancelled() => return Err(ExecutionError::Cancelled),
     };
-    if output.status.success() { return Ok(()); }
+    if output.status.success() {
+        return Ok(());
+    }
     let stderr = String::from_utf8_lossy(&output.stderr);
-    Err(ExecutionError::ProcessFailed { program, message: tail_message(&stderr, output.status) })
+    Err(ExecutionError::ProcessFailed {
+        program,
+        message: tail_message(&stderr, output.status),
+    })
 }
 
-async fn run_process(engine: &Path, args: &[OsString], cancellation: &CancellationToken) -> Result<(), ExecutionError> {
-    if cancellation.is_cancelled() { return Err(ExecutionError::Cancelled); }
+async fn run_process(
+    engine: &Path,
+    args: &[OsString],
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    if cancellation.is_cancelled() {
+        return Err(ExecutionError::Cancelled);
+    }
     let mut command = Command::new(engine);
-    command.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
-    let program = engine.file_name().and_then(|value| value.to_str()).unwrap_or("engine").to_owned();
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let program = engine
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("engine")
+        .to_owned();
     let future = command.output();
     tokio::pin!(future);
     let output = tokio::select! {
         result = &mut future => result?,
         _ = cancellation.cancelled() => return Err(ExecutionError::Cancelled),
     };
-    if output.status.success() { return Ok(()); }
+    if output.status.success() {
+        return Ok(());
+    }
     let stderr = String::from_utf8_lossy(&output.stderr);
-    Err(ExecutionError::ProcessFailed { program, message: tail_message(&stderr, output.status) })
+    Err(ExecutionError::ProcessFailed {
+        program,
+        message: tail_message(&stderr, output.status),
+    })
 }
 
 fn tail_message(stderr: &str, status: std::process::ExitStatus) -> String {
-    let message = stderr.chars().rev().take(4000).collect::<String>().chars().rev().collect::<String>();
-    if message.trim().is_empty() { format!("exit status {status}") } else { message }
+    let message = stderr
+        .chars()
+        .rev()
+        .take(4000)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+    if message.trim().is_empty() {
+        format!("exit status {status}")
+    } else {
+        message
+    }
 }
 
 fn profile_for(engine: &str) -> ResourceProfile {
@@ -1430,17 +1891,27 @@ fn profile_for(engine: &str) -> ResourceProfile {
 }
 
 fn is_audio_extension(extension: Option<&str>) -> bool {
-    extension.is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "mp3"|"wav"|"aac"|"m4a"|"flac"|"ogg"|"opus"|"wma"|"aiff"|"aif"))
+    extension.is_some_and(|extension| {
+        matches!(
+            extension.to_ascii_lowercase().as_str(),
+            "mp3" | "wav" | "aac" | "m4a" | "flac" | "ogg" | "opus" | "wma" | "aiff" | "aif"
+        )
+    })
 }
 
-fn normalize_target_format(action_id: &str, format: Option<&str>) -> Result<Option<String>, ExecutionError> {
-    let Some(format) = format else { return Ok(None); };
+fn normalize_target_format(
+    action_id: &str,
+    format: Option<&str>,
+) -> Result<Option<String>, ExecutionError> {
+    let Some(format) = format else {
+        return Ok(None);
+    };
     let normalized = format.trim().trim_start_matches('.').to_ascii_lowercase();
     let allowed: &[&str] = match action_id {
-        "image-convert" | "image-batch-convert" | "image-optimize" | "image-resize" =>
-            &["jpg", "jpeg", "png", "webp", "avif", "heic", "heif", "tif", "tiff", "bmp", "gif"],
-        "audio-convert" | "extract-audio" =>
-            &["mp3", "m4a", "aac", "wav", "flac", "ogg", "opus"],
+        "image-convert" | "image-batch-convert" | "image-optimize" | "image-resize" => &[
+            "jpg", "jpeg", "png", "webp", "avif", "heic", "heif", "tif", "tiff", "bmp", "gif",
+        ],
+        "audio-convert" | "extract-audio" => &["mp3", "m4a", "aac", "wav", "flac", "ogg", "opus"],
         "archive-create" => &["zip", "7z", "tar"],
         _ => &[],
     };
@@ -1457,7 +1928,11 @@ fn normalize_target_format(action_id: &str, format: Option<&str>) -> Result<Opti
 }
 
 fn normalize_quality(quality: Option<&str>) -> Option<String> {
-    match quality.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+    match quality
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
         Some("small") => Some("small".into()),
         Some("high") => Some("high".into()),
         Some("balanced") | Some("standard") => Some("balanced".into()),
@@ -1466,20 +1941,50 @@ fn normalize_quality(quality: Option<&str>) -> Option<String> {
 }
 
 pub const EXECUTABLE_ACTIONS: &[&str] = &[
-    "images-to-pdf", "image-convert", "image-batch-convert", "image-optimize", "image-resize", "strip-metadata", "extract-metadata",
-    "office-to-pdf", "pdf-merge", "pdf-split", "pdf-compress", "pdf-to-images", "pdf-extract-text", "pdf-ocr", "ocr-image",
-    "archive-extract", "archive-create", "media-compatible", "media-compress", "audio-convert",
-    "extract-audio", "video-to-gif",
+    "images-to-pdf",
+    "image-convert",
+    "image-batch-convert",
+    "image-optimize",
+    "image-resize",
+    "strip-metadata",
+    "extract-metadata",
+    "office-to-pdf",
+    "pdf-merge",
+    "pdf-split",
+    "pdf-compress",
+    "pdf-to-images",
+    "pdf-extract-text",
+    "pdf-ocr",
+    "ocr-image",
+    "archive-extract",
+    "archive-create",
+    "media-compatible",
+    "media-compress",
+    "audio-convert",
+    "extract-audio",
+    "video-to-gif",
 ];
 
-pub fn executable_action_ids() -> Vec<&'static str> { EXECUTABLE_ACTIONS.to_vec() }
+pub fn executable_action_ids() -> Vec<&'static str> {
+    EXECUTABLE_ACTIONS.to_vec()
+}
 
-pub fn is_supported(action_id: &str) -> bool { EXECUTABLE_ACTIONS.contains(&action_id) }
+pub fn is_supported(action_id: &str) -> bool {
+    EXECUTABLE_ACTIONS.contains(&action_id)
+}
 
-fn is_collective(action_id: &str) -> bool { matches!(action_id, "images-to-pdf"|"pdf-merge"|"archive-create") }
+fn is_collective(action_id: &str) -> bool {
+    matches!(action_id, "images-to-pdf" | "pdf-merge" | "archive-create")
+}
 
-async fn send(events: &mpsc::Sender<ExecutionEvent>, event: ExecutionEvent) -> Result<(), ExecutionError> {
-    events.send(event).await.map_err(|_| ExecutionError::EventConsumerDisconnected)
+async fn send(
+    events: &mpsc::Sender<ExecutionEvent>,
+    event: ExecutionEvent,
+) -> Result<(), ExecutionError> {
+    events
+        .send(event)
+        .await
+        .map_err(|_| ExecutionError::EventConsumerDisconnected)
 }
 
 #[cfg(test)]
@@ -1498,14 +2003,25 @@ mod tests {
     #[test]
     fn rejects_suspicious_archive_listing() {
         let listing = "Physical Size = 1000000\n----------\nPath = safe.txt\nSize = 120\nPath = ../escape.txt\nSize = 10\n";
-        assert!(matches!(validate_archive_listing(listing), Err(ExecutionError::UnsafeArchive(_))));
+        assert!(matches!(
+            validate_archive_listing(listing),
+            Err(ExecutionError::UnsafeArchive(_))
+        ));
     }
 
     #[test]
     fn normalizes_only_supported_target_formats() {
-        assert_eq!(normalize_target_format("image-convert", Some(".WEBP")).unwrap().as_deref(), Some("webp"));
+        assert_eq!(
+            normalize_target_format("image-convert", Some(".WEBP"))
+                .unwrap()
+                .as_deref(),
+            Some("webp")
+        );
         assert!(normalize_target_format("image-convert", Some("../../pdf")).is_err());
-        assert_eq!(normalize_target_format("pdf-compress", Some("png")).unwrap(), None);
+        assert_eq!(
+            normalize_target_format("pdf-compress", Some("png")).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -1513,7 +2029,11 @@ mod tests {
         assert!(is_supported("pdf-merge"));
         assert!(is_supported("video-to-gif"));
         assert!(!is_supported("duplicate-scan"));
-        assert!(executable_action_ids().iter().all(|action| is_supported(action)));
+        assert!(
+            executable_action_ids()
+                .iter()
+                .all(|action| is_supported(action))
+        );
     }
     #[test]
     fn parses_archive_manifest_by_file_family() {
@@ -1522,19 +2042,34 @@ mod tests {
         assert_eq!(manifest.files, 2);
         assert_eq!(manifest.directories, 1);
         assert_eq!(manifest.total_unpacked_bytes, 1020);
-        assert!(manifest.families.iter().any(|entry| entry.family == FormatFamily::Image && entry.count == 1));
-        assert!(manifest.families.iter().any(|entry| entry.family == FormatFamily::Pdf && entry.count == 1));
+        assert!(
+            manifest
+                .families
+                .iter()
+                .any(|entry| entry.family == FormatFamily::Image && entry.count == 1)
+        );
+        assert!(
+            manifest
+                .families
+                .iter()
+                .any(|entry| entry.family == FormatFamily::Pdf && entry.count == 1)
+        );
     }
 
     #[test]
     fn image_pdf_list_is_nul_separated() {
         let inputs = vec![
-            ExecutionInput { path: PathBuf::from("a.jpg"), source_root: None },
-            ExecutionInput { path: PathBuf::from("b image.png"), source_root: None },
+            ExecutionInput {
+                path: PathBuf::from("a.jpg"),
+                source_root: None,
+            },
+            ExecutionInput {
+                path: PathBuf::from("b image.png"),
+                source_root: None,
+            },
         ];
         let bytes = nul_separated_paths(&inputs);
         assert!(bytes.ends_with(&[0]));
         assert_eq!(bytes.iter().filter(|byte| **byte == 0).count(), 2);
     }
-
 }

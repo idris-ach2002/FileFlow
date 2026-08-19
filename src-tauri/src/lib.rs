@@ -8,15 +8,12 @@ use fileflow_scheduler::ResourceScheduler;
 use fileflow_storage::Storage;
 use std::{
     path::PathBuf,
-    sync::{
-        atomic::AtomicU64,
-        Arc,
-    },
+    sync::{Arc, atomic::AtomicU64},
 };
 use tauri::{
+    Emitter, Manager,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -37,7 +34,6 @@ pub(crate) struct AppState {
     pub(crate) _tray: TrayIcon,
 }
 
-
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -48,9 +44,21 @@ fn show_main_window(app: &tauri::AppHandle) {
 
 fn build_tray(app: &tauri::App) -> tauri::Result<TrayIcon> {
     let open = MenuItem::with_id(app, "tray-open", "Ouvrir FileFlow", true, None::<&str>)?;
-    let convert = MenuItem::with_id(app, "tray-convert", "Nouvelle conversion", true, None::<&str>)?;
+    let convert = MenuItem::with_id(
+        app,
+        "tray-convert",
+        "Nouvelle conversion",
+        true,
+        None::<&str>,
+    )?;
     let history = MenuItem::with_id(app, "tray-history", "Historique", true, None::<&str>)?;
-    let automations = MenuItem::with_id(app, "tray-automations", "Automatisations", true, None::<&str>)?;
+    let automations = MenuItem::with_id(
+        app,
+        "tray-automations",
+        "Automatisations",
+        true,
+        None::<&str>,
+    )?;
     let settings = MenuItem::with_id(app, "tray-settings", "Paramètres", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "tray-quit", "Quitter FileFlow", true, None::<&str>)?;
     let menu = Menu::with_items(
@@ -103,19 +111,32 @@ fn build_tray(app: &tauri::App) -> tauri::Result<TrayIcon> {
 
 fn build_core() -> Arc<FileFlowCore> {
     let core = Arc::new(FileFlowCore::default());
-    core.engines.register(Arc::new(fileflow_adapter_ffmpeg::Adapter));
-    core.engines.register(Arc::new(fileflow_adapter_vips::Adapter));
-    core.engines.register(Arc::new(fileflow_adapter_qpdf::Adapter));
-    core.engines.register(Arc::new(fileflow_adapter_office::Adapter));
-    core.engines.register(Arc::new(fileflow_adapter_ocr::Adapter));
-    core.engines.register(Arc::new(fileflow_adapter_archive::Adapter));
-    core.engines.register(Arc::new(fileflow_adapter_metadata::Adapter));
-    core.engines.register(Arc::new(fileflow_adapter_imagemagick::Adapter));
-    core.engines.register(Arc::new(fileflow_adapter_img2pdf::Adapter));
-    core.engines.register(Arc::new(fileflow_adapter_poppler::Adapter));
-    core.engines.register(Arc::new(fileflow_adapter_ghostscript::Adapter));
-    core.engines.register(Arc::new(fileflow_adapter_tesseract::Adapter));
-    core.engines.register(Arc::new(fileflow_adapter_pandoc::Adapter));
+    core.engines
+        .register(Arc::new(fileflow_adapter_ffmpeg::Adapter));
+    core.engines
+        .register(Arc::new(fileflow_adapter_vips::Adapter));
+    core.engines
+        .register(Arc::new(fileflow_adapter_qpdf::Adapter));
+    core.engines
+        .register(Arc::new(fileflow_adapter_office::Adapter));
+    core.engines
+        .register(Arc::new(fileflow_adapter_ocr::Adapter));
+    core.engines
+        .register(Arc::new(fileflow_adapter_archive::Adapter));
+    core.engines
+        .register(Arc::new(fileflow_adapter_metadata::Adapter));
+    core.engines
+        .register(Arc::new(fileflow_adapter_imagemagick::Adapter));
+    core.engines
+        .register(Arc::new(fileflow_adapter_img2pdf::Adapter));
+    core.engines
+        .register(Arc::new(fileflow_adapter_poppler::Adapter));
+    core.engines
+        .register(Arc::new(fileflow_adapter_ghostscript::Adapter));
+    core.engines
+        .register(Arc::new(fileflow_adapter_tesseract::Adapter));
+    core.engines
+        .register(Arc::new(fileflow_adapter_pandoc::Adapter));
     core
 }
 

@@ -86,8 +86,14 @@ fn confirm_duplicates_inner(inputs: Vec<DuplicateInput>, threads: usize) -> Dupl
     let mut by_quick = HashMap::<(u64, DigestBytes), Vec<DuplicateInput>>::new();
     for (input, result) in quick_results {
         match result {
-            Ok(hash) => by_quick.entry((input.size_bytes, hash)).or_default().push(input),
-            Err(error) => warnings.push(AnalysisWarning { path: input.path, message: error.to_string() }),
+            Ok(hash) => by_quick
+                .entry((input.size_bytes, hash))
+                .or_default()
+                .push(input),
+            Err(error) => warnings.push(AnalysisWarning {
+                path: input.path,
+                message: error.to_string(),
+            }),
         }
     }
     let quick_candidates = by_quick
@@ -102,8 +108,14 @@ fn confirm_duplicates_inner(inputs: Vec<DuplicateInput>, threads: usize) -> Dupl
     let mut by_full = HashMap::<(u64, DigestBytes), Vec<DuplicateInput>>::new();
     for (input, result) in full_results {
         match result {
-            Ok(hash) => by_full.entry((input.size_bytes, hash)).or_default().push(input),
-            Err(error) => warnings.push(AnalysisWarning { path: input.path, message: error.to_string() }),
+            Ok(hash) => by_full
+                .entry((input.size_bytes, hash))
+                .or_default()
+                .push(input),
+            Err(error) => warnings.push(AnalysisWarning {
+                path: input.path,
+                message: error.to_string(),
+            }),
         }
     }
 
@@ -125,10 +137,10 @@ fn confirm_duplicates_inner(inputs: Vec<DuplicateInput>, threads: usize) -> Dupl
             })
         })
         .collect::<Vec<_>>();
-    confirmed_groups.sort_by(|left, right| right.reclaimable_bytes.cmp(&left.reclaimable_bytes));
-    let reclaimable_bytes = confirmed_groups
-        .iter()
-        .fold(0_u64, |sum, group| sum.saturating_add(group.reclaimable_bytes));
+    confirmed_groups.sort_by_key(|group| std::cmp::Reverse(group.reclaimable_bytes));
+    let reclaimable_bytes = confirmed_groups.iter().fold(0_u64, |sum, group| {
+        sum.saturating_add(group.reclaimable_bytes)
+    });
 
     DuplicateReport {
         input_files,
@@ -199,7 +211,9 @@ fn full_hash(path: &Path) -> std::io::Result<DigestBytes> {
     let mut buffer = vec![0_u8; FULL_HASH_BUFFER_BYTES];
     loop {
         let read = file.read(&mut buffer)?;
-        if read == 0 { break; }
+        if read == 0 {
+            break;
+        }
         hasher.update(&buffer[..read]);
     }
     Ok(hasher.finalize().into())
@@ -228,9 +242,10 @@ mod tests {
         std::fs::write(&a, b"identical-content").unwrap();
         std::fs::write(&b, b"identical-content").unwrap();
         std::fs::write(&c, b"different-content").unwrap();
-        let report = confirm_duplicates(vec![
-            input_with_size(a), input_with_size(b), input_with_size(c),
-        ], 2);
+        let report = confirm_duplicates(
+            vec![input_with_size(a), input_with_size(b), input_with_size(c)],
+            2,
+        );
         assert_eq!(report.confirmed_groups.len(), 1);
         assert_eq!(report.confirmed_groups[0].assets.len(), 2);
         assert_eq!(report.confirmed_groups[0].hash.len(), 64);
@@ -246,10 +261,21 @@ mod tests {
 
     fn input_with_size(path: PathBuf) -> DuplicateInput {
         let size_bytes = std::fs::metadata(&path).unwrap().len();
-        DuplicateInput { asset_id: AssetId::new(), path, size_bytes }
+        DuplicateInput {
+            asset_id: AssetId::new(),
+            path,
+            size_bytes,
+        }
     }
 
     fn uuid_for_test() -> String {
-        format!("{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
+        format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )
     }
 }
