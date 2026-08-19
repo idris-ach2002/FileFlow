@@ -332,7 +332,7 @@ fn default_actions() -> Vec<ActionDescriptor> {
     use OperationCategory::*;
 
     vec![
-        action("images-to-pdf", "Images vers PDF", "Assembler plusieurs images dans un seul PDF.", Pdf, &[Image], &["vips", "qpdf"], Some("pdf"), true, false, true),
+        action("images-to-pdf", "Images vers PDF", "Assembler plusieurs images dans un seul PDF.", Pdf, &[Image], &["img2pdf"], Some("pdf"), true, false, true),
         action("office-to-pdf", "Document vers PDF", "Créer un PDF à partir de Word, Excel, PowerPoint ou OpenDocument.", Pdf, &[Document, Spreadsheet, Presentation], &["office"], Some("pdf"), true, false, true),
         action("text-to-pdf", "Texte vers PDF", "Transformer texte, Markdown ou HTML en PDF.", Pdf, &[Text], &["pandoc"], Some("pdf"), true, false, false),
         action("pdf-merge", "Fusionner des PDF", "Réunir plusieurs PDF dans l’ordre choisi.", Pdf, &[Pdf], &["qpdf"], Some("pdf"), true, false, true),

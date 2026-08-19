@@ -85,21 +85,30 @@ impl OutputResolver {
             .desired_extension
             .as_deref()
             .or_else(|| request.source.extension().and_then(|value| value.to_str()));
-        let candidate = destination_directory.join(file_name(&stem, extension));
+        let mut candidate = destination_directory.join(file_name(&stem, extension));
+        if !request.policy.overwrite_original && same_path(&candidate, &request.source) {
+            let safe_suffix = request.operation_suffix.as_deref().unwrap_or("fileflow");
+            candidate = destination_directory.join(file_name(
+                &format!("{stem}_{}", sanitize_component(safe_suffix)),
+                extension,
+            ));
+        }
         let (final_path, replaces_existing, skipped) = resolve_conflict(&candidate, request.policy.conflict)?;
 
         if !request.policy.overwrite_original && same_path(&final_path, &request.source) {
             return Err(OutputError::SourceOverwrite(final_path));
         }
 
-        let temporary_path = destination_directory.join(format!(
-            ".{}.fileflow-{}.tmp",
-            final_path
-                .file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or("result"),
-            Uuid::new_v4().simple()
-        ));
+        let final_stem = final_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("result");
+        let token = Uuid::new_v4().simple();
+        let temporary_name = match final_path.extension().and_then(|value| value.to_str()) {
+            Some(extension) => format!(".{final_stem}.fileflow-{token}.tmp.{extension}"),
+            None => format!(".{final_stem}.fileflow-{token}.tmp"),
+        };
+        let temporary_path = destination_directory.join(temporary_name);
 
         Ok(OutputPlan {
             destination_directory,
@@ -241,4 +250,45 @@ mod tests {
         let plan = resolver.plan(&request).unwrap();
         assert_eq!(plan.final_path, PathBuf::from("/output/trip/day1/photo.jpg"));
     }
+    #[test]
+    fn temporary_file_keeps_final_extension_for_format_aware_engines() {
+        let directory = std::env::temp_dir().join(format!("fileflow-output-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let source = directory.join("photo.heic");
+        std::fs::write(&source, b"fixture").unwrap();
+        let resolver = OutputResolver;
+        let plan = resolver.plan(&OutputRequest {
+            source,
+            source_root: None,
+            desired_extension: Some("webp".into()),
+            operation_suffix: Some("converti".into()),
+            policy: OutputPolicy::default(),
+        }).unwrap();
+        assert_eq!(plan.temporary_path.extension().and_then(|value| value.to_str()), Some("webp"));
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn same_folder_same_extension_falls_back_to_operation_suffix() {
+        let directory = std::env::temp_dir().join(format!("fileflow-output-same-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let source = directory.join("photo.jpg");
+        std::fs::write(&source, b"fixture").unwrap();
+        let resolver = OutputResolver;
+        let plan = resolver.plan(&OutputRequest {
+            source: source.clone(),
+            source_root: None,
+            desired_extension: Some("jpg".into()),
+            operation_suffix: Some("optimise".into()),
+            policy: OutputPolicy {
+                destination: DestinationPolicy::SameFolder,
+                naming: NamingStrategy::Original,
+                ..OutputPolicy::default()
+            },
+        }).unwrap();
+        assert_eq!(plan.final_path, directory.join("photo_optimise.jpg"));
+        assert_ne!(plan.final_path, source);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
 }

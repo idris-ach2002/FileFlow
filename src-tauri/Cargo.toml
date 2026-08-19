@@ -16,6 +16,7 @@ fileflow-adapter-archive = { path = "../crates/adapters/fileflow-adapter-archive
 fileflow-adapter-ffmpeg = { path = "../crates/adapters/fileflow-adapter-ffmpeg" }
 fileflow-adapter-metadata = { path = "../crates/adapters/fileflow-adapter-metadata" }
 fileflow-adapter-imagemagick = { path = "../crates/adapters/fileflow-adapter-imagemagick" }
+fileflow-adapter-img2pdf = { path = "../crates/adapters/fileflow-adapter-img2pdf" }
 fileflow-adapter-poppler = { path = "../crates/adapters/fileflow-adapter-poppler" }
 fileflow-adapter-ghostscript = { path = "../crates/adapters/fileflow-adapter-ghostscript" }
 fileflow-adapter-tesseract = { path = "../crates/adapters/fileflow-adapter-tesseract" }
@@ -25,12 +26,15 @@ fileflow-adapter-office = { path = "../crates/adapters/fileflow-adapter-office" 
 fileflow-adapter-qpdf = { path = "../crates/adapters/fileflow-adapter-qpdf" }
 fileflow-adapter-vips = { path = "../crates/adapters/fileflow-adapter-vips" }
 fileflow-core = { path = "../crates/fileflow-core" }
+fileflow-analysis = { path = "../crates/fileflow-analysis" }
 fileflow-domain = { path = "../crates/fileflow-domain" }
 fileflow-intake = { path = "../crates/fileflow-intake" }
 fileflow-workspace = { path = "../crates/fileflow-workspace" }
 fileflow-engine = { path = "../crates/fileflow-engine" }
 fileflow-planner = { path = "../crates/fileflow-planner" }
 fileflow-scheduler = { path = "../crates/fileflow-scheduler" }
+fileflow-storage = { path = "../crates/fileflow-storage" }
+fileflow-executor = { path = "../crates/fileflow-executor" }
 serde.workspace = true
 tauri = { version = "2.11.5", features = ["tray-icon"] }
 tauri-plugin-dialog = "2.7.2"
@@ -39,3 +43,7 @@ tauri-plugin-opener = "2.5.4"
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+dashmap.workspace = true
+tokio-util.workspace = true
+uuid.workspace = true
+chrono.workspace = true

@@ -1026,6 +1026,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fileflow-adapter-img2pdf"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "fileflow-domain",
+ "fileflow-engine",
+]
+
+[[package]]
 name = "fileflow-adapter-imagemagick"
 version = "0.1.0"
 dependencies = [
@@ -1107,6 +1116,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fileflow-analysis"
+version = "0.1.0"
+dependencies = [
+ "fileflow-domain",
+ "serde",
+ "sha2",
+]
+
+[[package]]
 name = "fileflow-core"
 version = "0.1.0"
 dependencies = [
@@ -1130,6 +1148,7 @@ dependencies = [
  "fileflow-adapter-ffmpeg",
  "fileflow-adapter-ghostscript",
  "fileflow-adapter-imagemagick",
+ "fileflow-adapter-img2pdf",
  "fileflow-adapter-metadata",
  "fileflow-adapter-ocr",
  "fileflow-adapter-office",
@@ -1138,6 +1157,7 @@ dependencies = [
  "fileflow-adapter-qpdf",
  "fileflow-adapter-tesseract",
  "fileflow-adapter-vips",
+ "fileflow-analysis",
  "fileflow-core",
  "fileflow-domain",
  "fileflow-engine",
@@ -1154,6 +1174,12 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "chrono",
+ "dashmap",
+ "fileflow-executor",
+ "fileflow-storage",
+ "tokio-util",
+ "uuid",
 ]
 
 [[package]]
@@ -1179,7 +1205,16 @@ dependencies = [
 name = "fileflow-executor"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "fileflow-domain",
+ "fileflow-output",
+ "fileflow-scheduler",
+ "serde",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

@@ -6,3 +6,12 @@ publish.workspace = true
 
 [dependencies]
 fileflow-domain = { path = "../fileflow-domain" }
+fileflow-output = { path = "../fileflow-output" }
+fileflow-scheduler = { path = "../fileflow-scheduler" }
+chrono.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+uuid.workspace = true

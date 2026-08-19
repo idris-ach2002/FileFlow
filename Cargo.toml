@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "src-tauri",
     "crates/fileflow-domain",
+    "crates/fileflow-analysis",
     "crates/fileflow-engine",
     "crates/fileflow-core",
     "crates/fileflow-intake",
@@ -21,6 +22,7 @@ members = [
     "crates/adapters/fileflow-adapter-archive",
     "crates/adapters/fileflow-adapter-metadata",
     "crates/adapters/fileflow-adapter-imagemagick",
+    "crates/adapters/fileflow-adapter-img2pdf",
     "crates/adapters/fileflow-adapter-poppler",
     "crates/adapters/fileflow-adapter-ghostscript",
     "crates/adapters/fileflow-adapter-tesseract",
@@ -34,15 +36,14 @@ publish = false
 
 [workspace.dependencies]
 async-trait = "0.1"
-blake3 = "1"
 chrono = { version = "0.4", features = ["serde"] }
 dashmap = "6"
 infer = "0.19"
 parking_lot = "0.12"
-rayon = "1.12.0"
 rusqlite = { version = "0.40.1", features = ["bundled", "chrono", "uuid"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10.9"
 sysinfo = "0.39.6"
 thiserror = "2"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "process", "fs", "io-util", "sync", "time", "signal"] }

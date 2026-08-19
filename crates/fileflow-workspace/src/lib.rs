@@ -313,6 +313,31 @@ impl WorkspaceManager {
         })
     }
 
+    pub fn select_assets(
+        &self,
+        id: WorkspaceId,
+        selected_ids: &[AssetId],
+        families: &[FormatFamily],
+    ) -> Result<Vec<Asset>, WorkspaceError> {
+        let workspaces = self.workspaces.read();
+        let workspace = workspaces.get(&id).ok_or(WorkspaceError::NotFound(id))?;
+        let selected = selected_ids.iter().copied().collect::<std::collections::HashSet<_>>();
+        let use_explicit_selection = !selected.is_empty();
+        Ok(workspace
+            .assets
+            .iter()
+            .filter(|asset| {
+                if use_explicit_selection {
+                    !matches!(asset, Asset::Symlink(_)) && selected.contains(&asset.id())
+                } else {
+                    matches!(asset, Asset::File(_) | Asset::Archive(_))
+                        && (families.is_empty() || families.contains(&asset.family()))
+                }
+            })
+            .cloned()
+            .collect())
+    }
+
     pub fn insights(&self, id: WorkspaceId) -> Result<WorkspaceInsights, WorkspaceError> {
         let workspaces = self.workspaces.read();
         let workspace = workspaces.get(&id).ok_or(WorkspaceError::NotFound(id))?;
