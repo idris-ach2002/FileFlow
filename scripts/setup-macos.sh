@@ -49,6 +49,7 @@ for formula in \
   vips \
   imagemagick \
   qpdf \
+  img2pdf \
   poppler \
   ghostscript \
   tesseract \

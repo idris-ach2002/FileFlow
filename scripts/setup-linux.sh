@@ -38,6 +38,7 @@ for package in \
   libvips-tools \
   imagemagick \
   qpdf \
+  img2pdf \
   poppler-utils \
   ghostscript \
   tesseract-ocr \

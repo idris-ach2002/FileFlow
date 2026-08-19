@@ -1,21 +1,45 @@
-import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
+import { AutomationStore } from './automation.store';
+
+interface RecipeTemplate { id:string; icon:string; name:string; description:string; trigger:string; steps:string[]; actionIds:string[]; }
 
 @Component({
   selector: 'ff-automations-page',
   template: `
-    <section class="placeholder">
-      <p>FILEFLOW</p>
-      <h1>Automatisations</h1>
-      <span>Recettes et dossiers surveillés seront configurés ici sans exposer les détails techniques.</span>
-    </section>
+    <div class="automation-shell">
+      <header><p class="ff-kicker">AUTOMATISATIONS</p><h1>Faites-le une fois. Réutilisez-le toujours.</h1><p>Les recettes décrivent des chaînes d’actions réutilisables. Les dossiers surveillés seront activés seulement lorsque vous les configurez explicitement.</p></header>
+      <section class="automation-hero ff-card"><div><span class="hero-icon">⚡</span><div><strong>Nouvelle recette</strong><p>Conversion → optimisation → confidentialité → renommage → destination.</p></div></div><button class="ff-button" type="button" (click)="builderOpen.set(true)">Créer une recette</button></section>
+      <div class="section-title"><div><p class="ff-kicker">MODÈLES</p><h2>Point de départ</h2></div><span>Rien ne s’exécute automatiquement sans votre validation.</span></div>
+      <section class="recipe-grid">
+        @for(recipe of recipes; track recipe.id){<article class="recipe-card ff-card"><div class="recipe-top"><span class="recipe-icon">{{recipe.icon}}</span><span class="ff-badge">{{recipe.trigger}}</span></div><h3>{{recipe.name}}</h3><p>{{recipe.description}}</p><ol>@for(step of recipe.steps;track step){<li><span></span>{{step}}</li>}</ol><button class="ff-button secondary" type="button" (click)="selectRecipe(recipe)">Configurer ce modèle</button></article>}
+      </section>
+      @if (store.recipes().length) { <div class="section-title"><div><p class="ff-kicker">MES RECETTES</p><h2>Enregistrées localement</h2></div><span>{{ store.recipes().length }} recette(s) dans SQLite</span></div><section class="saved-recipes ff-card">@for(recipe of store.recipes();track recipe.id){<article><span>{{recipe.icon}}</span><div><strong>{{recipe.name}}</strong><small>{{recipe.description}}</small></div><em>{{recipe.enabled ? 'Active' : 'Désactivée'}}</em></article>}</section> }
+      <section class="watch-card ff-card"><div class="watch-visual"><span>📁</span><i>→</i><span>⚙</span><i>→</i><span>✓</span></div><div><p class="ff-kicker">DOSSIERS SURVEILLÉS</p><h2>Une entrée, une règle, une destination.</h2><p>Exemple : tout nouveau scan dans <b>Scanner/</b> → OCR → PDF recherchable → <b>Documents/Scans/</b>. Cette capacité restera désactivée par défaut pour éviter toute surprise.</p></div><button class="ff-button secondary" type="button" disabled>Disponible après activation du moteur de jobs</button></section>
+      @if(builderOpen()){<div class="builder-backdrop" (click)="builderOpen.set(false)"><section class="builder ff-card" (click)="$event.stopPropagation()"><button class="close" (click)="builderOpen.set(false)">×</button><p class="ff-kicker">RECETTE</p><h2>{{selectedRecipe()?.name ?? 'Nouvelle recette'}}</h2><p class="builder-lead">Enregistrez cette chaîne localement. Elle pourra ensuite être appliquée à un workspace sans reconstruire chaque réglage.</p><div class="builder-steps">@for(step of selectedRecipe()?.steps ?? ['Choisir les fichiers compatibles','Ajouter une action','Définir la destination'];track step){<div><span>{{ $index + 1 }}</span><strong>{{step}}</strong></div>}</div><div class="builder-actions"><button class="ff-button secondary" (click)="builderOpen.set(false)">Fermer</button><button class="ff-button" [disabled]="!selectedRecipe()" (click)="saveSelectedRecipe()">Enregistrer la recette</button></div>@if(saveNotice()){<p class="save-notice">{{saveNotice()}}</p>}</section></div>}
+    </div>
   `,
-  styles: [`
-    :host { display: block; }
-    .placeholder { max-width: 760px; padding-top: 40px; }
-    p { color: var(--accent); font-weight: 800; font-size: 12px; letter-spacing: .14em; }
-    h1 { margin: 8px 0 14px; font-size: 44px; letter-spacing: -.04em; }
-    span { color: var(--text-muted); line-height: 1.7; }
+  styles:[`
+    :host{display:block}.automation-shell{max-width:1180px;margin:0 auto}header{max-width:820px}header h1{margin:0;font-size:48px;line-height:1.02;letter-spacing:-.05em}header>p:last-child{max-width:720px;margin:12px 0 0;color:var(--text-muted);font-size:13px;line-height:1.65}.automation-hero{min-height:90px;margin-top:28px;display:flex;align-items:center;justify-content:space-between;gap:18px;padding:15px 17px}.automation-hero>div{display:flex;align-items:center;gap:12px}.hero-icon{width:46px;height:46px;display:grid;place-items:center;border-radius:14px;background:var(--accent-soft);color:var(--accent);font-size:20px}.automation-hero strong,.automation-hero p{display:block}.automation-hero strong{font-size:12px}.automation-hero p{margin:4px 0 0;color:var(--text-muted);font-size:10px}.section-title{margin:34px 0 12px;display:flex;justify-content:space-between;align-items:end}.section-title h2{margin:0;font-size:22px;letter-spacing:-.03em}.section-title>span{color:var(--text-faint);font-size:11px}.recipe-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.recipe-card{min-height:300px;padding:16px;display:flex;flex-direction:column}.recipe-top{display:flex;justify-content:space-between;align-items:center}.recipe-icon{width:40px;height:40px;display:grid;place-items:center;border-radius:11px;background:var(--surface-2);font-size:18px}.recipe-card h3{margin:20px 0 6px;font-size:15px;letter-spacing:-.025em}.recipe-card p{margin:0;color:var(--text-muted);font-size:10px;line-height:1.5}.recipe-card ol{display:grid;gap:7px;margin:15px 0;padding:0;list-style:none}.recipe-card li{display:flex;align-items:center;gap:7px;color:var(--text-muted);font-size:11px}.recipe-card li span{width:5px;height:5px;border-radius:50%;background:var(--accent)}.recipe-card .ff-button{margin-top:auto;min-height:34px;font-size:11px}.saved-recipes{display:grid;grid-template-columns:repeat(2,1fr);gap:0;padding:4px 14px}.saved-recipes article{display:grid;grid-template-columns:34px minmax(0,1fr) auto;align-items:center;gap:9px;padding:10px 2px;border-bottom:1px solid var(--border)}.saved-recipes article:nth-last-child(-n+2){border-bottom:0}.saved-recipes article>span{width:30px;height:30px;display:grid;place-items:center;border-radius:8px;background:var(--accent-soft)}.saved-recipes strong,.saved-recipes small{display:block}.saved-recipes strong{font-size:11px}.saved-recipes small{margin-top:2px;color:var(--text-muted);font-size:10px}.saved-recipes em{color:var(--success);font-size:10px;font-style:normal}.builder-actions{display:flex;gap:8px}.builder-actions .ff-button{flex:1}.save-notice{margin:10px 0 0;color:var(--success);font-size:11px}.watch-card{margin-top:26px;display:grid;grid-template-columns:230px minmax(0,1fr) auto;align-items:center;gap:24px;padding:22px}.watch-visual{height:110px;display:flex;align-items:center;justify-content:center;gap:10px;border-radius:14px;background:var(--bg-elevated)}.watch-visual span{width:42px;height:42px;display:grid;place-items:center;border:1px solid var(--border);border-radius:11px;background:var(--surface-1)}.watch-visual i{color:var(--text-faint);font-style:normal}.watch-card h2{margin:0;font-size:20px}.watch-card div>p:last-child{margin:7px 0 0;color:var(--text-muted);font-size:10px;line-height:1.55}.watch-card .ff-button{max-width:210px;font-size:11px}.builder-backdrop{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:20px;background:rgb(8 12 22 / 45%);backdrop-filter:blur(8px)}.builder{position:relative;width:min(560px,100%);padding:24px}.builder h2{margin:0;font-size:28px;letter-spacing:-.04em}.builder-lead{color:var(--text-muted);font-size:10px;line-height:1.55}.close{position:absolute;right:12px;top:12px;width:30px;height:30px;border:0;border-radius:8px;background:var(--surface-2);color:var(--text)}.builder-steps{display:grid;gap:7px;margin:18px 0}.builder-steps div{display:flex;align-items:center;gap:9px;padding:9px;border:1px solid var(--border);border-radius:9px}.builder-steps span{width:24px;height:24px;display:grid;place-items:center;border-radius:7px;background:var(--accent-soft);color:var(--accent);font-size:11px;font-weight:800}.builder-steps strong{font-size:10px}@media(max-width:1050px){.recipe-grid{grid-template-columns:repeat(2,1fr)}.watch-card{grid-template-columns:1fr}.watch-visual{display:none}}@media(max-width:620px){header h1{font-size:38px}.automation-hero{align-items:flex-start;flex-direction:column}.recipe-grid,.saved-recipes{grid-template-columns:1fr}.saved-recipes article{border-bottom:1px solid var(--border)!important}.section-title>span{display:none}}
   `],
-  changeDetection: ChangeDetectionStrategy.OnPush,
+  changeDetection:ChangeDetectionStrategy.OnPush,
 })
-export class AutomationsPage {}
+export class AutomationsPage{
+  protected readonly store=inject(AutomationStore);
+  protected readonly builderOpen=signal(false);
+  protected readonly selectedRecipe=signal<RecipeTemplate|null>(null);
+  protected readonly saveNotice=signal<string|null>(null);
+  protected readonly recipes:RecipeTemplate[]=[
+    {id:'phone-photos',icon:'◉',name:'Photos téléphone',description:'Préparer des photos pour les envoyer partout.',trigger:'Images',steps:['HEIC/AVIF → JPG','2048 px max · qualité équilibrée','Retirer GPS et données privées','Sous-dossier FileFlow'],actionIds:['image-batch-convert','image-optimize','strip-metadata']},
+    {id:'scan-clean',icon:'Aa',name:'Scan propre',description:'Transformer des scans en documents recherchables.',trigger:'PDF / image',steps:['Redresser et nettoyer','OCR français + anglais','PDF recherchable','Nom par date'],actionIds:['pdf-ocr']},
+    {id:'email-pdf',icon:'↓',name:'PDF pour e-mail',description:'Réduire des documents trop lourds sans réglages techniques.',trigger:'PDF',steps:['Analyser les images','Compression équilibrée','Conserver la lisibilité','Suffixe _leger'],actionIds:['pdf-compress']},
+    {id:'share-video',icon:'▶',name:'Vidéo compatible',description:'Préparer une vidéo pour téléphone, web ou messagerie.',trigger:'Vidéo',steps:['MP4 H.264/AAC','1080p maximum','Bitrate adaptatif','Conserver l’original'],actionIds:['media-compatible']},
+  ];
+
+  constructor(){this.store.load()}
+  protected selectRecipe(recipe:RecipeTemplate):void{this.saveNotice.set(null);this.selectedRecipe.set(recipe);this.builderOpen.set(true)}
+  protected async saveSelectedRecipe():Promise<void>{
+    const recipe=this.selectedRecipe();if(!recipe)return;const now=new Date().toISOString();
+    const ok=await this.store.save({id:crypto.randomUUID(),name:recipe.name,description:recipe.description,icon:recipe.icon,stepsJson:JSON.stringify({version:1,templateId:recipe.id,actions:recipe.actionIds,destination:'subfolder',preserveTree:true}),enabled:true,createdAt:now,updatedAt:now});
+    this.saveNotice.set(ok?'Recette enregistrée localement.':null);
+  }
+}

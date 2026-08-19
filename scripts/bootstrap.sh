@@ -37,13 +37,18 @@ corepack install --global "pnpm@${PNPM_VERSION}" >/dev/null 2>&1 || true
 
 printf 'pnpm: %s\n' "$(pnpm --version)"
 
-# Remove partial npm installations from a previous failed bootstrap. Do not
-# touch pnpm-lock.yaml: once generated it is part of the reproducible build.
-rm -rf node_modules frontend/node_modules
-rm -f package-lock.json frontend/package-lock.json
+# Clean only leftovers created by npm. A valid pnpm virtual store is preserved
+# so running bootstrap repeatedly stays fast and deterministic.
+if [ -f package-lock.json ] || [ -f frontend/package-lock.json ]; then
+  rm -f package-lock.json frontend/package-lock.json
+fi
+if [ -d node_modules ] && [ ! -d node_modules/.pnpm ]; then
+  echo "Removing a non-pnpm root node_modules directory..."
+  rm -rf node_modules
+fi
 
-pnpm install
-cargo fetch
+pnpm install --frozen-lockfile
+cargo fetch --locked
 sh scripts/check-engines.sh
 
 echo

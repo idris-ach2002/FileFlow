@@ -6,3 +6,8 @@ publish.workspace = true
 
 [dependencies]
 fileflow-domain = { path = "../fileflow-domain" }
+chrono.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true

@@ -9,3 +9,6 @@ fileflow-domain = { path = "../fileflow-domain" }
 serde.workspace = true
 sysinfo.workspace = true
 tokio.workspace = true
+dashmap.workspace = true
+thiserror.workspace = true
+tokio-util.workspace = true
