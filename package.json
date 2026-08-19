@@ -19,7 +19,8 @@
     "setup": "sh scripts/setup.sh",
     "build:mac": "tauri build --bundles app,dmg",
     "build:mac:universal": "tauri build --target universal-apple-darwin --bundles app,dmg",
-    "build:linux": "tauri build --bundles deb,appimage"
+    "build:linux": "tauri build --bundles deb,appimage",
+    "verify": "sh scripts/verify.sh"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.4"
