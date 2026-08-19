@@ -273,3 +273,118 @@ export type WorkspaceIntakeEvent =
       event: 'finished';
       data: { workspace: WorkspaceSnapshot };
     };
+
+
+export type JobState =
+  | 'queued'
+  | 'preparing'
+  | 'waitingForResources'
+  | 'running'
+  | 'finalizing'
+  | 'completed'
+  | 'failed'
+  | 'cancelling'
+  | 'cancelled';
+
+export type DestinationPolicy = 'sameFolder' | 'subfolder' | 'customFolder' | 'askEveryTime';
+export type ConflictStrategy = 'increment' | 'skip' | 'replace' | 'ask';
+export type NamingStrategy = 'original' | 'operationSuffix' | 'dateSuffix';
+
+export interface OutputPolicy {
+  destination: DestinationPolicy;
+  customDirectory?: string | null;
+  subfolderName: string;
+  preserveTree: boolean;
+  conflict: ConflictStrategy;
+  naming: NamingStrategy;
+  overwriteOriginal: boolean;
+}
+
+export interface ExecuteWorkspaceActionRequest {
+  workspaceId: string;
+  actionId: string;
+  selectedAssetIds: string[];
+  outputPolicy: OutputPolicy;
+  targetFormat?: string | null;
+  quality?: 'small' | 'balanced' | 'high' | null;
+}
+
+export interface ItemFailure {
+  input: string;
+  message: string;
+}
+
+export interface ExecutionSummary {
+  jobId: string;
+  actionId: string;
+  state: JobState;
+  total: number;
+  succeeded: number;
+  skipped: number;
+  failed: number;
+  outputs: string[];
+  failures: ItemFailure[];
+  durationMs: number;
+  finishedAt: string;
+}
+
+export type ExecutionEvent =
+  | { event: 'started'; data: { jobId: string; actionId: string; total: number } }
+  | { event: 'itemStarted'; data: { jobId: string; index: number; input: string } }
+  | { event: 'itemCompleted'; data: { jobId: string; index: number; input: string; output?: string | null; skipped: boolean } }
+  | { event: 'itemFailed'; data: { jobId: string; index: number; input: string; message: string } }
+  | { event: 'progress'; data: { jobId: string; completed: number; total: number } }
+  | { event: 'finished'; data: { summary: ExecutionSummary } };
+
+export interface HistoryEntry {
+  id: string;
+  actionId: string;
+  inputCount: number;
+  outputCount: number;
+  inputBytes: number;
+  outputBytes: number;
+  destination?: string | null;
+  status: string;
+  durationMs: number;
+  createdAt: string;
+}
+
+export interface RecipeRecord {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  stepsJson: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+
+export interface ConfirmedDuplicateAsset {
+  assetId: string;
+  path: string;
+  sizeBytes: number;
+}
+
+export interface ConfirmedDuplicateGroup {
+  hash: string;
+  sizeBytes: number;
+  reclaimableBytes: number;
+  assets: ConfirmedDuplicateAsset[];
+}
+
+export interface AnalysisWarning {
+  path: string;
+  message: string;
+}
+
+export interface DuplicateReport {
+  inputFiles: number;
+  sizeCandidateFiles: number;
+  quickCandidateFiles: number;
+  fullyHashedFiles: number;
+  confirmedGroups: ConfirmedDuplicateGroup[];
+  reclaimableBytes: number;
+  warnings: AnalysisWarning[];
+}

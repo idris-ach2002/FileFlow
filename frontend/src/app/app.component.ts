@@ -9,6 +9,7 @@ import {
 } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { isTauri } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { ActionDescriptor } from './core/ipc/tauri.models';
 import { CapabilityStore } from './core/catalog/capability.store';
@@ -43,6 +44,7 @@ export class AppComponent {
   constructor() {
     this.capabilities.initialize();
     void this.setupDesktopDrop();
+    void this.setupDesktopNavigation();
   }
 
   @HostListener('document:keydown', ['$event'])
@@ -89,6 +91,18 @@ export class AppComponent {
       case 'error': return 'Moteur indisponible';
       default: return 'Initialisation…';
     }
+  }
+
+  private async setupDesktopNavigation(): Promise<void> {
+    if (!isTauri()) return;
+
+    const unlisten = await listen<string>('fileflow://navigate', (event) => {
+      const path = event.payload;
+      if (!path.startsWith('/')) return;
+      void this.router.navigateByUrl(path);
+    });
+
+    this.destroyRef.onDestroy(() => unlisten());
   }
 
   private async setupDesktopDrop(): Promise<void> {

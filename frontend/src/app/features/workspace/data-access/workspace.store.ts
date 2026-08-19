@@ -4,6 +4,10 @@ import { TauriBridgeService } from '../../../core/ipc/tauri-bridge.service';
 import {
   ActionRecommendation,
   Asset,
+  DuplicateReport,
+  ExecuteWorkspaceActionRequest,
+  ExecutionEvent,
+  ExecutionSummary,
   AssetQuery,
   AssetSortKey,
   FormatFamily,
@@ -53,10 +57,26 @@ export class WorkspaceStore {
   readonly recommendations = signal<ActionRecommendation[]>([]);
   readonly insights = signal<WorkspaceInsights | null>(null);
   readonly detailsLoading = signal(false);
+  readonly duplicateReport = signal<DuplicateReport | null>(null);
+  readonly duplicateScanLoading = signal(false);
+  readonly duplicateScanError = signal<string | null>(null);
   readonly pendingActionId = signal<string | null>(null);
   readonly activeActionId = signal<string | null>(null);
+  readonly executionSummary = signal<ExecutionSummary | null>(null);
+  readonly executionError = signal<string | null>(null);
+  readonly runningJobId = signal<string | null>(null);
+  readonly executionCompleted = signal(0);
+  readonly executionTotal = signal(0);
+  readonly executionFailures = signal<string[]>([]);
+  readonly outputActionBusy = signal(false);
+  readonly outputActionMessage = signal<string | null>(null);
 
   readonly busy = computed(() => this.phase() === 'scanning');
+  readonly executing = computed(() => this.runningJobId() !== null);
+  readonly executionProgress = computed(() => {
+    const total = this.executionTotal();
+    return total > 0 ? Math.min(100, Math.round((this.executionCompleted() / total) * 100)) : 0;
+  });
   readonly hasWorkspace = computed(() => this.workspace() !== null || this.activeWorkspaceId() !== null);
   readonly hasMore = computed(() => this.assets().length < this.pageTotal());
   readonly selectedCount = computed(() => this.selectedIds().size);
@@ -131,7 +151,7 @@ export class WorkspaceStore {
   }
 
   closeAction(): void {
-    this.activeActionId.set(null);
+    if (!this.executing()) this.activeActionId.set(null);
   }
 
   async setFamilyFilter(family: FormatFamily | null): Promise<void> {
@@ -196,12 +216,123 @@ export class WorkspaceStore {
     return this.selectedIds().has(assetId);
   }
 
+  async executeAction(request: ExecuteWorkspaceActionRequest): Promise<ExecutionSummary | null> {
+    if (this.executing()) return null;
+    this.executionSummary.set(null);
+    this.executionError.set(null);
+    this.executionFailures.set([]);
+    this.outputActionMessage.set(null);
+    this.executionCompleted.set(0);
+    this.executionTotal.set(0);
+    try {
+      const summary = await this.bridge.executeAction(request, (event) => this.onExecutionEvent(event));
+      this.executionSummary.set(summary);
+      if (summary.state !== 'cancelled') {
+        await Promise.all([this.loadInitialPage(), this.loadWorkspaceDetails()]);
+      }
+      return summary;
+    } catch (error) {
+      this.executionError.set(errorMessage(error));
+      return null;
+    } finally {
+      this.runningJobId.set(null);
+    }
+  }
+
+  async cancelExecution(): Promise<void> {
+    const jobId = this.runningJobId();
+    if (!jobId) return;
+    await this.bridge.cancelJob(jobId);
+  }
+
+  async openOutput(index = 0): Promise<void> {
+    const summary = this.executionSummary();
+    if (!summary?.outputs[index] || this.outputActionBusy()) return;
+    this.outputActionBusy.set(true);
+    this.outputActionMessage.set(null);
+    try {
+      await this.bridge.openJobOutput(summary.jobId, index);
+    } catch (error) {
+      this.outputActionMessage.set(errorMessage(error));
+    } finally {
+      this.outputActionBusy.set(false);
+    }
+  }
+
+  async revealOutput(index = 0): Promise<void> {
+    const summary = this.executionSummary();
+    if (!summary?.outputs[index] || this.outputActionBusy()) return;
+    this.outputActionBusy.set(true);
+    this.outputActionMessage.set(null);
+    try {
+      await this.bridge.revealJobOutput(summary.jobId, index);
+    } catch (error) {
+      this.outputActionMessage.set(errorMessage(error));
+    } finally {
+      this.outputActionBusy.set(false);
+    }
+  }
+
+  async saveOutputCopy(index = 0): Promise<void> {
+    const summary = this.executionSummary();
+    if (!summary?.outputs[index] || this.outputActionBusy()) return;
+    this.outputActionBusy.set(true);
+    this.outputActionMessage.set(null);
+    try {
+      const copied = await this.bridge.saveJobOutputCopy(summary.jobId, index);
+      if (copied) this.outputActionMessage.set(`Copie enregistrée : ${copied}`);
+    } catch (error) {
+      this.outputActionMessage.set(errorMessage(error));
+    } finally {
+      this.outputActionBusy.set(false);
+    }
+  }
+
+  private onExecutionEvent(event: ExecutionEvent): void {
+    switch (event.event) {
+      case 'started':
+        this.runningJobId.set(event.data.jobId);
+        this.executionTotal.set(event.data.total);
+        this.executionCompleted.set(0);
+        break;
+      case 'itemFailed':
+        this.executionFailures.update((failures) => [...failures, `${event.data.input}: ${event.data.message}`].slice(-10));
+        break;
+      case 'progress':
+        this.executionCompleted.set(event.data.completed);
+        this.executionTotal.set(event.data.total);
+        break;
+      case 'finished':
+        this.executionSummary.set(event.data.summary);
+        this.executionCompleted.set(event.data.summary.total);
+        this.executionTotal.set(event.data.summary.total);
+        break;
+      case 'itemStarted':
+      case 'itemCompleted':
+        break;
+    }
+  }
+
   setDragActive(active: boolean): void {
     this.dragActive.set(active);
   }
 
   async refreshDetails(): Promise<void> {
     await this.loadWorkspaceDetails();
+  }
+
+  async confirmDuplicates(): Promise<void> {
+    const workspaceId = this.workspace()?.id;
+    if (!workspaceId || this.duplicateScanLoading()) return;
+    this.duplicateScanLoading.set(true);
+    this.duplicateScanError.set(null);
+    try {
+      this.duplicateReport.set(await this.bridge.confirmDuplicates(workspaceId));
+    } catch (error) {
+      this.duplicateScanError.set(errorMessage(error));
+    } finally {
+      this.duplicateScanLoading.set(false);
+    }
   }
 
   private query(offset: number): AssetQuery {
@@ -280,7 +411,16 @@ export class WorkspaceStore {
     this.selectedIds.set(new Set());
     this.recommendations.set([]);
     this.insights.set(null);
+    this.duplicateReport.set(null);
+    this.duplicateScanLoading.set(false);
+    this.duplicateScanError.set(null);
     this.activeActionId.set(null);
+    this.executionSummary.set(null);
+    this.executionError.set(null);
+    this.runningJobId.set(null);
+    this.executionCompleted.set(0);
+    this.executionTotal.set(0);
+    this.executionFailures.set([]);
   }
 }
 

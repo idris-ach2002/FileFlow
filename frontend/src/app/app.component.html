@@ -73,7 +73,7 @@
             <button type="button" class="palette-item" (click)="choosePaletteAction(action)">
               <span class="palette-mark" [attr.data-category]="action.category">{{ action.title.slice(0, 2).toUpperCase() }}</span>
               <span class="palette-copy"><strong>{{ action.title }}</strong><small>{{ action.description }}</small></span>
-              @if (capabilities.isActionReady(action)) { <span class="ready-dot" title="Moteurs disponibles"></span> }
+              @if (capabilities.isActionExecutable(action)) { <span class="ready-dot" title="Exécution locale prête"></span> }
               @else { <span class="missing-label">moteur requis</span> }
             </button>
           } @empty {

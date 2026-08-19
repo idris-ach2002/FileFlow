@@ -6,8 +6,14 @@ import {
   AssetQuery,
   CapabilityCatalog,
   ConversionPlan,
+  DuplicateReport,
   EngineProbe,
+  ExecuteWorkspaceActionRequest,
+  ExecutionEvent,
+  ExecutionSummary,
   HealthResponse,
+  HistoryEntry,
+  RecipeRecord,
   ScanOptions,
   SchedulerSnapshot,
   WorkspaceInsights,
@@ -41,6 +47,55 @@ export class TauriBridgeService {
     return invoke<SchedulerSnapshot>('scheduler_status');
   }
 
+  executableActions(): Promise<string[]> {
+    return invoke<string[]>('executable_actions');
+  }
+
+  executeAction(
+    request: ExecuteWorkspaceActionRequest,
+    onEvent: (event: ExecutionEvent) => void,
+  ): Promise<ExecutionSummary> {
+    const channel = new Channel<ExecutionEvent>();
+    channel.onmessage = onEvent;
+    return invoke<ExecutionSummary>('execute_action', { request, onEvent: channel });
+  }
+
+  cancelJob(jobId: string): Promise<boolean> {
+    return invoke<boolean>('cancel_job', { jobId });
+  }
+
+  openJobOutput(jobId: string, index = 0): Promise<void> {
+    return invoke<void>('open_job_output', { jobId, index });
+  }
+
+  revealJobOutput(jobId: string, index = 0): Promise<void> {
+    return invoke<void>('reveal_job_output', { jobId, index });
+  }
+
+  saveJobOutputCopy(jobId: string, index = 0): Promise<string | null> {
+    return invoke<string | null>('save_job_output_copy', { jobId, index });
+  }
+
+  history(limit = 100): Promise<HistoryEntry[]> {
+    return invoke<HistoryEntry[]>('history', { limit });
+  }
+
+  favorites(): Promise<string[]> {
+    return invoke<string[]>('favorites');
+  }
+
+  setFavorite(actionId: string, favorite: boolean): Promise<void> {
+    return invoke<void>('set_favorite', { actionId, favorite });
+  }
+
+  recipes(): Promise<RecipeRecord[]> {
+    return invoke<RecipeRecord[]>('recipes');
+  }
+
+  saveRecipe(recipe: RecipeRecord): Promise<void> {
+    return invoke<void>('save_recipe', { recipe });
+  }
+
   createWorkspace(
     paths: string[],
     onEvent: (event: WorkspaceIntakeEvent) => void,
@@ -70,5 +125,9 @@ export class TauriBridgeService {
 
   workspaceRecommendations(workspaceId: string): Promise<ActionRecommendation[]> {
     return invoke<ActionRecommendation[]>('workspace_recommendations', { workspaceId });
+  }
+
+  confirmDuplicates(workspaceId: string): Promise<DuplicateReport> {
+    return invoke<DuplicateReport>('confirm_duplicates', { workspaceId });
   }
 }

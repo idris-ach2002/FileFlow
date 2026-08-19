@@ -18,10 +18,21 @@ export class CapabilityStore {
   readonly health = signal<HealthResponse | null>(null);
   readonly engines = signal<EngineProbe[]>([]);
   readonly catalog = signal<CapabilityCatalog | null>(null);
+  readonly executableActionIds = signal<ReadonlySet<string>>(new Set());
+  readonly favoriteActionIds = signal<ReadonlySet<string>>(new Set());
   readonly error = signal<string | null>(null);
 
   readonly actions = computed(() => this.catalog()?.actions ?? []);
-  readonly featuredActions = computed(() => this.actions().filter((action) => action.featured));
+  readonly featuredActions = computed(() => {
+    const favorites = this.favoriteActionIds();
+    return this.actions()
+      .filter((action) => action.featured)
+      .sort((left, right) => Number(favorites.has(right.id)) - Number(favorites.has(left.id)));
+  });
+  readonly favoriteActions = computed(() => {
+    const favorites = this.favoriteActionIds();
+    return this.actions().filter((action) => favorites.has(action.id));
+  });
   readonly availableEngineIds = computed(
     () => new Set(this.engines().filter((engine) => engine.available).map((engine) => engine.id)),
   );
@@ -41,11 +52,15 @@ export class CapabilityStore {
       this.bridge.healthCheck(),
       this.bridge.probeEngines(),
       this.bridge.capabilityCatalog(),
+      this.bridge.executableActions(),
+      this.bridge.favorites(),
     ]).then(
-      ([health, engines, catalog]) => {
+      ([health, engines, catalog, executableActions, favorites]) => {
         this.health.set(health);
         this.engines.set(engines);
         this.catalog.set(catalog);
+        this.executableActionIds.set(new Set(executableActions));
+        this.favoriteActionIds.set(new Set(favorites));
         this.phase.set('ready');
       },
       (error: unknown) => {
@@ -63,6 +78,35 @@ export class CapabilityStore {
   isActionReady(action: ActionDescriptor): boolean {
     const engines = this.availableEngineIds();
     return action.requiredEngines.every((engine) => engines.has(engine));
+  }
+
+  isActionExecutable(action: ActionDescriptor): boolean {
+    return this.isActionReady(action) && this.executableActionIds().has(action.id);
+  }
+
+  actionState(action: ActionDescriptor): 'ready' | 'missing-engine' | 'planned' {
+    if (!this.isActionReady(action)) return 'missing-engine';
+    return this.executableActionIds().has(action.id) ? 'ready' : 'planned';
+  }
+
+
+  isFavorite(actionId: string): boolean {
+    return this.favoriteActionIds().has(actionId);
+  }
+
+  async toggleFavorite(actionId: string): Promise<void> {
+    if (!this.bridge.isDesktop()) return;
+    const previous = this.favoriteActionIds();
+    const next = new Set(previous);
+    const favorite = !next.has(actionId);
+    if (favorite) next.add(actionId); else next.delete(actionId);
+    this.favoriteActionIds.set(next);
+    try {
+      await this.bridge.setFavorite(actionId, favorite);
+    } catch (error) {
+      this.favoriteActionIds.set(previous);
+      throw error;
+    }
   }
 
   missingEngines(action: ActionDescriptor): string[] {
