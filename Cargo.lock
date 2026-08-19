@@ -653,6 +653,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dashmap"
+version = "6.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6361d5c062261c78a176addb82d4c821ae42bed6089de0e12603cd25de2059c"
+dependencies = [
+ "cfg-if",
+ "crossbeam-utils",
+ "hashbrown 0.14.5",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core",
+]
+
+[[package]]
 name = "dbus"
 version = "0.9.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1026,7 +1040,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "fileflow-adapter-img2pdf"
+name = "fileflow-adapter-imagemagick"
 version = "0.1.0"
 dependencies = [
  "async-trait",
@@ -1035,7 +1049,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "fileflow-adapter-imagemagick"
+name = "fileflow-adapter-img2pdf"
 version = "0.1.0"
 dependencies = [
  "async-trait",
@@ -1144,6 +1158,8 @@ dependencies = [
 name = "fileflow-desktop"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "dashmap",
  "fileflow-adapter-archive",
  "fileflow-adapter-ffmpeg",
  "fileflow-adapter-ghostscript",
@@ -1161,9 +1177,11 @@ dependencies = [
  "fileflow-core",
  "fileflow-domain",
  "fileflow-engine",
+ "fileflow-executor",
  "fileflow-intake",
  "fileflow-planner",
  "fileflow-scheduler",
+ "fileflow-storage",
  "fileflow-workspace",
  "serde",
  "tauri",
@@ -1172,13 +1190,9 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-opener",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
- "chrono",
- "dashmap",
- "fileflow-executor",
- "fileflow-storage",
- "tokio-util",
  "uuid",
 ]
 
@@ -1186,7 +1200,6 @@ dependencies = [
 name = "fileflow-domain"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "serde",
  "uuid",
 ]
@@ -1742,6 +1755,12 @@ name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
+
+[[package]]
+name = "hashbrown"
+version = "0.14.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
 
 [[package]]
 name = "hashbrown"
@@ -4407,6 +4426,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]
