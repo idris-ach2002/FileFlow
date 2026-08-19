@@ -79,6 +79,12 @@ describe('WorkspaceStore', () => {
         total: 1,
         items: [asset],
       }),
+      workspaceInsights: vi.fn().mockResolvedValue({
+        hiddenAssets: 0, unknownAssets: 0, extensionCount: 1,
+        extensions: [{ extension: 'txt', count: 1, totalBytes: 5 }],
+        largest: [], duplicateSizeCandidates: [], potentialDuplicateBytes: 0,
+      }),
+      workspaceRecommendations: vi.fn().mockResolvedValue([]),
     };
 
     TestBed.configureTestingModule({

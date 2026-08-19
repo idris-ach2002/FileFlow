@@ -1,21 +1,8 @@
 import { ChangeDetectionStrategy, Component } from '@angular/core';
 
 @Component({
-  selector: 'ff-history-page',
-  template: `
-    <section class="placeholder">
-      <p>FILEFLOW</p>
-      <h1>Historique</h1>
-      <span>Les opérations terminées, destinations et actions « refaire » seront disponibles ici.</span>
-    </section>
-  `,
-  styles: [`
-    :host { display: block; }
-    .placeholder { max-width: 760px; padding-top: 40px; }
-    p { color: var(--accent); font-weight: 800; font-size: 12px; letter-spacing: .14em; }
-    h1 { margin: 8px 0 14px; font-size: 44px; letter-spacing: -.04em; }
-    span { color: var(--text-muted); line-height: 1.7; }
-  `],
-  changeDetection: ChangeDetectionStrategy.OnPush,
+  selector:'ff-history-page',
+  template:`<div class="history-shell"><header><p class="ff-kicker">HISTORIQUE</p><h1>Retrouvez, refaites, comparez.</h1><p>L’historique est prévu côté SQLite en WAL. Il n’enregistrera que les métadonnées d’opération — jamais le contenu de vos fichiers.</p></header><section class="history-empty ff-card"><div class="history-art"><span>↺</span><i></i><i></i><i></i></div><h2>Aucune conversion terminée pour l’instant</h2><p>Dès que le moteur d’exécution sera branché aux actions du Workspace, chaque opération validée apparaîtra ici avec durée, destination, tailles avant/après et bouton « refaire ».</p><div class="future-grid"><div><strong>Avant / après</strong><span>Poids et fichiers produits.</span></div><div><strong>Refaire</strong><span>Réutiliser la même configuration.</span></div><div><strong>Destination</strong><span>Rouvrir instantanément le dossier.</span></div><div><strong>Confidentiel</strong><span>Aucun contenu stocké en base.</span></div></div></section></div>`,
+  styles:[`:host{display:block}.history-shell{max-width:1080px;margin:0 auto}header{max-width:760px}header h1{margin:0;font-size:48px;letter-spacing:-.05em}header>p:last-child{margin:10px 0 0;color:var(--text-muted);font-size:13px;line-height:1.6}.history-empty{margin-top:34px;min-height:430px;display:grid;justify-items:center;align-content:center;padding:38px;text-align:center}.history-art{position:relative;width:170px;height:88px;margin-bottom:16px}.history-art span{position:absolute;left:0;top:10px;width:58px;height:58px;display:grid;place-items:center;border-radius:18px;background:var(--accent-soft);color:var(--accent);font-size:25px}.history-art i{position:absolute;right:0;width:92px;height:15px;border-radius:6px;background:var(--surface-2)}.history-art i:nth-child(2){top:8px}.history-art i:nth-child(3){top:34px;width:74px}.history-art i:nth-child(4){top:60px;width:84px}.history-empty h2{margin:0;font-size:20px;letter-spacing:-.03em}.history-empty>p{max-width:560px;margin:9px 0 0;color:var(--text-muted);font-size:10px;line-height:1.6}.future-grid{width:min(650px,100%);margin-top:26px;display:grid;grid-template-columns:repeat(4,1fr);gap:7px}.future-grid div{padding:11px;border:1px solid var(--border);border-radius:9px;background:var(--bg-elevated);text-align:left}.future-grid strong,.future-grid span{display:block}.future-grid strong{font-size:9px}.future-grid span{margin-top:3px;color:var(--text-faint);font-size:8px;line-height:1.4}@media(max-width:650px){header h1{font-size:38px}.future-grid{grid-template-columns:repeat(2,1fr)}}`],changeDetection:ChangeDetectionStrategy.OnPush
 })
-export class HistoryPage {}
+export class HistoryPage{}

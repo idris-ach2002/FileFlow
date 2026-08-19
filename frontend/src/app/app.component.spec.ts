@@ -12,7 +12,7 @@ describe('AppComponent', () => {
         provideRouter([]),
         {
           provide: TauriBridgeService,
-          useValue: { healthCheck: vi.fn().mockRejectedValue(new Error('browser preview')) },
+          useValue: { isDesktop: vi.fn().mockReturnValue(false) },
         },
       ],
     }).compileComponents();

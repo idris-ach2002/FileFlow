@@ -1,9 +1,31 @@
+export interface ResourceBudget {
+  cpuTokens: number;
+  memoryMb: number;
+  ioTokens: number;
+}
+
+export interface SchedulerSnapshot {
+  budget: ResourceBudget;
+  cpuAvailable: number;
+  memoryMbAvailable: number;
+  ioAvailable: number;
+}
+
+export interface ResourceProfile {
+  cpuWeight: number;
+  memoryMb: number;
+  ioWeight: number;
+  internallyThreaded: boolean;
+  maxParallelInstances: number;
+}
+
 export interface HealthResponse {
   app: string;
   version: string;
   cpuThreads: number;
   os: string;
   architecture: string;
+  scheduler: SchedulerSnapshot;
 }
 
 export interface EngineProbe {
@@ -11,6 +33,7 @@ export interface EngineProbe {
   displayName: string;
   available: boolean;
   executable?: string | null;
+  resourceProfile: ResourceProfile;
 }
 
 export type FormatFamily =
@@ -29,6 +52,20 @@ export type FormatFamily =
 export type AssetKind = 'file' | 'directory' | 'archive' | 'symlink' | 'other';
 export type DetectionConfidence = 'unknown' | 'extension' | 'magic';
 export type WorkspaceStatus = 'scanning' | 'ready' | 'failed';
+export type AssetSortKey = 'name' | 'size' | 'modified' | 'format' | 'family';
+export type SortDirection = 'ascending' | 'descending';
+export type OperationCategory =
+  | 'convert'
+  | 'pdf'
+  | 'image'
+  | 'document'
+  | 'media'
+  | 'archive'
+  | 'extract'
+  | 'organize'
+  | 'privacy'
+  | 'optimize';
+export type ActionScope = 'single' | 'batch' | 'workspace';
 
 export interface DetectedFormat {
   id: string;
@@ -126,6 +163,9 @@ export interface AssetQuery {
   family?: FormatFamily | null;
   kind?: AssetKind | null;
   search?: string | null;
+  includeHidden?: boolean;
+  sortBy?: AssetSortKey;
+  sortDirection?: SortDirection;
 }
 
 export interface AssetPage {
@@ -134,6 +174,82 @@ export interface AssetPage {
   limit: number;
   total: number;
   items: Asset[];
+}
+
+export interface ActionDescriptor {
+  id: string;
+  title: string;
+  description: string;
+  category: OperationCategory;
+  scopes: ActionScope[];
+  accepts: FormatFamily[];
+  outputFormat?: string | null;
+  requiredEngines: string[];
+  batchable: boolean;
+  destructive: boolean;
+  featured: boolean;
+}
+
+export interface ActionRecommendation {
+  actionId: string;
+  score: number;
+  reason: string;
+  affectedAssets: number;
+  ready: boolean;
+  missingEngines: string[];
+}
+
+export interface ConversionEdge {
+  from: string;
+  to: string;
+  engineId: string;
+  cost: number;
+  lossy: boolean;
+}
+
+export interface ConversionStep extends ConversionEdge {}
+
+export interface ConversionPlan {
+  input: string;
+  output: string;
+  totalCost: number;
+  steps: ConversionStep[];
+}
+
+export interface CapabilityCatalog {
+  actions: ActionDescriptor[];
+  conversions: ConversionEdge[];
+}
+
+export interface ExtensionCount {
+  extension: string;
+  count: number;
+  totalBytes: number;
+}
+
+export interface AssetInsight {
+  id: string;
+  name: string;
+  relativePath: string;
+  family: FormatFamily;
+  sizeBytes: number;
+}
+
+export interface DuplicateSizeCandidate {
+  sizeBytes: number;
+  count: number;
+  reclaimableUpperBound: number;
+  samples: AssetInsight[];
+}
+
+export interface WorkspaceInsights {
+  hiddenAssets: number;
+  unknownAssets: number;
+  extensionCount: number;
+  extensions: ExtensionCount[];
+  largest: AssetInsight[];
+  duplicateSizeCandidates: DuplicateSizeCandidate[];
+  potentialDuplicateBytes: number;
 }
 
 export type WorkspaceIntakeEvent =
