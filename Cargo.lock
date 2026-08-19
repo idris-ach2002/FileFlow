@@ -1110,8 +1110,14 @@ dependencies = [
 name = "fileflow-core"
 version = "0.1.0"
 dependencies = [
+ "fileflow-domain",
  "fileflow-engine",
+ "fileflow-intake",
+ "fileflow-workspace",
  "parking_lot",
+ "serde",
+ "thiserror 2.0.20",
+ "tokio",
  "tracing",
 ]
 
@@ -1149,6 +1155,7 @@ dependencies = [
 name = "fileflow-domain"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "serde",
  "uuid",
 ]
@@ -1175,13 +1182,21 @@ name = "fileflow-formats"
 version = "0.1.0"
 dependencies = [
  "fileflow-domain",
+ "infer",
 ]
 
 [[package]]
 name = "fileflow-intake"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "fileflow-domain",
+ "fileflow-formats",
+ "serde",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1221,7 +1236,11 @@ dependencies = [
 name = "fileflow-workspace"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "fileflow-domain",
+ "parking_lot",
+ "serde",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

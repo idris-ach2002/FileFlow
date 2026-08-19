@@ -1,23 +1,40 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct JobId(pub Uuid);
+macro_rules! uuid_id {
+    ($name:ident) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[serde(transparent)]
+        pub struct $name(pub Uuid);
 
-impl JobId {
-    pub fn new() -> Self {
-        Self(Uuid::new_v4())
-    }
+        impl $name {
+            pub fn new() -> Self {
+                Self(Uuid::new_v4())
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.0.fmt(f)
+            }
+        }
+    };
 }
 
-impl Default for JobId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+uuid_id!(JobId);
+uuid_id!(AssetId);
+uuid_id!(WorkspaceId);
+uuid_id!(IntakeRequestId);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum FormatFamily {
     Image,
@@ -31,6 +48,145 @@ pub enum FormatFamily {
     Ebook,
     Text,
     Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AssetKind {
+    File,
+    Directory,
+    Archive,
+    Symlink,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DetectionConfidence {
+    Unknown,
+    Extension,
+    Magic,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedFormat {
+    pub id: String,
+    pub extension: Option<String>,
+    pub mime_type: Option<String>,
+    pub family: FormatFamily,
+    pub confidence: DetectionConfidence,
+}
+
+impl DetectedFormat {
+    pub fn unknown(extension: Option<String>) -> Self {
+        Self {
+            id: "unknown".into(),
+            extension,
+            mime_type: None,
+            family: FormatFamily::Unknown,
+            confidence: DetectionConfidence::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetCommon {
+    pub id: AssetId,
+    pub root_index: usize,
+    pub path: PathBuf,
+    pub relative_path: PathBuf,
+    pub name: String,
+    pub hidden: bool,
+    pub modified_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileAsset {
+    #[serde(flatten)]
+    pub common: AssetCommon,
+    pub size_bytes: u64,
+    pub format: DetectedFormat,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectoryAsset {
+    #[serde(flatten)]
+    pub common: AssetCommon,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveAsset {
+    #[serde(flatten)]
+    pub common: AssetCommon,
+    pub size_bytes: u64,
+    pub format: DetectedFormat,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SymlinkAsset {
+    #[serde(flatten)]
+    pub common: AssetCommon,
+    pub target: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind", content = "data")]
+pub enum Asset {
+    File(FileAsset),
+    Directory(DirectoryAsset),
+    Archive(ArchiveAsset),
+    Symlink(SymlinkAsset),
+}
+
+impl Asset {
+    pub fn id(&self) -> AssetId {
+        match self {
+            Self::File(asset) => asset.common.id,
+            Self::Directory(asset) => asset.common.id,
+            Self::Archive(asset) => asset.common.id,
+            Self::Symlink(asset) => asset.common.id,
+        }
+    }
+
+    pub fn kind(&self) -> AssetKind {
+        match self {
+            Self::File(_) => AssetKind::File,
+            Self::Directory(_) => AssetKind::Directory,
+            Self::Archive(_) => AssetKind::Archive,
+            Self::Symlink(_) => AssetKind::Symlink,
+        }
+    }
+
+    pub fn common(&self) -> &AssetCommon {
+        match self {
+            Self::File(asset) => &asset.common,
+            Self::Directory(asset) => &asset.common,
+            Self::Archive(asset) => &asset.common,
+            Self::Symlink(asset) => &asset.common,
+        }
+    }
+
+    pub fn family(&self) -> FormatFamily {
+        match self {
+            Self::File(asset) => asset.format.family,
+            Self::Archive(asset) => asset.format.family,
+            Self::Directory(_) | Self::Symlink(_) => FormatFamily::Unknown,
+        }
+    }
+
+    pub fn size_bytes(&self) -> u64 {
+        match self {
+            Self::File(asset) => asset.size_bytes,
+            Self::Archive(asset) => asset.size_bytes,
+            Self::Directory(_) | Self::Symlink(_) => 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
