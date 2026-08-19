@@ -19,7 +19,7 @@ The repository already contains a working native desktop foundation, not only UI
 - local SQLite history, favourites and recipes;
 - exact duplicate confirmation using staged SHA-256 hashing;
 - responsive Angular desktop UI, command palette, dark/light themes and native tray navigation;
-- secure post-conversion actions: open, reveal in Finder/file manager and save a copy.
+- secure post-conversion actions: open, reveal in Finder/file manager, save a copy and re-analyse extracted folders.
 
 ### Locally executable actions
 
@@ -32,7 +32,7 @@ The current runtime wires these actions to real local engines:
 - Office/OpenDocument -> PDF;
 - PDF merge, split, compression, OCR, text extraction and PDF -> images;
 - image OCR;
-- archive creation and guarded extraction;
+- archive inspection by file family, archive creation and guarded extraction;
 - media compatibility conversion and compression;
 - audio conversion and audio extraction;
 - video -> GIF.

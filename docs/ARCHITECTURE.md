@@ -133,6 +133,8 @@ Post-conversion actions are also server-validated. The frontend sends a `JobId` 
 
 ## Archive safety
 
+Archives can first be inspected without extraction. FileFlow parses the 7-Zip technical listing, classifies contained files through the shared format registry and returns only bounded samples plus aggregate family counts to Angular. After extraction, the output folder can be fed directly back into Intake to produce per-type recommendations.
+
 Before automatic extraction, FileFlow rejects suspicious archives using conservative guards:
 
 - parent traversal / absolute paths / drive-prefixed paths;
