@@ -25,6 +25,9 @@ fileflow-adapter-office = { path = "../crates/adapters/fileflow-adapter-office" 
 fileflow-adapter-qpdf = { path = "../crates/adapters/fileflow-adapter-qpdf" }
 fileflow-adapter-vips = { path = "../crates/adapters/fileflow-adapter-vips" }
 fileflow-core = { path = "../crates/fileflow-core" }
+fileflow-domain = { path = "../crates/fileflow-domain" }
+fileflow-intake = { path = "../crates/fileflow-intake" }
+fileflow-workspace = { path = "../crates/fileflow-workspace" }
 fileflow-engine = { path = "../crates/fileflow-engine" }
 fileflow-scheduler = { path = "../crates/fileflow-scheduler" }
 serde.workspace = true

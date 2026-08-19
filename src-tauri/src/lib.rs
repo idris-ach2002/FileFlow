@@ -1,40 +1,11 @@
+mod commands;
+
 use fileflow_core::FileFlowCore;
-use fileflow_engine::EngineProbe;
 use fileflow_scheduler::ResourceBudget;
-use serde::Serialize;
 use std::sync::Arc;
-use tauri::State;
 
-struct AppState {
-    core: Arc<FileFlowCore>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct HealthResponse {
-    app: &'static str,
-    version: &'static str,
-    cpu_threads: usize,
-    os: &'static str,
-    architecture: &'static str,
-}
-
-#[tauri::command]
-async fn health_check() -> HealthResponse {
-    HealthResponse {
-        app: "FileFlow",
-        version: env!("CARGO_PKG_VERSION"),
-        cpu_threads: std::thread::available_parallelism().map_or(1, usize::from),
-        os: std::env::consts::OS,
-        architecture: std::env::consts::ARCH,
-    }
-}
-
-#[tauri::command]
-async fn probe_engines(
-    state: State<'_, AppState>,
-) -> Result<Vec<EngineProbe>, String> {
-    Ok(state.core.engines.probe_all().await)
+pub(crate) struct AppState {
+    pub(crate) core: Arc<FileFlowCore>,
 }
 
 fn build_core() -> Arc<FileFlowCore> {
@@ -70,7 +41,13 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState { core: build_core() })
-        .invoke_handler(tauri::generate_handler![health_check, probe_engines])
+        .invoke_handler(tauri::generate_handler![
+            commands::system::health_check,
+            commands::system::probe_engines,
+            commands::workspace::create_workspace,
+            commands::workspace::get_workspace,
+            commands::workspace::list_workspace_assets,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running FileFlow");
 }
