@@ -187,9 +187,20 @@ async fn acquire_many(
     permits: u32,
     cancellation: &CancellationToken,
 ) -> Result<OwnedSemaphorePermit, SchedulerError> {
+    // Cancellation has priority over an immediately available permit.
+    // Without this pre-check, both futures can be ready at the same time
+    // and an unbiased select may reserve resources after cancellation.
+    if cancellation.is_cancelled() {
+        return Err(SchedulerError::Cancelled);
+    }
+
     tokio::select! {
+        biased;
+
         _ = cancellation.cancelled() => Err(SchedulerError::Cancelled),
-        permit = semaphore.acquire_many_owned(permits) => permit.map_err(|_| SchedulerError::Closed),
+        permit = semaphore.acquire_many_owned(permits) => {
+            permit.map_err(|_| SchedulerError::Closed)
+        },
     }
 }
 
