@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: native-macos-${{ github.event.pull_request.head.sha || github.sha }}
@@ -126,3 +126,7 @@ jobs:
           path: dist/release/${{ matrix.target }}
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish Git-only install payload
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+        run: python scripts/release/publish-git-payload.py --target '${{ matrix.target }}' --root 'dist/release/${{ matrix.target }}'

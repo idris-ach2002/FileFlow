@@ -1,821 +1,149 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# FileFlow production bootstrap installer.
-# No Node / pnpm / Rust / Python / GitHub CLI required.
-#
-# Modes:
-#   ./install.sh
-#   ./install.sh --mode dev
-#   ./install.sh --version 1.0.1
-#   ./install.sh --no-launch
-#   ./install.sh --linux-user
-#
-# Environment:
-#   FILEFLOW_INSTALL_MODE=user|dev
-#   FILEFLOW_VERSION=1.0.1
+# FileFlow permanent one-time installer.
+# Client prerequisite: Git only.
+# No GitHub CLI/auth, Node, pnpm, Rust, Cargo, Python or Docker.
+# After success, the source clone is disposable.
 
-REPO="idris-ach2002/FileFlow"
-MODE="${FILEFLOW_INSTALL_MODE:-user}"
-VERSION="${FILEFLOW_VERSION:-}"
+MODE="user"
+FORCE=0
 NO_LAUNCH=0
-ALLOW_UNSIGNED=0
-LINUX_USER=0
 STEP="initialisation"
-ASSET=""
-TAG=""
-DOWNLOAD_URL=""
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT"
 
-SCRIPT_DIR="$(
-  cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null &&
-  pwd
-)" || SCRIPT_DIR="$PWD"
-
-usage() {
-  cat <<'EOF'
-Installation FileFlow
+usage(){ cat <<'EOF'
+FileFlow — installation permanente
 
 Usage:
   ./install.sh
-  ./install.sh --mode user
   ./install.sh --mode dev
-  ./install.sh --version 1.0.1
   ./install.sh --no-launch
-  ./install.sh --linux-user
+  ./install.sh --force
 
-Options:
-  --mode user       messages simples destinés à l'utilisateur (défaut)
-  --mode dev        diagnostics détaillés + log technique
-  --version X.Y.Z   installe une version précise
-  --no-launch       installe sans lancer FileFlow
-  --linux-user      force une installation Linux locale AppImage sans sudo
-  --allow-unsigned  DEV uniquement: autorise un bundle macOS non approuvé
-  -h, --help        aide
+Après succès, le dépôt cloné peut être supprimé.
 EOF
 }
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --mode)
-      [ "$#" -ge 2 ] || { echo "Valeur manquante pour --mode" >&2; exit 2; }
-      MODE="$2"
-      shift 2
-      ;;
-    --version)
-      [ "$#" -ge 2 ] || { echo "Valeur manquante pour --version" >&2; exit 2; }
-      VERSION="$2"
-      shift 2
-      ;;
-    --no-launch)
-      NO_LAUNCH=1
-      shift
-      ;;
-    --linux-user)
-      LINUX_USER=1
-      shift
-      ;;
-    --allow-unsigned)
-      ALLOW_UNSIGNED=1
-      shift
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "Option inconnue: $1" >&2
-      usage >&2
-      exit 2
-      ;;
+    --mode) MODE="${2:?valeur manquante}"; shift 2;;
+    --force) FORCE=1; shift;;
+    --no-launch) NO_LAUNCH=1; shift;;
+    -h|--help) usage; exit 0;;
+    *) echo "Option inconnue: $1" >&2; usage >&2; exit 2;;
   esac
 done
-
-case "$MODE" in
-  user|dev) ;;
-  *)
-    echo "Mode invalide '$MODE'. Utilise user ou dev." >&2
-    exit 2
-    ;;
-esac
-
-if [ "$ALLOW_UNSIGNED" -eq 1 ] && [ "$MODE" != "dev" ]; then
-  echo "--allow-unsigned est réservé au mode dev." >&2
-  exit 2
-fi
+case "$MODE" in user|dev) ;; *) echo "Mode invalide: $MODE" >&2; exit 2;; esac
 
 OS="$(uname -s 2>/dev/null || echo unknown)"
 ARCH="$(uname -m 2>/dev/null || echo unknown)"
-
-if [ "$OS" = "Darwin" ]; then
-  LOG_DIR="$HOME/Library/Logs/FileFlow"
-else
-  LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/fileflow"
-fi
-
-mkdir -p "$LOG_DIR" 2>/dev/null || true
-LOG_FILE="$LOG_DIR/install-$(date '+%Y%m%d-%H%M%S').log"
-
-log() {
-  printf '%s [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$STEP" "$*" >>"$LOG_FILE" 2>/dev/null || true
-}
-
-say() {
-  printf '%s\n' "$*"
-  log "$*"
-}
-
-dev() {
-  if [ "$MODE" = "dev" ]; then
-    printf '[DEV] %s\n' "$*"
-  fi
-  log "[DEV] $*"
-}
-
-fail() {
-  local code="$1"
-  local user_message="$2"
-  local developer_message="${3:-$2}"
-
-  printf '\nFileFlow n’a pas pu terminer l’installation.\n'
-  printf 'Code : %s\n' "$code"
-  printf '%s\n' "$user_message"
-
-  if [ "$MODE" = "dev" ]; then
-    printf '\n--- Diagnostic développeur ---\n'
-    printf 'Étape       : %s\n' "$STEP"
-    printf 'OS/arch     : %s / %s\n' "$OS" "$ARCH"
-    printf 'Version     : %s\n' "${VERSION:-inconnue}"
-    printf 'Tag         : %s\n' "${TAG:-non résolu}"
-    printf 'Asset       : %s\n' "${ASSET:-non résolu}"
-    printf 'URL         : %s\n' "${DOWNLOAD_URL:-non résolue}"
-    printf 'Détail      : %s\n' "$developer_message"
-    printf 'Log         : %s\n' "$LOG_FILE"
-  else
-    printf 'Relance avec "--mode dev" si un diagnostic technique est nécessaire.\n'
-  fi
-
-  log "FAIL $code: $developer_message"
-  exit 1
-}
-
-on_unexpected_error() {
-  local exit_code="$1"
-  local line="$2"
-  local command="$3"
-
-  trap - ERR
-
-  fail \
-    "FF-I-999" \
-    "Une erreur système inattendue est survenue. Réessaie. Si le problème persiste, transmets le code FF-I-999." \
-    "exit=$exit_code line=$line command=$command"
-}
-
-trap 'on_unexpected_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
-
-STEP="préparation"
-dev "log=$LOG_FILE"
-dev "script_dir=$SCRIPT_DIR"
-dev "os=$OS arch=$ARCH"
-
-TMP_ROOT="$(mktemp -d 2>/dev/null || mktemp -d -t fileflow)"
-cleanup() {
-  if [ -n "${MOUNT_POINT:-}" ] && [ -d "${MOUNT_POINT:-}" ]; then
-    hdiutil detach "$MOUNT_POINT" >/dev/null 2>&1 || true
-  fi
-  rm -rf "$TMP_ROOT" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT INT TERM
-
-http_get() {
-  local url="$1"
-  local output="$2"
-
-  dev "GET $url -> $output"
-
-  if command -v curl >/dev/null 2>&1; then
-    curl \
-      --fail \
-      --location \
-      --silent \
-      --show-error \
-      --connect-timeout 15 \
-      --retry 3 \
-      --retry-delay 2 \
-      --output "$output" \
-      "$url"
-    return
-  fi
-
-  if command -v wget >/dev/null 2>&1; then
-    wget \
-      --quiet \
-      --timeout=20 \
-      --tries=3 \
-      --output-document="$output" \
-      "$url"
-    return
-  fi
-
-  fail \
-    "FF-I-010" \
-    "Aucun outil de téléchargement n’est disponible. Installe curl ou wget puis relance l’installation." \
-    "neither curl nor wget is installed"
-}
-
-resolve_version() {
-  STEP="résolution de la version"
-
-  if [ -n "$VERSION" ]; then
-    return
-  fi
-
-  local local_config="$SCRIPT_DIR/src-tauri/tauri.conf.json"
-
-  if [ -f "$local_config" ]; then
-    VERSION="$(
-      sed -nE 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' \
-        "$local_config" |
-        head -n 1
-    )"
-  fi
-
-  if [ -n "$VERSION" ]; then
-    dev "version from local tauri.conf.json: $VERSION"
-    return
-  fi
-
-  local remote_config="$TMP_ROOT/tauri.conf.json"
-
-  if ! http_get \
-    "https://raw.githubusercontent.com/$REPO/main/src-tauri/tauri.conf.json" \
-    "$remote_config"; then
-    fail \
-      "FF-I-002" \
-      "Impossible de contacter le serveur de téléchargement FileFlow. Vérifie la connexion Internet puis réessaie." \
-      "failed to download main/src-tauri/tauri.conf.json"
-  fi
-
-  VERSION="$(
-    sed -nE 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' \
-      "$remote_config" |
-      head -n 1
-  )"
-
-  [ -n "$VERSION" ] ||
-    fail \
-      "FF-I-011" \
-      "La version FileFlow disponible n’a pas pu être déterminée." \
-      "version key missing in remote tauri.conf.json"
-}
-
-validate_version() {
-  case "$VERSION" in
-    ''|*[!0-9.]*)
-      fail \
-        "FF-I-011" \
-        "La version FileFlow demandée est invalide." \
-        "invalid version string: $VERSION"
-      ;;
-  esac
-
-  if ! printf '%s' "$VERSION" |
-      grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-    fail \
-      "FF-I-011" \
-      "La version FileFlow demandée est invalide." \
-      "version does not match X.Y.Z: $VERSION"
-  fi
-}
-
-sha256_file() {
-  local file="$1"
-
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$file" | awk '{print $1}'
-    return
-  fi
-
-  if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$file" | awk '{print $1}'
-    return
-  fi
-
-  fail \
-    "FF-I-010" \
-    "La vérification de sécurité SHA-256 n’est pas disponible sur cette machine." \
-    "neither sha256sum nor shasum is available"
-}
-
-verify_checksum() {
-  local file="$1"
-  local checksum_file="$2"
-  local name
-  local expected
-  local actual
-
-  STEP="vérification d’intégrité"
-
-  name="$(basename "$file")"
-
-  expected="$(
-    awk -v name="$name" '
-      {
-        path=$2
-        sub(/^\*/, "", path)
-        n=split(path, parts, "/")
-        if (parts[n] == name) {
-          print $1
-          exit
-        }
-      }
-    ' "$checksum_file"
-  )"
-
-  [ -n "$expected" ] ||
-    fail \
-      "FF-I-004" \
-      "Le fichier de contrôle de cette version ne contient pas le paquet attendu. L’installation a été arrêtée par sécurité." \
-      "checksum entry not found for $name"
-
-  actual="$(sha256_file "$file")"
-
-  [ "$expected" = "$actual" ] ||
-    fail \
-      "FF-I-004" \
-      "Le paquet téléchargé ne correspond pas à la signature d’intégrité publiée. Il ne sera pas installé." \
-      "checksum mismatch expected=$expected actual=$actual file=$name"
-
-  dev "SHA256 verified: $actual"
-}
-
-download_release_asset() {
-  local asset="$1"
-  local destination="$2"
-
-  DOWNLOAD_URL="https://github.com/$REPO/releases/download/$TAG/$asset"
-
-  if ! http_get "$DOWNLOAD_URL" "$destination"; then
-    fail \
-      "FF-I-003" \
-      "Cette version de FileFlow n’est pas encore publiée pour cette plateforme, ou le téléchargement est momentanément indisponible." \
-      "release asset download failed: tag=$TAG asset=$asset"
-  fi
-}
-
-download_checksum() {
-  local checksum_name="$1"
-  local destination="$2"
-  local url="https://github.com/$REPO/releases/download/$TAG/$checksum_name"
-
-  if ! http_get "$url" "$destination"; then
-    fail \
-      "FF-I-004" \
-      "Le fichier de contrôle SHA-256 de la release est introuvable. L’installation a été arrêtée par sécurité." \
-      "checksum file download failed: $url"
-  fi
-}
-
-resolve_version
-validate_version
-
-say ""
-say "FileFlow $VERSION"
-say "Plateforme détectée : $OS / $ARCH"
-dev "repository=$REPO"
-
 case "$OS" in
-  Darwin)
-    STEP="détection macOS"
-
-    case "$ARCH" in
-      arm64|aarch64)
-        ASSET="FileFlow-macOS-arm64.dmg"
-        ;;
-      x86_64|amd64)
-        ASSET="FileFlow-macOS-x64.dmg"
-        ;;
-      *)
-        fail \
-          "FF-I-001" \
-          "Cette architecture Mac n’est pas prise en charge par FileFlow." \
-          "unsupported macOS architecture: $ARCH"
-        ;;
-    esac
-
-    TAG="macos-v$VERSION"
-    CHECKSUM_NAME="SHA256SUMS-macos"
-    ;;
-
-  Linux)
-    STEP="détection Linux"
-
-    case "$ARCH" in
-      x86_64|amd64)
-        RELEASE_ARCH="x64"
-        ;;
-      arm64|aarch64)
-        RELEASE_ARCH="arm64"
-        ;;
-      *)
-        fail \
-          "FF-I-001" \
-          "Cette architecture Linux n’est pas prise en charge par FileFlow." \
-          "unsupported Linux architecture: $ARCH"
-        ;;
-    esac
-
-    TAG="linux-v$VERSION"
-    CHECKSUM_NAME="SHA256SUMS-linux"
-    ;;
-
-  *)
-    fail \
-      "FF-I-001" \
-      "Ce script est destiné à macOS et Linux. Sur Windows, utilise install.ps1." \
-      "unsupported Unix bootstrap platform: $OS"
+  MINGW*|MSYS*|CYGWIN*)
+    command -v powershell.exe >/dev/null 2>&1 || { echo "PowerShell Windows introuvable." >&2; exit 1; }
+    ARGS=(); [ "$MODE" = dev ] && ARGS+=("-Mode" "dev"); [ "$FORCE" -eq 1 ] && ARGS+=("-Force"); [ "$NO_LAUNCH" -eq 1 ] && ARGS+=("-NoLaunch")
+    exec powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ROOT/install.ps1" "${ARGS[@]}"
     ;;
 esac
 
-CHECKSUM_FILE="$TMP_ROOT/$CHECKSUM_NAME"
-download_checksum "$CHECKSUM_NAME" "$CHECKSUM_FILE"
+command -v git >/dev/null 2>&1 || { echo "FileFlow nécessite uniquement Git pour l’installation initiale." >&2; exit 1; }
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "Exécute ./install.sh depuis le dépôt FileFlow cloné." >&2; exit 1; }
 
-if [ "$OS" = "Darwin" ]; then
-  STEP="téléchargement macOS"
-
-  PACKAGE="$TMP_ROOT/$ASSET"
-  download_release_asset "$ASSET" "$PACKAGE"
-  verify_checksum "$PACKAGE" "$CHECKSUM_FILE"
-
-  STEP="montage du DMG"
-  MOUNT_POINT="$TMP_ROOT/mount"
-  mkdir -p "$MOUNT_POINT"
-
-  if ! hdiutil attach \
-    "$PACKAGE" \
-    -nobrowse \
-    -readonly \
-    -mountpoint "$MOUNT_POINT" \
-    >/dev/null; then
-    fail \
-      "FF-I-007" \
-      "Le disque d’installation FileFlow n’a pas pu être ouvert." \
-      "hdiutil attach failed for $PACKAGE"
-  fi
-
-  SOURCE_APP="$(
-    find "$MOUNT_POINT" \
-      -maxdepth 3 \
-      -type d \
-      -name 'FileFlow.app' \
-      -print \
-      -quit
-  )"
-
-  [ -n "$SOURCE_APP" ] ||
-    fail \
-      "FF-I-007" \
-      "Le paquet téléchargé ne contient pas FileFlow.app." \
-      "FileFlow.app missing inside DMG"
-
-  STEP="contrôle de confiance macOS"
-
-  if ! codesign --verify --deep --strict "$SOURCE_APP" >/dev/null 2>&1; then
-    if [ "$ALLOW_UNSIGNED" -eq 1 ]; then
-      dev "WARNING: codesign verification failed but --allow-unsigned is active"
-    else
-      fail \
-        "FF-I-006" \
-        "macOS ne reconnaît pas cette copie de FileFlow comme correctement signée. L’installation est bloquée par sécurité." \
-        "codesign --verify failed"
-    fi
-  fi
-
-  if ! spctl --assess --type execute "$SOURCE_APP" >/dev/null 2>&1; then
-    if [ "$ALLOW_UNSIGNED" -eq 1 ]; then
-      dev "WARNING: Gatekeeper assessment failed but --allow-unsigned is active"
-    else
-      fail \
-        "FF-I-006" \
-        "Cette copie de FileFlow n’a pas été approuvée par Gatekeeper. Une release signée/notarisée est requise." \
-        "spctl assessment failed"
-    fi
-  fi
-
-  STEP="installation macOS"
-
-  if pgrep -f '/FileFlow\.app/' >/dev/null 2>&1; then
-    fail \
-      "FF-I-008" \
-      "FileFlow est actuellement ouvert. Ferme l’application puis relance l’installation." \
-      "running FileFlow.app process detected"
-  fi
-
-  if [ -w "/Applications" ]; then
-    INSTALL_BASE="/Applications"
-  else
-    INSTALL_BASE="$HOME/Applications"
-    mkdir -p "$INSTALL_BASE" ||
-      fail \
-        "FF-I-005" \
-        "Le dossier Applications utilisateur n’a pas pu être créé." \
-        "cannot create $INSTALL_BASE"
-  fi
-
-  DEST_APP="$INSTALL_BASE/FileFlow.app"
-  STAGE_APP="$INSTALL_BASE/.FileFlow.app.installing.$$"
-  BACKUP_APP="$INSTALL_BASE/.FileFlow.app.backup.$$"
-
-  rm -rf "$STAGE_APP" "$BACKUP_APP"
-
-  if ! ditto "$SOURCE_APP" "$STAGE_APP"; then
-    fail \
-      "FF-I-008" \
-      "FileFlow n’a pas pu être copié dans le dossier Applications." \
-      "ditto failed source=$SOURCE_APP destination=$STAGE_APP"
-  fi
-
-  if [ -e "$DEST_APP" ]; then
-    mv "$DEST_APP" "$BACKUP_APP" ||
-      fail \
-        "FF-I-005" \
-        "L’ancienne installation FileFlow ne peut pas être remplacée. Vérifie les permissions du dossier Applications." \
-        "cannot move existing app to backup"
-  fi
-
-  if ! mv "$STAGE_APP" "$DEST_APP"; then
-    [ -e "$BACKUP_APP" ] && mv "$BACKUP_APP" "$DEST_APP" || true
-    fail \
-      "FF-I-008" \
-      "La nouvelle version n’a pas pu être activée. L’ancienne installation a été restaurée si possible." \
-      "atomic activation failed"
-  fi
-
-  rm -rf "$BACKUP_APP"
-
-  say ""
-  say "✓ FileFlow $VERSION est installé dans :"
-  say "  $DEST_APP"
-  say "✓ L’application est disponible dans Applications, Launchpad et Spotlight."
-
-  if [ "$NO_LAUNCH" -eq 0 ]; then
-    STEP="lancement macOS"
-
-    if ! open "$DEST_APP"; then
-      fail \
-        "FF-I-009" \
-        "FileFlow est installé, mais macOS n’a pas pu le lancer automatiquement. Ouvre-le depuis Applications." \
-        "open failed for $DEST_APP"
-    fi
-
-    say "✓ FileFlow a été lancé."
-  fi
-
-  exit 0
+REMOTE="${FILEFLOW_INSTALL_REMOTE:-origin}"
+TMP=""; MOUNT=""; REF=""
+if [ "$OS" = Darwin ]; then
+  LOG_DIR="$HOME/Library/Logs/FileFlow"; STATE_DIR="$HOME/Library/Application Support/FileFlow"
+else
+  LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/fileflow"; STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/fileflow"
 fi
+mkdir -p "$LOG_DIR" "$STATE_DIR"
+LOG="$LOG_DIR/install-$(date '+%Y%m%d-%H%M%S').log"; MARKER="$STATE_DIR/install.env"
+log(){ printf '%s [%s] %s\n' "$(date '+%F %T')" "$STEP" "$*" >>"$LOG" 2>/dev/null || true; }
+dev(){ log "[DEV] $*"; [ "$MODE" = dev ] && printf '[DEV] %s\n' "$*" || true; }
+fail(){ local c="$1" u="$2" d="${3:-$2}"; printf '\nFileFlow n’a pas pu terminer l’installation.\nCode : %s\n%s\n' "$c" "$u"; if [ "$MODE" = dev ]; then printf '\n--- Diagnostic développeur ---\nÉtape       : %s\nOS/arch     : %s / %s\nDistribution: %s\nRéférence   : %s\nDétail      : %s\nLog         : %s\n' "$STEP" "$OS" "$ARCH" "${DIST_BRANCH:-non résolue}" "${REF:-non résolue}" "$d" "$LOG"; else printf 'Relance avec "./install.sh --mode dev" pour le diagnostic technique.\n'; fi; log "FAIL $c: $d"; exit 1; }
+cleanup(){ [ -z "${MOUNT:-}" ] || hdiutil detach "$MOUNT" >/dev/null 2>&1 || true; [ -z "${TMP:-}" ] || rm -rf "$TMP" >/dev/null 2>&1 || true; }
+trap cleanup EXIT INT TERM
+trap 's=$?; trap - ERR; fail FF-I-999 "Une erreur système inattendue est survenue." "exit=$s line=$LINENO command=$BASH_COMMAND"' ERR
 
-# -----------------------------------------------------------------
-# Linux
-# -----------------------------------------------------------------
+case "$OS/$ARCH" in
+  Linux/x86_64|Linux/amd64) TARGET="linux-x64"; DIST_BRANCH="distribution/linux-x64";;
+  Linux/aarch64|Linux/arm64) TARGET="linux-arm64"; DIST_BRANCH="distribution/linux-arm64";;
+  Darwin/arm64|Darwin/aarch64) TARGET="macos-arm64"; DIST_BRANCH="distribution/macos-arm64";;
+  Darwin/x86_64|Darwin/amd64) TARGET="macos-x64"; DIST_BRANCH="distribution/macos-x64";;
+  *) fail FF-I-001 "Cette plateforme n’est pas prise en charge par FileFlow." "unsupported=$OS/$ARCH";;
+esac
 
-STEP="sélection du paquet Linux"
+installed_ok(){ [ -f "$MARKER" ] || return 1; if [ "$OS" = Linux ]; then [ -x "$HOME/.local/opt/fileflow/FileFlow.AppImage" ]; else [ -d "/Applications/FileFlow.app" ] || [ -d "$HOME/Applications/FileFlow.app" ]; fi; }
+if [ "$FORCE" -eq 0 ] && installed_ok; then printf '\n✓ FileFlow est déjà installé.\nAucune réinstallation nécessaire.\nLe dépôt cloné peut être supprimé.\n'; exit 0; fi
 
-DISTRO_ID=""
-DISTRO_LIKE=""
+STEP="récupération du paquet"; REF="refs/fileflow/install/$TARGET"; git update-ref -d "$REF" >/dev/null 2>&1 || true
+if ! git fetch --quiet --depth=1 "$REMOTE" "refs/heads/$DIST_BRANCH:$REF"; then fail FF-I-003 "Le paquet FileFlow pour $TARGET n’est pas encore publié." "git fetch failed branch=$DIST_BRANCH"; fi
 
-if [ -r /etc/os-release ]; then
-  # shellcheck disable=SC1091
-  . /etc/os-release
-  DISTRO_ID="${ID:-}"
-  DISTRO_LIKE="${ID_LIKE:-}"
-fi
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/fileflow-install.XXXXXX")"; MANIFEST="$TMP/manifest.env"
+git show "$REF:manifest.env" >"$MANIFEST" || fail FF-I-004 "Le manifeste d’installation FileFlow est absent ou invalide."
+manifest(){ sed -n "s/^${1}=//p" "$MANIFEST" | head -n1; }
+VERSION="$(manifest VERSION)"; SOURCE_SHA="$(manifest SOURCE_SHA)"; PACKAGE_NAME="$(manifest PACKAGE_NAME)"; PACKAGE_SHA256="$(manifest PACKAGE_SHA256)"; PACKAGE_SIZE="$(manifest PACKAGE_SIZE)"; CHANNEL="$(manifest CHANNEL)"
+[ -n "$VERSION" ] && [ -n "$PACKAGE_NAME" ] && [ -n "$PACKAGE_SHA256" ] || fail FF-I-004 "Le manifeste FileFlow est incomplet."
+PACKAGE="$TMP/$PACKAGE_NAME"; : >"$PACKAGE"
+CHUNKS="$(git ls-tree -r --name-only "$REF" payload/ | LC_ALL=C sort)"; [ -n "$CHUNKS" ] || fail FF-I-004 "Le paquet FileFlow ne contient aucun fragment binaire."
+while IFS= read -r chunk; do [ -n "$chunk" ] || continue; dev "assemblage $chunk"; git show "$REF:$chunk" >>"$PACKAGE"; done <<<"$CHUNKS"
+ACTUAL_SIZE="$(wc -c <"$PACKAGE" | tr -d ' ')"; [ "$ACTUAL_SIZE" = "$PACKAGE_SIZE" ] || fail FF-I-004 "Le paquet FileFlow est incomplet." "size=$ACTUAL_SIZE expected=$PACKAGE_SIZE"
+sha256(){ if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'; elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'; else fail FF-I-010 "La vérification SHA-256 n’est pas disponible."; fi; }
+ACTUAL_SHA="$(sha256 "$PACKAGE")"; [ "$ACTUAL_SHA" = "$PACKAGE_SHA256" ] || fail FF-I-004 "Le contrôle d’intégrité FileFlow a échoué. Rien n’a été installé." "sha=$ACTUAL_SHA expected=$PACKAGE_SHA256"
+dev "version=$VERSION source=$SOURCE_SHA channel=$CHANNEL sha=$ACTUAL_SHA"
 
-dev "linux distro id=$DISTRO_ID like=$DISTRO_LIKE"
-
-install_linux_user_appimage() {
-  ASSET="FileFlow-Linux-${RELEASE_ARCH}.AppImage"
-  PACKAGE="$TMP_ROOT/$ASSET"
-
-  STEP="téléchargement AppImage"
-  download_release_asset "$ASSET" "$PACKAGE"
-  verify_checksum "$PACKAGE" "$CHECKSUM_FILE"
-
-  chmod +x "$PACKAGE"
-
-  STEP="installation Linux utilisateur"
-
-  APP_DIR="$HOME/.local/opt/fileflow"
-  BIN_DIR="$HOME/.local/bin"
-  APPS_DIR="$HOME/.local/share/applications"
-  ICON_DIR="$HOME/.local/share/icons/hicolor/256x256/apps"
-
-  mkdir -p "$APP_DIR" "$BIN_DIR" "$APPS_DIR" "$ICON_DIR" ||
-    fail \
-      "FF-I-005" \
-      "FileFlow ne peut pas écrire dans les dossiers d’applications de ton utilisateur." \
-      "cannot create Linux user install directories"
-
-  DEST_APPIMAGE="$APP_DIR/FileFlow.AppImage"
-  STAGE_APPIMAGE="$APP_DIR/.FileFlow.AppImage.installing.$$"
-
-  cp "$PACKAGE" "$STAGE_APPIMAGE" ||
-    fail \
-      "FF-I-008" \
-      "L’AppImage FileFlow n’a pas pu être installée." \
-      "copy to $STAGE_APPIMAGE failed"
-
-  chmod +x "$STAGE_APPIMAGE"
-
-  mv -f "$STAGE_APPIMAGE" "$DEST_APPIMAGE" ||
-    fail \
-      "FF-I-008" \
-      "La nouvelle version FileFlow n’a pas pu être activée." \
-      "rename to $DEST_APPIMAGE failed"
-
-  WRAPPER="$BIN_DIR/fileflow"
-
-  cat >"$WRAPPER" <<EOF
+if [ "$OS" = Linux ]; then
+  STEP="installation Linux"
+  APP_DIR="$HOME/.local/opt/fileflow"; BIN_DIR="$HOME/.local/bin"; APPS_DIR="$HOME/.local/share/applications"; ICON_DIR="$HOME/.local/share/icons/hicolor/256x256/apps"
+  mkdir -p "$APP_DIR" "$BIN_DIR" "$APPS_DIR" "$ICON_DIR"
+  APP="$APP_DIR/FileFlow.AppImage"; STAGE="$APP_DIR/.FileFlow.AppImage.installing.$$"; cp "$PACKAGE" "$STAGE"; chmod 0755 "$STAGE"; mv -f "$STAGE" "$APP"
+  cat >"$BIN_DIR/fileflow" <<'EOF'
 #!/usr/bin/env bash
-set -e
-APP="\$HOME/.local/opt/fileflow/FileFlow.AppImage"
-
-if [ ! -x "\$APP" ]; then
-  echo "FileFlow: application introuvable: \$APP" >&2
-  exit 1
-fi
-
-# Le mode extract-and-run évite toute dépendance à FUSE/libfuse2.
-APPIMAGE_EXTRACT_AND_RUN=1 exec "\$APP" "\$@"
+set -euo pipefail
+APP="$HOME/.local/opt/fileflow/FileFlow.AppImage"
+[ -x "$APP" ] || { echo "FileFlow est introuvable: $APP" >&2; exit 1; }
+export APPIMAGE_EXTRACT_AND_RUN=1
+exec "$APP" "$@"
 EOF
-
-  chmod +x "$WRAPPER"
-
-  STEP="intégration au menu Linux"
-
-  ICON_PATH="$ICON_DIR/fileflow.png"
-  EXTRACT_DIR="$TMP_ROOT/appimage-extract"
-  mkdir -p "$EXTRACT_DIR"
-
-  if (
-    cd "$EXTRACT_DIR"
-    "$DEST_APPIMAGE" --appimage-extract >/dev/null 2>&1
-  ); then
-    FOUND_ICON="$(
-      find "$EXTRACT_DIR/squashfs-root" \
-        -type f \
-        \( -iname '*256*.png' -o -iname 'icon.png' -o -iname '*fileflow*.png' \) \
-        -print \
-        -quit 2>/dev/null || true
-    )"
-
-    if [ -n "$FOUND_ICON" ]; then
-      cp "$FOUND_ICON" "$ICON_PATH" || true
-    fi
-  fi
-
-  DESKTOP="$APPS_DIR/fileflow.desktop"
-
-  cat >"$DESKTOP" <<EOF
+  chmod 0755 "$BIN_DIR/fileflow"
+  ICON_SOURCE=""; for c in "$ROOT/src-tauri/icons/128x128@2x.png" "$ROOT/src-tauri/icons/128x128.png" "$ROOT/src-tauri/icons/icon.png"; do [ -f "$c" ] && { ICON_SOURCE="$c"; break; }; done
+  if [ -n "$ICON_SOURCE" ]; then cp "$ICON_SOURCE" "$ICON_DIR/fileflow.png"; ICON_VALUE="$ICON_DIR/fileflow.png"; else ICON_VALUE="application-x-executable"; fi
+  cat >"$APPS_DIR/fileflow.desktop" <<EOF
 [Desktop Entry]
 Type=Application
+Version=1.0
 Name=FileFlow
-GenericName=File conversion utility
-Comment=Conversion, compression, organisation et automatisation locale de fichiers
-Exec="$WRAPPER"
-Icon=$ICON_PATH
+GenericName=Gestionnaire de fichiers
+Comment=Conversion, compression et automatisation de fichiers
+Exec=$BIN_DIR/fileflow
+Icon=$ICON_VALUE
 Terminal=false
-Categories=Utility;
+Categories=Utility;FileTools;
 StartupNotify=true
 StartupWMClass=FileFlow
 EOF
-
-  chmod 0644 "$DESKTOP"
-
-  command -v update-desktop-database >/dev/null 2>&1 &&
-    update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
-
-  command -v gtk-update-icon-cache >/dev/null 2>&1 &&
-    gtk-update-icon-cache -f "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 || true
-
-  say ""
-  say "✓ FileFlow $VERSION est installé pour ton utilisateur."
-  say "✓ Il apparaît dans le menu/centre des applications Linux."
-  say "✓ Commande terminal : $WRAPPER"
-
-  if [ "$NO_LAUNCH" -eq 0 ]; then
-    STEP="lancement Linux"
-
-    if [ "$MODE" = "dev" ]; then
-      "$WRAPPER" >>"$LOG_FILE" 2>&1 &
-    else
-      nohup "$WRAPPER" >/dev/null 2>&1 &
-    fi
-
-    say "✓ FileFlow a été lancé."
-  fi
-}
-
-install_linux_native() {
-  local kind="$1"
-
-  if [ "$kind" = "deb" ]; then
-    ASSET="FileFlow-Linux-${RELEASE_ARCH}.deb"
-  else
-    ASSET="FileFlow-Linux-${RELEASE_ARCH}.rpm"
-  fi
-
-  PACKAGE="$TMP_ROOT/$ASSET"
-
-  STEP="téléchargement paquet Linux"
-  download_release_asset "$ASSET" "$PACKAGE"
-  verify_checksum "$PACKAGE" "$CHECKSUM_FILE"
-
-  STEP="installation paquet Linux"
-
-  if ! command -v sudo >/dev/null 2>&1; then
-    dev "sudo absent, fallback AppImage user"
-    install_linux_user_appimage
-    return
-  fi
-
-  if [ "$kind" = "deb" ]; then
-    if ! sudo apt-get install -y "$PACKAGE"; then
-      dev "apt install failed, fallback AppImage user"
-      install_linux_user_appimage
-      return
-    fi
-  else
-    if command -v dnf >/dev/null 2>&1; then
-      if ! sudo dnf install -y "$PACKAGE"; then
-        dev "dnf install failed, fallback AppImage user"
-        install_linux_user_appimage
-        return
-      fi
-    elif command -v rpm >/dev/null 2>&1; then
-      if ! sudo rpm -Uvh "$PACKAGE"; then
-        dev "rpm install failed, fallback AppImage user"
-        install_linux_user_appimage
-        return
-      fi
-    else
-      install_linux_user_appimage
-      return
-    fi
-  fi
-
-  say ""
-  say "✓ FileFlow $VERSION est installé comme application système."
-  say "✓ Il apparaît dans le menu/centre des applications Linux."
-
-  if [ "$NO_LAUNCH" -eq 0 ]; then
-    STEP="lancement Linux"
-
-    DESKTOP_FILE="$(
-      find /usr/share/applications "$HOME/.local/share/applications" \
-        -maxdepth 1 \
-        -type f \
-        -iname '*fileflow*.desktop' \
-        -print \
-        -quit 2>/dev/null || true
-    )"
-
-    if [ -n "$DESKTOP_FILE" ] && command -v gtk-launch >/dev/null 2>&1; then
-      DESKTOP_ID="$(basename "$DESKTOP_FILE" .desktop)"
-      gtk-launch "$DESKTOP_ID" >/dev/null 2>&1 &
-      say "✓ FileFlow a été lancé."
-      return
-    fi
-
-    for candidate in fileflow fileflow-desktop FileFlow; do
-      if command -v "$candidate" >/dev/null 2>&1; then
-        nohup "$candidate" >/dev/null 2>&1 &
-        say "✓ FileFlow a été lancé."
-        return
-      fi
-    done
-
-    say "✓ Installation terminée. Lance FileFlow depuis le menu Applications."
-    dev "package installed but executable/desktop launcher discovery failed"
-  fi
-}
-
-if [ "$LINUX_USER" -eq 1 ]; then
-  install_linux_user_appimage
-  exit 0
+  chmod 0644 "$APPS_DIR/fileflow.desktop"; rm -f "$APPS_DIR/fileflow-candidate.desktop" "$BIN_DIR/fileflow-candidate"
+  command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
+  command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 || true
+  APP_LOCATION="$APP"
+else
+  STEP="installation macOS"; MOUNT="$TMP/mount"; mkdir -p "$MOUNT"; hdiutil attach "$PACKAGE" -nobrowse -readonly -mountpoint "$MOUNT" >/dev/null || fail FF-I-007 "Le disque d’installation FileFlow n’a pas pu être monté."
+  SOURCE_APP="$(find "$MOUNT" -maxdepth 3 -type d -name 'FileFlow.app' -print -quit)"; [ -n "$SOURCE_APP" ] || fail FF-I-007 "FileFlow.app est absent du paquet macOS."
+  if [ "$CHANNEL" = production ]; then codesign --verify --deep --strict "$SOURCE_APP" >/dev/null 2>&1 || fail FF-I-006 "La signature de FileFlow n’est pas valide."; spctl --assess --type execute "$SOURCE_APP" >/dev/null 2>&1 || fail FF-I-006 "FileFlow n’est pas approuvé par Gatekeeper."; else dev "candidate: notarisation production non imposée"; fi
+  if [ -w /Applications ]; then APP_LOCATION="/Applications/FileFlow.app"; else mkdir -p "$HOME/Applications"; APP_LOCATION="$HOME/Applications/FileFlow.app"; fi
+  STAGE="${APP_LOCATION}.installing.$$"; BACKUP="${APP_LOCATION}.backup.$$"; rm -rf "$STAGE" "$BACKUP"; ditto "$SOURCE_APP" "$STAGE"; [ ! -e "$APP_LOCATION" ] || mv "$APP_LOCATION" "$BACKUP"
+  if ! mv "$STAGE" "$APP_LOCATION"; then [ -e "$BACKUP" ] && mv "$BACKUP" "$APP_LOCATION" || true; fail FF-I-008 "La nouvelle version FileFlow n’a pas pu être activée."; fi
+  rm -rf "$BACKUP"; hdiutil detach "$MOUNT" >/dev/null; MOUNT=""
 fi
 
-case " $DISTRO_ID $DISTRO_LIKE " in
-  *" debian "*|*" ubuntu "*)
-    if command -v apt-get >/dev/null 2>&1; then
-      install_linux_native deb
-    else
-      install_linux_user_appimage
-    fi
-    ;;
-  *" fedora "*|*" rhel "*|*" centos "*|*" rocky "*|*" almalinux "*)
-    install_linux_native rpm
-    ;;
-  *)
-    install_linux_user_appimage
-    ;;
-esac
+STEP="enregistrement"; cat >"$MARKER" <<EOF
+VERSION=$VERSION
+SOURCE_SHA=$SOURCE_SHA
+TARGET=$TARGET
+CHANNEL=$CHANNEL
+INSTALLED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+APP_LOCATION=$APP_LOCATION
+EOF
+printf '\n============================================================\n✓ FileFlow %s est installé définitivement\n============================================================\nApplication : %s\nPlateforme  : %s\n\nLe dépôt cloné n’est plus nécessaire et peut être supprimé.\n' "$VERSION" "$APP_LOCATION" "$TARGET"
+if [ "$NO_LAUNCH" -eq 0 ]; then STEP="lancement"; if [ "$OS" = Linux ]; then nohup "$HOME/.local/bin/fileflow" >/dev/null 2>&1 & else open "$APP_LOCATION"; fi; printf '✓ FileFlow a été lancé.\n'; fi

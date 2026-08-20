@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: native-windows-${{ github.ref }}
@@ -118,3 +118,20 @@ jobs:
         run: |
           node scripts/release/validate-distribution.mjs --target x86_64-pc-windows-msvc
           node scripts/release/smoke-packaged-app.mjs --target x86_64-pc-windows-msvc
+
+      - name: Collect candidate artifacts
+        shell: pwsh
+        run: node scripts/release/collect-artifacts.mjs --target x86_64-pc-windows-msvc
+
+      - name: Upload Windows candidate
+        uses: actions/upload-artifact@v7
+        with:
+          name: fileflow-windows-x86_64-pc-windows-msvc-${{ github.event.pull_request.head.sha || github.sha }}-candidate
+          path: dist/release/x86_64-pc-windows-msvc
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish Git-only install payload
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+        shell: pwsh
+        run: python scripts/release/publish-git-payload.py --target 'x86_64-pc-windows-msvc' --root 'dist/release/x86_64-pc-windows-msvc'
