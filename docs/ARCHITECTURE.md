@@ -19,6 +19,8 @@ Angular 22 UI
    │ typed Tauri commands + bounded Channels
    ▼
 Tauri desktop shell
+   ├── local identity + in-memory session gate
+   ├── first-run onboarding/profile
    ├── native dialogs
    ├── drag/drop
    ├── tray navigation
@@ -50,10 +52,27 @@ FileFlow Core
           ├── LibreOffice
           ├── OCRmyPDF
           ├── Tesseract
-          ├── Pandoc
+          ├── Pandoc (sandboxed)
           ├── 7-Zip
+          ├── Zstandard
+          ├── LZ4
           └── ExifTool
 ```
+
+
+## Human-first experience boundary
+
+The default experience is intentionally guided rather than technical. Angular presents goals such as “make this PDF smaller”, “convert my iPhone photos” or “compress this folder”. Engine names, codecs, resource quotas and detailed output policies remain behind advanced views.
+
+On first launch, the desktop shell guides the user through local account creation/sign-in, a default FileFlow results directory, safe defaults and a short tour. The configured results directory is then used automatically by guided workflows. Help is searchable in plain language and is linked to the same capability catalog used by the executor, so guides cannot silently drift into a second independent feature list.
+
+## Local identity and session boundary
+
+The current identity model is intentionally **device-local**. It is not presented as cloud authentication or multi-device sync. SQLite stores account/profile/onboarding records and a salted password derivation; plaintext passwords and session tokens are not persisted. Password derivation runs off the async execution thread.
+
+A successful login creates a short-lived opaque session identifier held only in Tauri/Angular process memory. Expiration or logout clears the session, cancels active jobs and drops the current-session output registry. Filesystem-sensitive Tauri commands (workspace intake, execution, analysis, history, recipes and favourites) require an active backend session in addition to Angular route guards.
+
+Non-secret appearance preferences may load before login so the welcome screen can preserve theme/zoom/accessibility choices. A future networked identity service can replace the local authentication boundary without moving filesystem execution or document contents into the cloud.
 
 ## Intake and workspace model
 
@@ -159,9 +178,12 @@ This avoids fully hashing every file in a large directory while still requiring 
 
 SQLite runs in WAL mode and stores:
 
-- history metadata;
-- favourite actions;
-- recipes;
+- local account/profile/onboarding metadata;
+- password derivation material (salt + derived hash, never plaintext);
+- account-scoped history metadata;
+- account-scoped favourite actions;
+- account-scoped recipes;
+- account-aware preferences with a non-secret pre-login fallback;
 - settings/schema metadata.
 
 Document contents are never stored in SQLite.
