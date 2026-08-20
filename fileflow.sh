@@ -17,6 +17,10 @@ ok() {
   printf '[OK] %s\n' "$*"
 }
 
+# ============================================================
+# Dépendances locales
+# ============================================================
+
 command -v git >/dev/null 2>&1 ||
   die "git est requis"
 
@@ -27,36 +31,40 @@ gh auth status >/dev/null 2>&1 ||
   die "GitHub CLI non authentifié. Lance: gh auth login"
 
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
-  die "Ce script doit être exécuté depuis le dépôt FileFlow"
+  die "Ce script doit être exécuté dans le dépôt FileFlow"
 
 if [ -n "$(git status --porcelain)" ]; then
-  die "Le dépôt contient des modifications locales. Commit/stash avant lancement."
+  die "Le dépôt contient des modifications locales. Commit/stash requis."
 fi
 
-# ------------------------------------------------------------
+# ============================================================
 # Synchronisation Git
-# ------------------------------------------------------------
+# ============================================================
 
 BRANCH="$(git branch --show-current)"
 
-if [ -n "$BRANCH" ]; then
-  info "Synchronisation Git : $BRANCH"
-  git pull --ff-only
-else
-  info "HEAD détaché : git pull ignoré"
-fi
+[ -n "$BRANCH" ] ||
+  die "HEAD détaché non supporté par le launcher"
+
+info "Synchronisation Git : $BRANCH"
+
+git pull --ff-only
 
 HEAD_SHA="$(git rev-parse HEAD)"
 SHORT_SHA="$(git rev-parse --short HEAD)"
 
-REPO="$(gh repo view --json nameWithOwner --jq '.nameWithOwner')"
+REPO="$(
+  gh repo view \
+    --json nameWithOwner \
+    --jq '.nameWithOwner'
+)"
 
 ok "Repository : $REPO"
 ok "Commit     : $SHORT_SHA"
 
-# ------------------------------------------------------------
-# Plateforme
-# ------------------------------------------------------------
+# ============================================================
+# Détection OS / architecture
+# ============================================================
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -103,11 +111,7 @@ case "$OS" in
     ;;
 
   MINGW*|MSYS*|CYGWIN*)
-    WORKFLOW="native-windows.yml"
-    TARGET="x86_64-pc-windows-msvc"
-    ARTIFACT="FileFlow-windows-$TARGET"
-
-    die "Support launcher Windows activé lorsque Native Windows sera certifié."
+    die "Windows sera activé dès que Native Windows sera certifié."
     ;;
 
   *)
@@ -117,7 +121,7 @@ esac
 
 echo
 echo "============================================================"
-echo "FileFlow CI candidate"
+echo "FileFlow"
 echo "============================================================"
 echo "OS       : $OS"
 echo "Arch     : $ARCH"
@@ -127,33 +131,39 @@ echo "Artifact : $ARTIFACT"
 echo "Commit   : $SHORT_SHA"
 echo "============================================================"
 
-# ------------------------------------------------------------
-# Chercher un run SUCCESS contenant exactement l'artefact voulu
-# pour exactement le commit checkouté.
-# ------------------------------------------------------------
+# ============================================================
+# Vérifier si un run contient réellement notre artefact
+# ============================================================
 
-find_artifact_run() {
+artifact_exists() {
+  local run_id="$1"
+  local found
+
+  found="$(
+    gh api \
+      "repos/$REPO/actions/runs/$run_id/artifacts" \
+      --jq ".artifacts[]
+        | select(.name == \"$ARTIFACT\" and .expired == false)
+        | .id" \
+      2>/dev/null \
+      | head -n 1 \
+      || true
+  )"
+
+  [ -n "$found" ]
+}
+
+# ============================================================
+# Chercher un SUCCESS pour exactement HEAD
+# ============================================================
+
+find_success_artifact_run() {
   local run_id
 
   while IFS= read -r run_id; do
     [ -n "$run_id" ] || continue
 
-    local found
-
-    found="$(
-      gh api \
-        "repos/$REPO/actions/runs/$run_id/artifacts" \
-        --jq \
-        --arg artifact "$ARTIFACT" \
-        '.artifacts[]
-         | select(.name == $artifact and .expired == false)
-         | .id' \
-        2>/dev/null \
-        | head -n1 \
-        || true
-    )"
-
-    if [ -n "$found" ]; then
+    if artifact_exists "$run_id"; then
       printf '%s\n' "$run_id"
       return 0
     fi
@@ -162,7 +172,7 @@ find_artifact_run() {
       --workflow "$WORKFLOW" \
       --commit "$HEAD_SHA" \
       --status success \
-      --limit 20 \
+      --limit 30 \
       --json databaseId \
       --jq '.[].databaseId'
   )
@@ -170,70 +180,121 @@ find_artifact_run() {
   return 1
 }
 
-RUN_ID="$(find_artifact_run || true)"
+# ============================================================
+# Chercher un workflow_dispatch déjà actif
+# ============================================================
 
-# ------------------------------------------------------------
-# Aucun artifact pour ce SHA:
-# déclencher uniquement la plateforme locale.
-# ------------------------------------------------------------
+find_active_run() {
+  gh run list \
+    --workflow "$WORKFLOW" \
+    --commit "$HEAD_SHA" \
+    --event workflow_dispatch \
+    --limit 30 \
+    --json databaseId,status,createdAt \
+    --jq '
+      [
+        .[]
+        | select(
+            .status == "queued"
+            or .status == "in_progress"
+            or .status == "waiting"
+            or .status == "requested"
+            or .status == "pending"
+          )
+      ]
+      | sort_by(.createdAt)
+      | reverse
+      | .[0].databaseId // empty
+    '
+}
 
-if [ -z "$RUN_ID" ]; then
-  info "Aucun artefact $TARGET disponible pour $SHORT_SHA"
-  info "Déclenchement de $WORKFLOW uniquement"
+latest_dispatch_run() {
+  gh run list \
+    --workflow "$WORKFLOW" \
+    --commit "$HEAD_SHA" \
+    --event workflow_dispatch \
+    --limit 30 \
+    --json databaseId,createdAt \
+    --jq '
+      sort_by(.createdAt)
+      | reverse
+      | .[0].databaseId // empty
+    '
+}
 
-  REF="$BRANCH"
+# ============================================================
+# Résolution du run
+# ============================================================
 
-  if [ -z "$REF" ]; then
-    REF="$HEAD_SHA"
+RUN_ID="$(find_success_artifact_run || true)"
+
+if [ -n "$RUN_ID" ]; then
+  ok "Artefact existant trouvé dans le run $RUN_ID"
+else
+  RUN_ID="$(find_active_run || true)"
+
+  if [ -n "$RUN_ID" ]; then
+    info "Workflow déjà actif pour $SHORT_SHA : $RUN_ID"
+  else
+    info "Aucun artefact $TARGET pour $SHORT_SHA"
+    info "Déclenchement de $WORKFLOW uniquement"
+
+    BEFORE_ID="$(latest_dispatch_run || true)"
+
+    gh workflow run "$WORKFLOW" --ref "$BRANCH"
+
+    info "Recherche du run créé..."
+
+    RUN_ID=""
+
+    for _ in $(seq 1 30); do
+      CANDIDATE="$(latest_dispatch_run || true)"
+
+      if [ -n "$CANDIDATE" ] && [ "$CANDIDATE" != "$BEFORE_ID" ]; then
+        RUN_ID="$CANDIDATE"
+        break
+      fi
+
+      sleep 2
+    done
+
+    [ -n "$RUN_ID" ] ||
+      die "Impossible de retrouver le workflow déclenché"
   fi
 
-  gh workflow run "$WORKFLOW" --ref "$REF"
+  info "GitHub Actions run : $RUN_ID"
 
-  info "Recherche du nouveau run..."
+  gh run watch "$RUN_ID" --exit-status ||
+    die "Le workflow $WORKFLOW a échoué"
 
-  RUN_ID=""
+  # GitHub peut avoir une petite latence entre la fin du run
+  # et la disponibilité de l'artefact via l'API.
+  info "Vérification de l'artefact $ARTIFACT"
 
-  for _ in $(seq 1 30); do
-    RUN_ID="$(
-      gh run list \
-        --workflow "$WORKFLOW" \
-        --event workflow_dispatch \
-        --limit 30 \
-        --json databaseId,headSha,createdAt \
-        --jq \
-        --arg sha "$HEAD_SHA" \
-        '[.[] | select(.headSha == $sha)]
-         | sort_by(.createdAt)
-         | reverse
-         | .[0].databaseId // empty'
-    )"
+  FOUND=""
 
-    if [ -n "$RUN_ID" ]; then
+  for _ in $(seq 1 20); do
+    RUN_WITH_ARTIFACT="$(find_success_artifact_run || true)"
+
+    if [ -n "$RUN_WITH_ARTIFACT" ]; then
+      FOUND="$RUN_WITH_ARTIFACT"
       break
     fi
 
     sleep 2
   done
 
-  [ -n "$RUN_ID" ] ||
-    die "Impossible de retrouver le workflow déclenché"
-
-  info "GitHub Actions run: $RUN_ID"
-
-  gh run watch "$RUN_ID" --exit-status ||
-    die "Le workflow $WORKFLOW a échoué"
-
-  RUN_ID="$(find_artifact_run || true)"
-
-  [ -n "$RUN_ID" ] ||
+  [ -n "$FOUND" ] ||
     die "Workflow vert mais artefact '$ARTIFACT' introuvable"
+
+  RUN_ID="$FOUND"
 fi
 
-ok "Run avec artefact: $RUN_ID"
+ok "Run sélectionné : $RUN_ID"
 
-# ------------------------------------------------------------
+# ============================================================
 # Téléchargement
-# ------------------------------------------------------------
+# ============================================================
 
 CACHE="$ROOT/.fileflow"
 DEST="$CACHE/artifacts/$HEAD_SHA/$TARGET"
@@ -249,11 +310,12 @@ gh run download "$RUN_ID" \
 
 ok "Artefact téléchargé"
 
-find "$DEST" -type f -maxdepth 8 -print
+echo
+find "$DEST" -maxdepth 10 -type f -print
 
-# ------------------------------------------------------------
+# ============================================================
 # macOS
-# ------------------------------------------------------------
+# ============================================================
 
 if [ "$OS" = "Darwin" ]; then
   DMG="$(
@@ -265,11 +327,11 @@ if [ "$OS" = "Darwin" ]; then
   )"
 
   [ -n "$DMG" ] ||
-    die "Aucun DMG trouvé dans l'artefact"
+    die "Aucun DMG trouvé"
 
-  info "DMG: $(basename "$DMG")"
+  ok "DMG : $(basename "$DMG")"
 
-  MOUNT="$CACHE/mount"
+  MOUNT="$CACHE/mount-$TARGET"
   RUNTIME="$CACHE/runtime/$TARGET"
 
   rm -rf "$MOUNT" "$RUNTIME"
@@ -280,6 +342,8 @@ if [ "$OS" = "Darwin" ]; then
   }
 
   trap cleanup_mount EXIT INT TERM
+
+  info "Montage du DMG"
 
   hdiutil attach \
     "$DMG" \
@@ -298,28 +362,33 @@ if [ "$OS" = "Darwin" ]; then
   )"
 
   [ -n "$APP" ] ||
-    die "FileFlow.app introuvable dans le DMG"
+    die "Application .app introuvable dans le DMG"
 
-  info "Extraction de l'application"
+  mkdir -p "$RUNTIME"
+
+  info "Installation dans le runtime FileFlow"
 
   ditto "$APP" "$RUNTIME/FileFlow.app"
 
   cleanup_mount
   trap - EXIT INT TERM
 
-  info "Lancement FileFlow"
+  info "Lancement de FileFlow"
 
   open "$RUNTIME/FileFlow.app"
 
   echo
-  echo "FileFlow lancé depuis:"
+  echo "============================================================"
+  echo "FileFlow lancé"
+  echo "============================================================"
   echo "$RUNTIME/FileFlow.app"
+
   exit 0
 fi
 
-# ------------------------------------------------------------
+# ============================================================
 # Linux
-# ------------------------------------------------------------
+# ============================================================
 
 if [ "$OS" = "Linux" ]; then
   APPIMAGE="$(
@@ -331,13 +400,11 @@ if [ "$OS" = "Linux" ]; then
   )"
 
   [ -n "$APPIMAGE" ] ||
-    die "Aucun AppImage trouvé dans l'artefact"
+    die "Aucun AppImage trouvé"
 
   chmod +x "$APPIMAGE"
 
-  info "Lancement FileFlow"
-  echo "$APPIMAGE"
-  echo
+  info "Lancement de FileFlow"
 
-  exec "$APPIMAGE"
+  exec "$APPIMAGE" "$@"
 fi
