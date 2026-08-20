@@ -1,0 +1,132 @@
+name: FileFlow Package Smoke
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Package smoke / ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS ARM64
+            os: macos-15
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          - name: macOS Intel
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: app,dmg
+          - name: Windows x64
+            os: windows-2025
+            target: x86_64-pc-windows-msvc
+            bundles: nsis,msi
+          - name: Linux x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,appimage,rpm
+          - name: Linux ARM64
+            os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            bundles: deb,appimage,rpm
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Linux prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+            patchelf xdg-utils libfuse2 rpm xvfb file binutils
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.22.3'
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Enable pnpm
+        shell: bash
+        run: corepack enable && corepack prepare pnpm@11.20.0 --activate
+
+      - name: Resolve pnpm store
+        id: pnpm-store
+        shell: bash
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v5
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-package-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-package-${{ runner.os }}-${{ runner.arch }}-
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.1'
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          shared-key: package-${{ matrix.target }}
+
+      - name: Install dependencies
+        shell: bash
+        run: pnpm install --frozen-lockfile
+
+      - name: Preflight and source verification
+        shell: bash
+        run: |
+          pnpm run ci:preflight
+          pnpm run verify
+
+      - name: Stage optional engine layout
+        shell: bash
+        run: python scripts/release/stage-engines.py --target '${{ matrix.target }}' --mode optional
+
+      - name: Harden optional engine layout
+        shell: bash
+        run: python scripts/release/harden-engine-pack.py --target '${{ matrix.target }}'
+
+      - name: Configure non-production package
+        shell: bash
+        run: python scripts/release/generate-release-config.py --target '${{ matrix.target }}'
+
+      - name: Build native package
+        shell: bash
+        run: pnpm exec tauri build --target '${{ matrix.target }}' --bundles '${{ matrix.bundles }}' --config src-tauri/tauri.release.conf.json
+
+      - name: Validate package structure
+        shell: bash
+        run: node scripts/release/validate-distribution.mjs --target '${{ matrix.target }}'
+
+      - name: Smoke packaged runtime
+        if: runner.os != 'Linux'
+        shell: bash
+        run: node scripts/release/smoke-packaged-app.mjs --target '${{ matrix.target }}'
+
+      - name: Smoke packaged runtime / Xvfb
+        if: runner.os == 'Linux'
+        shell: bash
+        run: xvfb-run -a node scripts/release/smoke-packaged-app.mjs --target '${{ matrix.target }}'
+
+      - name: Recovery/cancellation stress suite
+        shell: bash
+        env:
+          FILEFLOW_STRESS_FILES: '2500'
+        run: pnpm run ci:stress

@@ -1,0 +1,148 @@
+name: FileFlow Engine Packs
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_url_template:
+        description: 'Immutable candidate URL containing {packVersion} and {target}'
+        required: true
+        type: string
+      mode:
+        description: 'Engine tier to certify'
+        required: true
+        default: core
+        type: choice
+        options: [core, full]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: engine-packs-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  certify:
+    name: Engines / ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS ARM64
+            os: macos-15
+            target: aarch64-apple-darwin
+          - name: macOS Intel
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+          - name: Windows x64
+            os: windows-2025
+            target: x86_64-pc-windows-msvc
+          - name: Linux x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - name: Linux ARM64
+            os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Linux inspection tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y file binutils patchelf
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Fetch immutable candidate pack
+        shell: bash
+        env:
+          FILEFLOW_ENGINE_PACK_URL_TEMPLATE: ${{ inputs.source_url_template }}
+          GITHUB_TOKEN: ${{ github.token }}
+          FILEFLOW_ENGINE_PACK_TOKEN: ${{ secrets.FILEFLOW_ENGINE_PACK_TOKEN }}
+        run: python scripts/release/fetch-engine-pack.py --target '${{ matrix.target }}'
+
+      - name: Stage candidate pack
+        shell: bash
+        run: python scripts/release/stage-engines.py --target '${{ matrix.target }}' --mode '${{ inputs.mode }}'
+
+      - name: Harden native dependencies
+        shell: bash
+        run: python scripts/release/harden-engine-pack.py --target '${{ matrix.target }}'
+
+      - name: Probe executables
+        shell: bash
+        run: python scripts/release/smoke-engines.py --mode '${{ inputs.mode }}'
+
+      - name: Functional engine fixtures
+        shell: bash
+        run: python scripts/release/functional-engine-tests.py --mode '${{ inputs.mode }}'
+
+      - name: Native dependency/architecture validation
+        shell: bash
+        run: python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}'
+
+      - name: Build certified immutable pack
+        shell: bash
+        run: >-
+          python scripts/release/make-engine-pack.py
+          --target '${{ matrix.target }}'
+          --source src-tauri/resources/engines
+          --licenses src-tauri/resources/licenses
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: engines-${{ matrix.target }}
+          path: |
+            release/engines/out/fileflow-engines-*-${{ matrix.target }}.tar.gz
+            release/engines/out/fileflow-engines-*-${{ matrix.target }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+  publish-engine-draft:
+    name: Atomic engine pack draft
+    needs: certify
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: engines-*
+          path: engine-artifacts
+          merge-multiple: true
+
+      - name: Verify complete engine pack matrix
+        shell: bash
+        run: |
+          PACK_VERSION=$(python3 -c "import json; print(json.load(open('release/engines/manifest.json'))['packVersion'])")
+          echo "PACK_VERSION=$PACK_VERSION" >> "$GITHUB_ENV"
+          for target in \
+            aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-msvc \
+            x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            test -f "engine-artifacts/fileflow-engines-${PACK_VERSION}-${target}.tar.gz"
+            test -f "engine-artifacts/fileflow-engines-${PACK_VERSION}-${target}.tar.gz.sha256"
+            (cd engine-artifacts && sha256sum -c "fileflow-engines-${PACK_VERSION}-${target}.tar.gz.sha256")
+          done
+
+      - name: Create atomic draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="engines-v${PACK_VERSION}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Engine release $TAG already exists; refusing mutable replacement." >&2
+            exit 2
+          fi
+          gh release create "$TAG" engine-artifacts/* \
+            --target "$GITHUB_SHA" \
+            --draft \
+            --title "FileFlow engine pack ${PACK_VERSION}" \
+            --notes "Certified native FileFlow engine packs for the five supported desktop targets."
