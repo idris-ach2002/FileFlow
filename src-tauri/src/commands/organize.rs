@@ -720,22 +720,45 @@ fn title_case(value: &str) -> String {
 }
 
 fn sanitize_filename(value: &str) -> String {
+    // Produce names that remain valid when a workflow created on macOS/Linux is
+    // later replayed on Windows. Windows rejects < > : " / \ | ? * and all
+    // platforms reject NUL/path separators. A portable filename is preferable
+    // to silently creating recipes that work only on the machine that authored
+    // them.
     let sanitized = value
         .chars()
         .map(|character| {
-            if matches!(character, '/' | '\\' | ':' | '\0') {
+            if matches!(
+                character,
+                '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' | '\0'
+            ) {
                 '_'
             } else {
                 character
             }
         })
         .collect::<String>();
-    let trimmed = sanitized.trim().trim_matches('.');
+    let trimmed = sanitized.trim().trim_matches(['.', ' ']);
     if trimmed.is_empty() {
-        "fichier".into()
-    } else {
-        trimmed.chars().take(240).collect()
+        return "fichier".into();
     }
+
+    let mut portable: String = trimmed.chars().take(240).collect();
+    let stem = portable
+        .split('.')
+        .next()
+        .unwrap_or(&portable)
+        .to_ascii_uppercase();
+    let reserved = matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL"
+            | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
+            | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+    );
+    if reserved {
+        portable.insert(0, '_');
+    }
+    portable
 }
 
 fn reserve_incremented_target(base: PathBuf, reserved: &mut HashSet<PathBuf>) -> (PathBuf, bool) {
@@ -762,11 +785,11 @@ fn reserve_incremented_target(base: PathBuf, reserved: &mut HashSet<PathBuf>) ->
 }
 
 fn normalized_path_key(path: &Path) -> PathBuf {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         PathBuf::from(path.to_string_lossy().to_lowercase())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         path.to_path_buf()
     }
@@ -804,4 +827,35 @@ fn default_true() -> bool {
 }
 fn default_organization_mode() -> String {
     "type".into()
+}
+
+#[cfg(test)]
+mod portability_tests {
+    use super::*;
+
+    #[test]
+    fn filename_sanitizer_is_portable_to_windows() {
+        assert_eq!(sanitize_filename(r#"report<>:"/\|?*.pdf"#), "report_________.pdf");
+        assert_eq!(sanitize_filename("NUL.txt"), "_NUL.txt");
+        assert_eq!(sanitize_filename("NUL.tar.gz"), "_NUL.tar.gz");
+        assert_eq!(sanitize_filename("  ...  "), "fichier");
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn collision_keys_follow_case_insensitive_filesystems() {
+        assert_eq!(
+            normalized_path_key(Path::new("Folder/Report.PDF")),
+            normalized_path_key(Path::new("folder/report.pdf"))
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn collision_keys_preserve_linux_case_sensitivity() {
+        assert_ne!(
+            normalized_path_key(Path::new("Folder/Report.PDF")),
+            normalized_path_key(Path::new("folder/report.pdf"))
+        );
+    }
 }

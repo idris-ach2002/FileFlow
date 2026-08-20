@@ -2918,6 +2918,13 @@ fn configure_pack_environment(command: &mut Command, engine: &Path) {
     };
 
     let mut path_entries = vec![bin_dir.to_path_buf()];
+    let library_dir = root.join("lib");
+    // Windows resolves adjacent/native DLLs through PATH, while Unix engines
+    // may also spawn helper binaries shipped in lib/. Keep both directories in
+    // the child-only environment without modifying FileFlow's global process.
+    if library_dir.is_dir() {
+        path_entries.push(library_dir.clone());
+    }
     if let Some(existing) = env::var_os("PATH") {
         path_entries.extend(env::split_paths(&existing));
     }
@@ -2925,7 +2932,6 @@ fn configure_pack_environment(command: &mut Command, engine: &Path) {
         command.env("PATH", joined);
     }
 
-    let library_dir = root.join("lib");
     if library_dir.is_dir() {
         #[cfg(target_os = "linux")]
         {
