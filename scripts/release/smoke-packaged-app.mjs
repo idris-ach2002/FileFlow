@@ -24,11 +24,70 @@ function walk(dir) {
 function first(predicate) { return walk(bundleRoot).find(predicate); }
 function sleep(ms){ return new Promise((resolve)=>setTimeout(resolve,ms)); }
 async function terminate(child) {
-  if (child.exitCode!==null) return;
-  if (process.platform==='win32') spawnSync('taskkill',['/PID',String(child.pid),'/T','/F'],{stdio:'ignore'});
-  else child.kill('SIGTERM');
-  await sleep(400);
-  if (child.exitCode===null && process.platform!=='win32') child.kill('SIGKILL');
+  if (!child) return;
+
+  const pid = child.pid;
+
+  const closePipes = () => {
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+    child.stdin?.destroy();
+  };
+
+  // Windows already has a reliable process-tree primitive.
+  if (process.platform === 'win32') {
+    if (pid && child.exitCode === null) {
+      spawnSync(
+        'taskkill',
+        ['/PID', String(pid), '/T', '/F'],
+        {
+          stdio: 'ignore',
+          timeout: 10000,
+        },
+      );
+    }
+
+    closePipes();
+    return;
+  }
+
+  if (!pid) {
+    closePipes();
+    return;
+  }
+
+  const signalTree = (signal) => {
+    try {
+      // Unix packaged runtimes are started as their own process group.
+      // Killing -pid terminates AppImage/Tauri children as well as
+      // the launcher itself.
+      process.kill(-pid, signal);
+      return;
+    } catch (error) {
+      if (error?.code !== 'ESRCH') {
+        try {
+          child.kill(signal);
+        } catch {
+          // Process may already be gone.
+        }
+      }
+    }
+  };
+
+  if (child.exitCode === null) {
+    signalTree('SIGTERM');
+    await sleep(750);
+  }
+
+  if (child.exitCode === null) {
+    signalTree('SIGKILL');
+    await sleep(250);
+  }
+
+  // AppImage descendants can inherit Node's stdout/stderr descriptors.
+  // Destroying our streams prevents a surviving inherited descriptor
+  // from keeping the Node event loop alive after a successful smoke.
+  closePipes();
 }
 
 const temp=mkdtempSync(join(tmpdir(),'fileflow-package-smoke-'));
@@ -59,8 +118,18 @@ if (!executable || !existsSync(executable)) throw new Error('unable to locate pa
 console.log(`[smoke] launching packaged runtime: ${executable}`);
 const child=spawn(executable,[],{
   cwd: dirname(executable),
-  env:{...process.env,FILEFLOW_SMOKE_HEALTH_FILE:healthFile,FILEFLOW_SMOKE_TEST:'1',APPIMAGE_EXTRACT_AND_RUN:'1'},
+  env:{
+    ...process.env,
+    FILEFLOW_SMOKE_HEALTH_FILE:healthFile,
+    FILEFLOW_SMOKE_TEST:'1',
+    APPIMAGE_EXTRACT_AND_RUN:'1',
+  },
   stdio:['ignore','pipe','pipe'],
+
+  // On Unix this creates a dedicated process group. The cleanup code
+  // can consequently terminate the complete packaged runtime tree
+  // instead of only the AppImage launcher.
+  detached: process.platform !== 'win32',
 });
 let output='';
 child.stdout?.on('data',(chunk)=>{ output+=chunk.toString(); });

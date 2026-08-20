@@ -112,6 +112,7 @@ jobs:
       - name: Build package smoke
         run: pnpm exec tauri build --target '${{ matrix.target }}' --bundles app,dmg --config src-tauri/tauri.release.conf.json
       - name: Validate package smoke
+        timeout-minutes: 3
         run: |
           node scripts/release/validate-distribution.mjs --target '${{ matrix.target }}'
           node scripts/release/smoke-packaged-app.mjs --target '${{ matrix.target }}'
