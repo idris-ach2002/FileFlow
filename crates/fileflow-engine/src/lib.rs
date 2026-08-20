@@ -133,6 +133,7 @@ pub fn find_executable(executable: &str) -> Option<PathBuf> {
 }
 
 fn platform_search_directories() -> Vec<PathBuf> {
+    #[cfg_attr(target_os = "windows", allow(unused_mut))]
     let mut directories = Vec::new();
 
     #[cfg(target_os = "macos")]

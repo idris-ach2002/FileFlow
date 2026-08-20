@@ -58,6 +58,7 @@ jobs:
           path: ${{ steps.pnpm-store.outputs.path }}
           key: pnpm-quality-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: pnpm-quality-${{ runner.os }}-${{ runner.arch }}-
+          save-always: true
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -67,6 +68,7 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           shared-key: quality-${{ runner.os }}-${{ runner.arch }}
+          cache-on-failure: true
 
       - name: Install dependencies
         shell: bash
