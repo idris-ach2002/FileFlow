@@ -19,7 +19,7 @@
       <kbd>⌘K</kbd>
     </button>
 
-    <nav aria-label="Navigation principale">
+    <nav class="primary-nav" aria-label="Navigation principale">
       <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">
         <span class="nav-icon">⌂</span><span class="nav-label">Accueil</span>
       </a>
@@ -27,11 +27,21 @@
         <span class="nav-icon">▦</span><span class="nav-label">Fichiers</span>
         @if (workspaceStore.hasWorkspace()) { <span class="nav-count">{{ workspaceStore.counts().files }}</span> }
       </a>
+      <a routerLink="/organize" routerLinkActive="active">
+        <span class="nav-icon">⇄</span><span class="nav-label">Organiser</span>
+      </a>
       <a routerLink="/automations" routerLinkActive="active">
-        <span class="nav-icon">⚡</span><span class="nav-label">Automatisations</span>
+        <span class="nav-icon">⚡</span><span class="nav-label">Automatiser</span>
       </a>
       <a routerLink="/history" routerLinkActive="active">
         <span class="nav-icon">↺</span><span class="nav-label">Historique</span>
+      </a>
+    </nav>
+
+    <div class="nav-section-label">RESSOURCES</div>
+    <nav class="secondary-nav" aria-label="Ressources et réglages">
+      <a routerLink="/formats" routerLinkActive="active">
+        <span class="nav-icon">◇</span><span class="nav-label">Formats & possibilités</span>
       </a>
       <a routerLink="/help" routerLinkActive="active">
         <span class="nav-icon">?</span><span class="nav-label">Aide & guides</span>

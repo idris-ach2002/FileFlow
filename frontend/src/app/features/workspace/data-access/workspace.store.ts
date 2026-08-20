@@ -251,6 +251,12 @@ export class WorkspaceStore {
     }
   }
 
+  async refreshAfterMutation(): Promise<void> {
+    if (!this.activeWorkspaceId()) return;
+    this.clearSelection();
+    await Promise.all([this.loadInitialPage(), this.loadWorkspaceDetails()]);
+  }
+
   async cancelExecution(): Promise<void> {
     const jobId = this.runningJobId();
     if (!jobId) return;

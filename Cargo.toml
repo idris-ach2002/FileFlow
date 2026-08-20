@@ -14,6 +14,7 @@ members = [
     "crates/fileflow-executor",
     "crates/fileflow-output",
     "crates/fileflow-storage",
+    "crates/fileflow-workflows",
     "crates/adapters/fileflow-adapter-ffmpeg",
     "crates/adapters/fileflow-adapter-vips",
     "crates/adapters/fileflow-adapter-qpdf",

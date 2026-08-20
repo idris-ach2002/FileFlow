@@ -924,6 +924,9 @@ async fn execute_collective_action(
             )
             .await
         }
+        "archive-package" => {
+            execute_archive_package(request, engines, scheduler, cancellation, resolver).await
+        }
         "archive-create" => {
             let engine = engines.get("archive")?;
             let _lease = scheduler
@@ -955,6 +958,73 @@ async fn execute_collective_action(
         }
         _ => Err(ExecutionError::UnsupportedAction(request.action_id.clone())),
     }
+}
+
+async fn execute_archive_package(
+    request: &ExecutionRequest,
+    engines: &EnginePaths,
+    scheduler: Arc<ResourceScheduler>,
+    cancellation: CancellationToken,
+    resolver: OutputResolver,
+) -> Result<Option<PathBuf>, ExecutionError> {
+    let target = request.target_format.as_deref().unwrap_or("zip");
+    if target == "tar.zst" {
+        return execute_tar_compressed_archive(request, "zstd", "tar.zst", engines, scheduler, cancellation, resolver).await;
+    }
+    if target == "tar.lz4" {
+        return execute_tar_compressed_archive(request, "lz4", "tar.lz4", engines, scheduler, cancellation, resolver).await;
+    }
+    let archive_engine = engines.get("archive")?;
+    let _lease = scheduler.acquire("archive", ResourceProfile::ARCHIVE, &cancellation).await?;
+    let first = request.inputs.first().ok_or_else(|| ExecutionError::InvalidInput("Aucun élément à compresser.".into()))?;
+    let plan = resolver.plan(&OutputRequest {
+        source: first.path.clone(),
+        source_root: None,
+        desired_extension: Some(target.into()),
+        operation_suffix: Some("archive".into()),
+        policy: fileflow_domain::OutputPolicy {
+            naming: fileflow_domain::NamingStrategy::OperationSuffix,
+            ..request.output_policy.clone()
+        },
+    })?;
+    if plan.skipped { return Ok(Some(plan.final_path)); }
+    resolver.prepare(&plan).await?;
+
+    let result = if matches!(target, "zip" | "7z" | "tar") {
+        let archive_type = match target { "zip" => "-tzip", "7z" => "-t7z", _ => "-ttar" };
+        let mut args = vec![OsString::from("a"), OsString::from(archive_type), plan.temporary_path.as_os_str().into()];
+        for input in &request.inputs { args.push(input.path.as_os_str().into()); }
+        run_process(archive_engine, &args, &cancellation).await
+    } else {
+        let compression_type = match target {
+            "tar.gz" => "-tgzip",
+            "tar.xz" => "-txz",
+            "tar.bz2" => "-tbzip2",
+            _ => return Err(ExecutionError::InvalidTargetFormat { action: request.action_id.clone(), format: target.into() }),
+        };
+        let staging_tar = plan.destination_directory.join(format!(".fileflow-package-{}.tar", Uuid::new_v4().simple()));
+        let mut tar_args = vec![OsString::from("a"), OsString::from("-ttar"), staging_tar.as_os_str().into()];
+        for input in &request.inputs { tar_args.push(input.path.as_os_str().into()); }
+        run_process(archive_engine, &tar_args, &cancellation).await?;
+        let compression = run_process(
+            archive_engine,
+            &[
+                OsString::from("a"),
+                OsString::from(compression_type),
+                plan.temporary_path.as_os_str().into(),
+                staging_tar.as_os_str().into(),
+            ],
+            &cancellation,
+        ).await;
+        let _ = tokio::fs::remove_file(&staging_tar).await;
+        compression
+    };
+    if let Err(error) = result {
+        resolver.cleanup(&plan).await;
+        return Err(error);
+    }
+    resolver.finalize(&plan).await?;
+    Ok(Some(plan.final_path))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1099,6 +1169,13 @@ fn item_output<'a>(
         "image-trim" => ("imagemagick", source_extension, Some("recadre")),
         "image-crop-center" => ("imagemagick", source_extension, Some("crop")),
         "image-resize-exact" => ("imagemagick", source_extension, Some("dimensions")),
+        "image-crop-custom" => ("imagemagick", source_extension, Some("recadrage")),
+        "image-canvas" => ("imagemagick", source_extension, Some("canevas")),
+        "image-auto-gamma" => ("imagemagick", source_extension, Some("gamma")),
+        "image-contrast-stretch" => ("imagemagick", source_extension, Some("contraste")),
+        "image-colorspace-srgb" => ("imagemagick", source_extension, Some("srgb")),
+        "image-set-dpi" => ("imagemagick", source_extension, Some("dpi")),
+        "image-perspective" => ("imagemagick", source_extension, Some("perspective")),
         "image-border" => ("imagemagick", source_extension, Some("bordure")),
         "image-vignette" => ("imagemagick", source_extension, Some("vignette")),
         "image-watermark" => ("imagemagick", source_extension, Some("filigrane")),
@@ -1264,6 +1341,13 @@ fn is_imagemagick_action(action_id: &str) -> bool {
             | "image-trim"
             | "image-crop-center"
             | "image-resize-exact"
+            | "image-crop-custom"
+            | "image-canvas"
+            | "image-auto-gamma"
+            | "image-contrast-stretch"
+            | "image-colorspace-srgb"
+            | "image-set-dpi"
+            | "image-perspective"
             | "image-border"
             | "image-vignette"
             | "image-watermark"
@@ -1429,6 +1513,67 @@ async fn run_imagemagick_action(
                     OsString::from(format!("{width}x{height}")),
                 ]);
             }
+        }
+        "image-crop-custom" => {
+            let width = parameter_number(parameters, "width", 1200.0, 1.0, 20000.0).round() as u32;
+            let height = parameter_number(parameters, "height", 1200.0, 1.0, 20000.0).round() as u32;
+            let x = parameter_number(parameters, "x", 0.0, 0.0, 20000.0).round() as u32;
+            let y = parameter_number(parameters, "y", 0.0, 0.0, 20000.0).round() as u32;
+            args.extend([
+                OsString::from("-crop"),
+                OsString::from(format!("{width}x{height}+{x}+{y}")),
+                OsString::from("+repage"),
+            ]);
+        }
+        "image-canvas" => {
+            let width = parameter_number(parameters, "width", 1920.0, 1.0, 20000.0).round() as u32;
+            let height = parameter_number(parameters, "height", 1080.0, 1.0, 20000.0).round() as u32;
+            let color = parameter_string(parameters, "background", "white", 32);
+            args.extend([
+                OsString::from("-background"), OsString::from(color),
+                OsString::from("-gravity"), OsString::from("center"),
+                OsString::from("-extent"), OsString::from(format!("{width}x{height}")),
+            ]);
+        }
+        "image-auto-gamma" => args.push(OsString::from("-auto-gamma")),
+        "image-contrast-stretch" => {
+            let black = parameter_number(parameters, "blackPoint", 0.5, 0.0, 20.0);
+            let white = parameter_number(parameters, "whitePoint", 0.5, 0.0, 20.0);
+            args.extend([
+                OsString::from("-contrast-stretch"),
+                OsString::from(format!("{black:.2}%x{white:.2}%")),
+            ]);
+        }
+        "image-colorspace-srgb" => args.extend([
+            OsString::from("-colorspace"),
+            OsString::from("sRGB"),
+        ]),
+        "image-set-dpi" => {
+            let dpi = parameter_number(parameters, "dpi", 300.0, 36.0, 2400.0).round() as u32;
+            args.extend([
+                OsString::from("-units"), OsString::from("PixelsPerInch"),
+                OsString::from("-density"), OsString::from(dpi.to_string()),
+            ]);
+        }
+        "image-perspective" => {
+            let x0 = parameter_number(parameters, "x0", 0.0, 0.0, 20000.0);
+            let y0 = parameter_number(parameters, "y0", 0.0, 0.0, 20000.0);
+            let x1 = parameter_number(parameters, "x1", 1200.0, 0.0, 20000.0);
+            let y1 = parameter_number(parameters, "y1", 0.0, 0.0, 20000.0);
+            let x2 = parameter_number(parameters, "x2", 1200.0, 0.0, 20000.0);
+            let y2 = parameter_number(parameters, "y2", 1200.0, 0.0, 20000.0);
+            let x3 = parameter_number(parameters, "x3", 0.0, 0.0, 20000.0);
+            let y3 = parameter_number(parameters, "y3", 1200.0, 0.0, 20000.0);
+            let width = parameter_number(parameters, "width", 1200.0, 1.0, 20000.0);
+            let height = parameter_number(parameters, "height", 1200.0, 1.0, 20000.0);
+            let mapping = format!(
+                "{x0},{y0} 0,0 {x1},{y1} {width},0 {x2},{y2} {width},{height} {x3},{y3} 0,{height}"
+            );
+            args.extend([
+                OsString::from("-virtual-pixel"), OsString::from("background"),
+                OsString::from("-distort"), OsString::from("Perspective"), OsString::from(mapping),
+                OsString::from("+repage"),
+            ]);
         }
         "image-border" => {
             let pixels = parameter_number(parameters, "pixels", 16.0, 1.0, 500.0).round() as u32;
@@ -2887,6 +3032,7 @@ fn normalize_target_format(
         "text-convert" => &["html", "md", "docx", "epub", "txt"],
         "ebook-convert" => &["html", "md", "docx", "txt", "epub"],
         "archive-create" => &["zip", "7z", "tar"],
+        "archive-package" => &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4"],
         _ => &[],
     };
     if !allowed.is_empty() && !allowed.contains(&normalized.as_str()) {
@@ -2941,6 +3087,13 @@ pub const EXECUTABLE_ACTIONS: &[&str] = &[
     "image-trim",
     "image-crop-center",
     "image-resize-exact",
+    "image-crop-custom",
+    "image-canvas",
+    "image-auto-gamma",
+    "image-contrast-stretch",
+    "image-colorspace-srgb",
+    "image-set-dpi",
+    "image-perspective",
     "image-border",
     "image-vignette",
     "image-watermark",
@@ -2964,6 +3117,7 @@ pub const EXECUTABLE_ACTIONS: &[&str] = &[
     "ocr-image",
     "archive-extract",
     "archive-create",
+    "archive-package",
     "tar-zstd-create",
     "tar-lz4-create",
     "zstd-compress",
@@ -2999,7 +3153,7 @@ pub fn is_supported(action_id: &str) -> bool {
 fn is_collective(action_id: &str) -> bool {
     matches!(
         action_id,
-        "images-to-pdf" | "pdf-merge" | "archive-create" | "tar-zstd-create" | "tar-lz4-create"
+        "images-to-pdf" | "pdf-merge" | "archive-create" | "archive-package" | "tar-zstd-create" | "tar-lz4-create"
     )
 }
 

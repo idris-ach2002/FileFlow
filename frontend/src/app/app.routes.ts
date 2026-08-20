@@ -18,6 +18,11 @@ export const routes: Routes = [
     loadComponent: () => import('./features/workspace/workspace.page').then((m) => m.WorkspacePage),
   },
   {
+    path: 'organize',
+    canActivate: [requireAccountGuard],
+    loadComponent: () => import('./features/organize/organize.page').then((m) => m.OrganizePage),
+  },
+  {
     path: 'automations',
     canActivate: [requireAccountGuard],
     loadComponent: () => import('./features/automations/automations.page').then((m) => m.AutomationsPage),
@@ -26,6 +31,11 @@ export const routes: Routes = [
     path: 'history',
     canActivate: [requireAccountGuard],
     loadComponent: () => import('./features/history/history.page').then((m) => m.HistoryPage),
+  },
+  {
+    path: 'formats',
+    canActivate: [requireAccountGuard],
+    loadComponent: () => import('./features/formats/formats.page').then((m) => m.FormatsPage),
   },
   {
     path: 'help',

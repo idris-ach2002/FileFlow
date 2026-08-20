@@ -37,6 +37,7 @@ fileflow-planner = { path = "../crates/fileflow-planner" }
 fileflow-scheduler = { path = "../crates/fileflow-scheduler" }
 fileflow-storage = { path = "../crates/fileflow-storage" }
 fileflow-executor = { path = "../crates/fileflow-executor" }
+fileflow-workflows = { path = "../crates/fileflow-workflows" }
 serde.workspace = true
 tauri = { version = "2.11.5", features = ["tray-icon"] }
 tauri-plugin-dialog = "2.7.2"
@@ -52,3 +53,5 @@ chrono.workspace = true
 
 parking_lot.workspace = true
 serde_json.workspace = true
+
+walkdir.workspace = true

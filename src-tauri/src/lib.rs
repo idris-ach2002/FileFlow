@@ -217,6 +217,9 @@ pub fn run() {
             let tray = build_tray(app)?;
             let data_dir = app.path().app_data_dir()?;
             let storage = Arc::new(Storage::open(&data_dir.join("fileflow.sqlite3"))?);
+            if let Err(error) = storage.mark_running_jobs_interrupted() {
+                tracing::warn!(%error, "unable to mark interrupted automation jobs");
+            }
             let performance_mode = stored_performance_mode(&storage);
             let runtime = ExecutionRuntime::new(performance_mode);
             tracing::info!(budget = ?runtime.scheduler.budget(), database = %data_dir.display(), "FileFlow runtime initialized");
@@ -232,6 +235,7 @@ pub fn run() {
                 output_sequence: AtomicU64::new(0),
                 _tray: tray,
             });
+            tauri::async_runtime::spawn(commands::automation::watch_loop(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -265,6 +269,19 @@ pub fn run() {
             commands::execution::open_job_output,
             commands::execution::reveal_job_output,
             commands::execution::save_job_output_copy,
+            commands::automation::run_recipe,
+            commands::automation::resume_automation_job,
+            commands::automation::automation_jobs,
+            commands::automation::cancel_automation_job,
+            commands::automation::watched_folders,
+            commands::automation::save_watched_folder,
+            commands::automation::delete_watched_folder,
+            commands::organize::preview_batch_rename,
+            commands::organize::apply_batch_rename,
+            commands::organize::preview_organization,
+            commands::organize::apply_organization,
+            commands::organize::duplicate_cleanup_plan,
+            commands::organize::quarantine_duplicates,
             commands::storage::load_app_preferences,
             commands::storage::save_app_preferences,
             commands::storage::history,

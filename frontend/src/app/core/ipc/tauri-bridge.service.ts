@@ -27,6 +27,15 @@ import {
   RecipeRecord,
   ScanOptions,
   SchedulerSnapshot,
+  AutomationJobRecord,
+  DuplicateCleanupPlan,
+  FileOperationResult,
+  OrganizationPreview,
+  RenamePreview,
+  RenameRule,
+  SaveWatchedFolderRequest,
+  WatchedFolderRecord,
+  WorkflowEvent,
   WorkspaceInsights,
   WorkspaceIntakeEvent,
   WorkspaceSnapshot,
@@ -171,6 +180,68 @@ export class TauriBridgeService {
 
   saveRecipe(recipe: RecipeRecord): Promise<void> {
     return invoke<void>('save_recipe', { recipe });
+  }
+
+  runRecipe(recipeId: string, inputPaths: string[], onEvent: (event: WorkflowEvent) => void): Promise<AutomationJobRecord> {
+    const channel = new Channel<WorkflowEvent>();
+    channel.onmessage = onEvent;
+    return invoke<AutomationJobRecord>('run_recipe', { request: { recipeId, inputPaths, workspaceId: null, selectedAssetIds: [] }, onEvent: channel });
+  }
+
+  runRecipeOnWorkspace(recipeId: string, workspaceId: string, selectedAssetIds: string[], onEvent: (event: WorkflowEvent) => void): Promise<AutomationJobRecord> {
+    const channel = new Channel<WorkflowEvent>();
+    channel.onmessage = onEvent;
+    return invoke<AutomationJobRecord>('run_recipe', { request: { recipeId, inputPaths: [], workspaceId, selectedAssetIds }, onEvent: channel });
+  }
+
+  resumeAutomationJob(jobId: string, onEvent: (event: WorkflowEvent) => void): Promise<AutomationJobRecord> {
+    const channel = new Channel<WorkflowEvent>();
+    channel.onmessage = onEvent;
+    return invoke<AutomationJobRecord>('resume_automation_job', { jobId, onEvent: channel });
+  }
+
+  automationJobs(limit = 100): Promise<AutomationJobRecord[]> {
+    return invoke<AutomationJobRecord[]>('automation_jobs', { limit });
+  }
+
+  cancelAutomationJob(jobId: string): Promise<boolean> {
+    return invoke<boolean>('cancel_automation_job', { jobId });
+  }
+
+  watchedFolders(): Promise<WatchedFolderRecord[]> {
+    return invoke<WatchedFolderRecord[]>('watched_folders');
+  }
+
+  saveWatchedFolder(request: SaveWatchedFolderRequest): Promise<WatchedFolderRecord> {
+    return invoke<WatchedFolderRecord>('save_watched_folder', { request });
+  }
+
+  deleteWatchedFolder(watchId: string): Promise<void> {
+    return invoke<void>('delete_watched_folder', { watchId });
+  }
+
+  previewBatchRename(workspaceId: string, selectedAssetIds: string[], rule: RenameRule): Promise<RenamePreview> {
+    return invoke<RenamePreview>('preview_batch_rename', { request: { workspaceId, selectedAssetIds, rule } });
+  }
+
+  applyBatchRename(workspaceId: string, selectedAssetIds: string[], rule: RenameRule): Promise<FileOperationResult> {
+    return invoke<FileOperationResult>('apply_batch_rename', { request: { workspaceId, selectedAssetIds, rule } });
+  }
+
+  previewOrganization(workspaceId: string, selectedAssetIds: string[], destinationRoot: string, mode: string): Promise<OrganizationPreview> {
+    return invoke<OrganizationPreview>('preview_organization', { request: { workspaceId, selectedAssetIds, destinationRoot, mode } });
+  }
+
+  applyOrganization(workspaceId: string, selectedAssetIds: string[], destinationRoot: string, mode: string): Promise<FileOperationResult> {
+    return invoke<FileOperationResult>('apply_organization', { request: { workspaceId, selectedAssetIds, destinationRoot, mode } });
+  }
+
+  duplicateCleanupPlan(workspaceId: string, selectedAssetIds: string[], strategy: 'newest' | 'oldest' | 'shortestPath'): Promise<DuplicateCleanupPlan> {
+    return invoke<DuplicateCleanupPlan>('duplicate_cleanup_plan', { request: { workspaceId, selectedAssetIds, strategy } });
+  }
+
+  quarantineDuplicates(workspaceId: string, assetIds: string[], destination?: string | null): Promise<FileOperationResult> {
+    return invoke<FileOperationResult>('quarantine_duplicates', { request: { workspaceId, assetIds, destination: destination ?? null } });
   }
 
   createWorkspace(

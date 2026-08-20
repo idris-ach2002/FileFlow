@@ -222,6 +222,13 @@ export interface FormatCapabilityProfile {
   family: FormatFamily;
   extensions: string[];
   preview: boolean;
+  readable: boolean;
+  writable: boolean;
+  metadata: boolean;
+  thumbnail: boolean;
+  extractable: boolean;
+  streamable: boolean;
+  capabilities: string[];
   actions: string[];
   convertTo: string[];
   compressTo: string[];
@@ -486,4 +493,131 @@ export interface ProfileUpdate {
 export interface AvatarPayload {
   mimeType: string;
   bytes: number[];
+}
+
+export interface WorkflowStep {
+  id: string;
+  actionId: string;
+  dependsOn: string[];
+  targetFormat?: string | null;
+  quality?: string | null;
+  parameters: Record<string, string | number | boolean | null>;
+  outputPolicy: OutputPolicy;
+}
+
+export interface WorkflowDefinition {
+  version: number;
+  name: string;
+  description: string;
+  steps: WorkflowStep[];
+}
+
+export interface WorkflowEvent {
+  event: 'started' | 'stepStarted' | 'stepCompleted' | 'finished' | string;
+  jobId: string;
+  stepId?: string | null;
+  completedSteps: number;
+  totalSteps: number;
+  message?: string | null;
+}
+
+export interface AutomationJobRecord {
+  id: string;
+  recipeId?: string | null;
+  status: string;
+  currentStep: number;
+  totalSteps: number;
+  inputPaths: string[];
+  outputsByStep: Record<string, string[]>;
+  error?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WatchedFolderRecord {
+  id: string;
+  path: string;
+  recipeId: string;
+  enabled: boolean;
+  recursive: boolean;
+  extensions: string[];
+  stabilitySeconds: number;
+  lastScanAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SaveWatchedFolderRequest {
+  id?: string | null;
+  path: string;
+  recipeId: string;
+  enabled: boolean;
+  recursive: boolean;
+  extensions: string[];
+  stabilitySeconds: number;
+}
+
+export interface RenameRule {
+  template: string;
+  search: string;
+  replace: string;
+  counterStart: number;
+  counterPadding: number;
+  caseMode: 'keep' | 'lower' | 'upper' | 'title' | string;
+  preserveExtension: boolean;
+}
+
+export interface RenamePreviewItem {
+  assetId: string;
+  source: string;
+  target: string;
+  changed: boolean;
+  conflict: boolean;
+  warning?: string | null;
+}
+
+export interface RenamePreview {
+  items: RenamePreviewItem[];
+  total: number;
+  changed: number;
+  conflicts: number;
+  truncated: boolean;
+}
+
+export interface OrganizationPreviewItem {
+  assetId: string;
+  source: string;
+  target: string;
+  category: string;
+  conflictResolved: boolean;
+}
+
+export interface OrganizationPreview {
+  items: OrganizationPreviewItem[];
+  total: number;
+  truncated: boolean;
+  categories: Record<string, number>;
+}
+
+export interface DuplicateCleanupGroup {
+  hash: string;
+  sizeBytes: number;
+  keepAssetId: string;
+  keepPath: string;
+  quarantineAssetIds: string[];
+  quarantinePaths: string[];
+  reclaimableBytes: number;
+}
+
+export interface DuplicateCleanupPlan {
+  groups: DuplicateCleanupGroup[];
+  reclaimableBytes: number;
+  quarantineCount: number;
+  warnings: string[];
+}
+
+export interface FileOperationResult {
+  processed: number;
+  destination?: string | null;
+  warnings: string[];
 }
