@@ -1,0 +1,219 @@
+name: FileFlow Release macOS
+
+on:
+  push:
+    tags: ['macos-v*.*.*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-macos-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Release macOS / ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ARM64
+            os: macos-15
+            target: aarch64-apple-darwin
+          - name: Intel
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.22.3'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Validate tag provenance/version before expensive work
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          test "${GITHUB_REF_NAME}" = "macos-v${VERSION}" || {
+            echo "Expected macos-v${VERSION}, got ${GITHUB_REF_NAME}" >&2
+            exit 2
+          }
+          git fetch origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo 'macOS release tag must point to a commit contained in main' >&2
+            exit 2
+          }
+
+      - name: Require macOS production settings
+        shell: bash
+        env:
+          TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          FILEFLOW_UPDATE_ENDPOINT: ${{ vars.FILEFLOW_UPDATE_ENDPOINT }}
+          FILEFLOW_ENGINE_PACK_URL_TEMPLATE: ${{ vars.FILEFLOW_ENGINE_PACK_URL_TEMPLATE }}
+          FILEFLOW_ENGINE_MODE: ${{ vars.FILEFLOW_ENGINE_MODE }}
+        run: |
+          for name in \
+            TAURI_UPDATER_PUBKEY TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
+            APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID \
+            FILEFLOW_UPDATE_ENDPOINT FILEFLOW_ENGINE_PACK_URL_TEMPLATE FILEFLOW_ENGINE_MODE; do
+            test -n "${!name:-}" || { echo "Missing $name" >&2; exit 2; }
+          done
+          [[ "$FILEFLOW_ENGINE_PACK_URL_TEMPLATE" == *'{packVersion}'* ]]
+          [[ "$FILEFLOW_ENGINE_PACK_URL_TEMPLATE" == *'{target}'* ]]
+          [[ "$FILEFLOW_ENGINE_MODE" == 'core' || "$FILEFLOW_ENGINE_MODE" == 'full' ]]
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.1'
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          shared-key: release-macos-${{ matrix.target }}
+          cache-on-failure: true
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Release source preflight
+        run: pnpm run ci:preflight
+
+      - name: Import Developer ID certificate
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 24)
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          Path('certificate.p12').write_bytes(base64.b64decode(os.environ['APPLE_CERTIFICATE']))
+          PY
+          security create-keychain -p "$KEYCHAIN_PASSWORD" fileflow-build.keychain
+          security set-keychain-settings -lut 21600 fileflow-build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" fileflow-build.keychain
+          security list-keychains -d user -s fileflow-build.keychain login.keychain-db
+          security default-keychain -s fileflow-build.keychain
+          security import certificate.p12 -k fileflow-build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" fileflow-build.keychain
+          IDENTITY=$(security find-identity -v -p codesigning fileflow-build.keychain | awk -F'"' '/Developer ID Application/ {print $2; exit}')
+          test -n "$IDENTITY"
+          echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+
+      - name: Prepare immutable native engines
+        env:
+          FILEFLOW_ENGINE_PACK_URL_TEMPLATE: ${{ vars.FILEFLOW_ENGINE_PACK_URL_TEMPLATE }}
+          FILEFLOW_ENGINE_PACK_TOKEN: ${{ secrets.FILEFLOW_ENGINE_PACK_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          FILEFLOW_ENGINE_MODE: ${{ vars.FILEFLOW_ENGINE_MODE }}
+          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
+        run: |
+          python scripts/release/fetch-engine-pack.py --target '${{ matrix.target }}'
+          python scripts/release/stage-engines.py --target '${{ matrix.target }}' --mode "$FILEFLOW_ENGINE_MODE"
+          python scripts/release/harden-engine-pack.py --target '${{ matrix.target }}'
+          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --require-signature
+          python scripts/release/smoke-engines.py --mode "$FILEFLOW_ENGINE_MODE"
+          python scripts/release/functional-engine-tests.py --mode "$FILEFLOW_ENGINE_MODE"
+
+      - name: Generate strict macOS Tauri configuration
+        env:
+          TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          FILEFLOW_UPDATE_ENDPOINT: ${{ vars.FILEFLOW_UPDATE_ENDPOINT }}
+          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: python scripts/release/generate-release-config.py --target '${{ matrix.target }}' --strict
+
+      - name: Build signed/notarized macOS bundle
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: pnpm exec tauri build --target '${{ matrix.target }}' --bundles app,dmg --config src-tauri/tauri.release.conf.json
+
+      - name: Validate + runtime smoke
+        run: |
+          node scripts/release/validate-distribution.mjs --target '${{ matrix.target }}' --strict
+          node scripts/release/smoke-packaged-app.mjs --target '${{ matrix.target }}'
+          node scripts/release/collect-artifacts.mjs --target '${{ matrix.target }}'
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-${{ matrix.target }}
+          path: dist/release/${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish macOS only
+    needs: build
+    if: ${{ success() }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.22.3'
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: native-*
+          path: dist/release
+
+      - name: Restore target directory names
+        shell: bash
+        run: |
+          for dir in dist/release/native-*; do
+            test -d "$dir" || continue
+            target="${dir##*/native-}"
+            mv "$dir" "dist/release/$target"
+          done
+
+      - name: Normalize and checksum macOS assets
+        run: |
+          node scripts/release/normalize-artifacts.mjs --root dist/release
+          node scripts/release/generate-checksums.mjs --root dist/release --output SHA256SUMS-macos
+
+      - name: Publish immutable macOS release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; refusing replacement" >&2
+            exit 2
+          fi
+          mapfile -d '' ASSETS < <(find dist/release -type f -print0 | sort -z)
+          gh release create "$GITHUB_REF_NAME" \
+            "${ASSETS[@]}" SHA256SUMS-macos \
+            --verify-tag \
+            --title "FileFlow ${GITHUB_REF_NAME#macos-v} — macOS" \
+            --notes "Release macOS certifiée indépendamment. Provenance: ${GITHUB_SHA}."

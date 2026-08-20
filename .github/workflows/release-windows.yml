@@ -1,0 +1,242 @@
+name: FileFlow Release Windows
+
+on:
+  push:
+    tags: ['windows-v*.*.*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Release Windows / x64
+    runs-on: windows-2025
+    env:
+      CARGO_INCREMENTAL: '0'
+      RUST_BACKTRACE: '1'
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.22.3'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Validate tag provenance/version
+        shell: pwsh
+        run: |
+          $version = node -p "require('./src-tauri/tauri.conf.json').version"
+          $expected = "windows-v$version"
+          if ($env:GITHUB_REF_NAME -ne $expected) {
+            throw "Expected $expected, got $env:GITHUB_REF_NAME"
+          }
+          git fetch origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Windows release tag must point to a commit contained in main'
+          }
+
+      - name: Require Windows production settings
+        shell: pwsh
+        env:
+          TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          FILEFLOW_UPDATE_ENDPOINT: ${{ vars.FILEFLOW_UPDATE_ENDPOINT }}
+          FILEFLOW_ENGINE_PACK_URL_TEMPLATE: ${{ vars.FILEFLOW_ENGINE_PACK_URL_TEMPLATE }}
+          FILEFLOW_ENGINE_MODE: ${{ vars.FILEFLOW_ENGINE_MODE }}
+          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          $required = @(
+            'TAURI_UPDATER_PUBKEY',
+            'TAURI_SIGNING_PRIVATE_KEY',
+            'TAURI_SIGNING_PRIVATE_KEY_PASSWORD',
+            'WINDOWS_CERTIFICATE',
+            'WINDOWS_CERTIFICATE_PASSWORD',
+            'FILEFLOW_UPDATE_ENDPOINT',
+            'FILEFLOW_ENGINE_PACK_URL_TEMPLATE',
+            'FILEFLOW_ENGINE_MODE',
+            'WINDOWS_TIMESTAMP_URL'
+          )
+          foreach ($name in $required) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Missing $name"
+            }
+          }
+          if (-not $env:FILEFLOW_ENGINE_PACK_URL_TEMPLATE.Contains('{packVersion}')) {
+            throw 'Engine URL template must contain {packVersion}'
+          }
+          if (-not $env:FILEFLOW_ENGINE_PACK_URL_TEMPLATE.Contains('{target}')) {
+            throw 'Engine URL template must contain {target}'
+          }
+          if ($env:FILEFLOW_ENGINE_MODE -notin @('core', 'full')) {
+            throw 'FILEFLOW_ENGINE_MODE must be core or full'
+          }
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.1'
+          targets: x86_64-pc-windows-msvc
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          shared-key: release-windows-x64
+          cache-on-failure: true
+
+      - name: Install dependencies
+        shell: pwsh
+        run: pnpm install --frozen-lockfile
+
+      - name: Release source preflight
+        shell: pwsh
+        run: pnpm run ci:preflight
+
+      - name: Deterministic Windows gate
+        shell: pwsh
+        run: ./scripts/ci/windows-preflight.ps1
+
+      - name: Import Windows signing certificate
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          New-Item -ItemType Directory -Force -Path certificate | Out-Null
+          [IO.File]::WriteAllBytes(
+            'certificate/certificate.pfx',
+            [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+          )
+          $password = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
+          $cert = Import-PfxCertificate `
+            -FilePath certificate/certificate.pfx `
+            -CertStoreLocation Cert:\CurrentUser\My `
+            -Password $password
+          if (-not $cert.Thumbprint) {
+            throw 'Windows signing certificate import failed'
+          }
+          "WINDOWS_CERTIFICATE_THUMBPRINT=$($cert.Thumbprint)" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Prepare immutable Windows engines
+        shell: pwsh
+        env:
+          FILEFLOW_ENGINE_PACK_URL_TEMPLATE: ${{ vars.FILEFLOW_ENGINE_PACK_URL_TEMPLATE }}
+          FILEFLOW_ENGINE_PACK_TOKEN: ${{ secrets.FILEFLOW_ENGINE_PACK_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          FILEFLOW_ENGINE_MODE: ${{ vars.FILEFLOW_ENGINE_MODE }}
+        run: |
+          python scripts/release/fetch-engine-pack.py --target x86_64-pc-windows-msvc
+          python scripts/release/stage-engines.py --target x86_64-pc-windows-msvc --mode $env:FILEFLOW_ENGINE_MODE
+          python scripts/release/harden-engine-pack.py --target x86_64-pc-windows-msvc
+
+      - name: Authenticode-sign Windows engine binaries
+        shell: pwsh
+        env:
+          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          $cert = Get-ChildItem "Cert:\CurrentUser\My\$env:WINDOWS_CERTIFICATE_THUMBPRINT"
+          $files = Get-ChildItem src-tauri/resources/engines -Recurse -File |
+            Where-Object { $_.Extension -in '.exe', '.dll' }
+          foreach ($file in $files) {
+            $result = Set-AuthenticodeSignature `
+              -FilePath $file.FullName `
+              -Certificate $cert `
+              -HashAlgorithm SHA256 `
+              -TimestampServer $env:WINDOWS_TIMESTAMP_URL
+            if ($result.Status -ne 'Valid') {
+              throw "Failed to sign $($file.FullName): $($result.Status)"
+            }
+          }
+
+      - name: Re-harden + validate Windows engines
+        shell: pwsh
+        env:
+          FILEFLOW_ENGINE_MODE: ${{ vars.FILEFLOW_ENGINE_MODE }}
+        run: |
+          python scripts/release/harden-engine-pack.py --target x86_64-pc-windows-msvc
+          python scripts/release/validate-engine-pack.py --target x86_64-pc-windows-msvc --require-signature
+          python scripts/release/smoke-engines.py --mode $env:FILEFLOW_ENGINE_MODE
+          python scripts/release/functional-engine-tests.py --mode $env:FILEFLOW_ENGINE_MODE
+
+      - name: Generate strict Windows Tauri configuration
+        shell: pwsh
+        env:
+          TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          FILEFLOW_UPDATE_ENDPOINT: ${{ vars.FILEFLOW_UPDATE_ENDPOINT }}
+          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+        run: python scripts/release/generate-release-config.py --target x86_64-pc-windows-msvc --strict
+
+      - name: Build signed Windows installers
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm exec tauri build --target x86_64-pc-windows-msvc --bundles nsis,msi --config src-tauri/tauri.release.conf.json
+
+      - name: Validate + runtime smoke
+        shell: pwsh
+        run: |
+          node scripts/release/validate-distribution.mjs --target x86_64-pc-windows-msvc --strict
+          node scripts/release/smoke-packaged-app.mjs --target x86_64-pc-windows-msvc
+          node scripts/release/collect-artifacts.mjs --target x86_64-pc-windows-msvc
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-x86_64-pc-windows-msvc
+          path: dist/release/x86_64-pc-windows-msvc
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish Windows only
+    needs: build
+    if: ${{ success() }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.22.3'
+      - uses: actions/download-artifact@v8
+        with:
+          name: native-x86_64-pc-windows-msvc
+          path: dist/release/x86_64-pc-windows-msvc
+
+      - name: Checksum Windows assets
+        run: node scripts/release/generate-checksums.mjs --root dist/release --output SHA256SUMS-windows
+
+      - name: Publish immutable Windows release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; refusing replacement" >&2
+            exit 2
+          fi
+          mapfile -d '' ASSETS < <(find dist/release -type f -print0 | sort -z)
+          gh release create "$GITHUB_REF_NAME" \
+            "${ASSETS[@]}" SHA256SUMS-windows \
+            --verify-tag \
+            --title "FileFlow ${GITHUB_REF_NAME#windows-v} — Windows" \
+            --notes "Release Windows certifiée indépendamment. Provenance: ${GITHUB_SHA}."

@@ -1,4 +1,4 @@
-name: FileFlow CI
+name: FileFlow Common Quality
 
 on:
   pull_request:
@@ -9,56 +9,34 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: common-quality-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   quality:
-    name: Quality / ${{ matrix.name }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Linux x64
-            os: ubuntu-22.04
-          - name: macOS ARM64
-            os: macos-15
-          - name: Windows x64
-            os: windows-2025
-    runs-on: ${{ matrix.os }}
-
+    name: Common Quality / Linux x64
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
 
       - name: Linux prerequisites
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+            patchelf xdg-utils
+
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v6
         with:
           node-version: '22.22.3'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
-
-      - name: Enable pnpm
-        shell: bash
-        run: corepack enable && corepack prepare pnpm@11.20.0 --activate
-
-      - name: Resolve pnpm store
-        id: pnpm-store
-        shell: bash
-        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/cache@v5
-        with:
-          path: ${{ steps.pnpm-store.outputs.path }}
-          key: pnpm-quality-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: pnpm-quality-${{ runner.os }}-${{ runner.arch }}-
-          save-always: true
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -67,21 +45,17 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
         with:
-          shared-key: quality-${{ runner.os }}-${{ runner.arch }}
+          shared-key: common-linux-x64
           cache-on-failure: true
 
       - name: Install dependencies
-        shell: bash
         run: pnpm install --frozen-lockfile
 
-      - name: Platform information
-        run: pnpm run ci:platform-info
+      - name: Source/release preflight
+        run: |
+          pnpm run ci:platform-info
+          pnpm run ci:preflight
+          pnpm run release:self-test
 
-      - name: Preflight
-        run: pnpm run ci:preflight
-
-      - name: Release tooling self-test
-        run: pnpm run release:self-test
-
-      - name: Full source verification
+      - name: Full common source verification
         run: pnpm run verify

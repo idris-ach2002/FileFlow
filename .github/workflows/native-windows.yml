@@ -1,0 +1,120 @@
+name: FileFlow Native Windows
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: Native Windows / x64
+    runs-on: windows-2025
+    env:
+      CARGO_INCREMENTAL: '0'
+      RUST_BACKTRACE: '1'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.22.3'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.1'
+          targets: x86_64-pc-windows-msvc
+          components: clippy
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          # Keep the historic key prefix once so the 422 MB cache already
+          # produced by the old Windows job can be reused where possible.
+          shared-key: quality-Windows-X64
+          cache-on-failure: true
+
+      - name: Install dependencies
+        shell: pwsh
+        run: pnpm install --frozen-lockfile
+
+      - name: Windows deterministic preflight
+        shell: pwsh
+        run: ./scripts/ci/windows-preflight.ps1
+
+      - name: Windows platform preflight
+        shell: pwsh
+        run: |
+          pnpm run ci:platform-info
+          pnpm run ci:preflight
+
+      - name: Windows native compile + Clippy
+        shell: pwsh
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Windows native Rust tests
+        shell: pwsh
+        run: cargo test --workspace --locked
+
+  package-smoke:
+    name: Package smoke Windows / x64
+    needs: native
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    runs-on: windows-2025
+    env:
+      CARGO_INCREMENTAL: '0'
+      RUST_BACKTRACE: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.22.3'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.1'
+          targets: x86_64-pc-windows-msvc
+      - uses: swatinem/rust-cache@v2
+        with:
+          shared-key: quality-Windows-X64
+          cache-on-failure: true
+      - name: Install dependencies
+        shell: pwsh
+        run: pnpm install --frozen-lockfile
+      - name: Deterministic Windows gate
+        shell: pwsh
+        run: ./scripts/ci/windows-preflight.ps1
+      - name: Stage optional engines
+        shell: pwsh
+        run: |
+          python scripts/release/stage-engines.py --target x86_64-pc-windows-msvc --mode optional
+          python scripts/release/harden-engine-pack.py --target x86_64-pc-windows-msvc
+          python scripts/release/generate-release-config.py --target x86_64-pc-windows-msvc
+      - name: Build package smoke
+        shell: pwsh
+        run: pnpm exec tauri build --target x86_64-pc-windows-msvc --bundles nsis,msi --config src-tauri/tauri.release.conf.json
+      - name: Validate package smoke
+        shell: pwsh
+        run: |
+          node scripts/release/validate-distribution.mjs --target x86_64-pc-windows-msvc
+          node scripts/release/smoke-packaged-app.mjs --target x86_64-pc-windows-msvc
