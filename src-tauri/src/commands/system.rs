@@ -1,4 +1,5 @@
 use crate::AppState;
+use fileflow_domain::PerformanceMode;
 use fileflow_engine::EngineProbe;
 use fileflow_planner::{CapabilityCatalog, ConversionPlan};
 use fileflow_scheduler::SchedulerSnapshot;
@@ -24,7 +25,7 @@ pub async fn health_check(state: State<'_, AppState>) -> Result<HealthResponse, 
         cpu_threads: std::thread::available_parallelism().map_or(1, usize::from),
         os: std::env::consts::OS,
         architecture: std::env::consts::ARCH,
-        scheduler: state.scheduler.snapshot(),
+        scheduler: state.runtime.read().scheduler.snapshot(),
     })
 }
 
@@ -61,5 +62,19 @@ pub fn plan_conversion(
 
 #[tauri::command]
 pub fn scheduler_status(state: State<'_, AppState>) -> SchedulerSnapshot {
-    state.scheduler.snapshot()
+    state.runtime.read().scheduler.snapshot()
+}
+
+#[tauri::command]
+pub fn set_performance_mode(
+    state: State<'_, AppState>,
+    mode: PerformanceMode,
+) -> Result<SchedulerSnapshot, String> {
+    if !state.jobs.is_empty() {
+        return Err("Attendez la fin des traitements en cours avant de changer le mode de performance.".into());
+    }
+    let runtime = crate::ExecutionRuntime::new(mode);
+    let snapshot = runtime.scheduler.snapshot();
+    *state.runtime.write() = runtime;
+    Ok(snapshot)
 }

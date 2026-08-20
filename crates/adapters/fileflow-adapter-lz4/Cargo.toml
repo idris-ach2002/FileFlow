@@ -1,0 +1,10 @@
+[package]
+name = "fileflow-adapter-lz4"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+fileflow-domain = { path = "../../fileflow-domain" }
+fileflow-engine = { path = "../../fileflow-engine" }
+async-trait.workspace = true

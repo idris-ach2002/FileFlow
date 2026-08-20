@@ -4,6 +4,7 @@ import {
   DestroyRef,
   HostListener,
   computed,
+  effect,
   inject,
   signal,
 } from '@angular/core';
@@ -12,6 +13,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { ActionDescriptor } from './core/ipc/tauri.models';
+import { AuthStore } from './core/auth/auth.store';
 import { CapabilityStore } from './core/catalog/capability.store';
 import { PreferencesService } from './core/preferences/preferences.service';
 import { WorkspaceStore } from './features/workspace/data-access/workspace.store';
@@ -27,10 +29,13 @@ export class AppComponent {
   private readonly destroyRef = inject(DestroyRef);
   private readonly router = inject(Router);
   protected readonly workspaceStore = inject(WorkspaceStore);
+  protected readonly auth = inject(AuthStore);
   protected readonly capabilities = inject(CapabilityStore);
   protected readonly preferences = inject(PreferencesService);
   protected readonly paletteOpen = signal(false);
   protected readonly paletteQuery = signal('');
+  private shellInitialized = false;
+  private preferencesAccountId: string | null = null;
 
   protected readonly paletteActions = computed(() => {
     const query = this.paletteQuery().trim().toLowerCase();
@@ -42,9 +47,42 @@ export class AppComponent {
   });
 
   constructor() {
-    this.capabilities.initialize();
-    void this.setupDesktopDrop();
-    void this.setupDesktopNavigation();
+    effect(() => {
+      const profileId = this.auth.profile()?.id ?? null;
+      if (this.auth.authenticated() && this.auth.setupComplete() && profileId) {
+        queueMicrotask(() => void this.initializeAuthenticatedContext(profileId));
+      } else if (!this.auth.authenticated()) {
+        this.preferencesAccountId = null;
+      }
+    });
+    void this.initializeApplication();
+  }
+
+  private async initializeApplication(): Promise<void> {
+    await this.auth.initialize();
+    if (this.auth.needsWelcome()) {
+      await this.router.navigate(['/welcome']);
+      return;
+    }
+    if (this.router.url.startsWith('/welcome')) await this.router.navigate(['/']);
+    const profileId = this.auth.profile()?.id;
+    if (profileId) await this.initializeAuthenticatedContext(profileId);
+  }
+
+  private async initializeAuthenticatedContext(profileId: string): Promise<void> {
+    if (this.preferencesAccountId !== profileId) {
+      this.preferencesAccountId = profileId;
+      await this.preferences.reloadNative();
+    }
+    await this.initializeShellOnce();
+    await this.capabilities.refreshUserData();
+  }
+
+  private async initializeShellOnce(): Promise<void> {
+    if (this.shellInitialized) return;
+    this.shellInitialized = true;
+    await this.capabilities.initialize();
+    await Promise.all([this.setupDesktopDrop(), this.setupDesktopNavigation()]);
   }
 
   @HostListener('document:keydown', ['$event'])

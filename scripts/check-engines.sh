@@ -69,3 +69,5 @@ check_office
 check "Pandoc" pandoc
 check "ExifTool" exiftool
 check "7-Zip" 7zz 7z
+check "Zstandard" zstd
+check "LZ4" lz4

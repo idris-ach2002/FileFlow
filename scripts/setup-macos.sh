@@ -57,7 +57,8 @@ for formula in \
   ocrmypdf \
   pandoc \
   exiftool \
-  sevenzip
+  sevenzip \
+  zstd lz4
 do
   install_formula "$formula"
 done

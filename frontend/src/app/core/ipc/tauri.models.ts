@@ -409,3 +409,68 @@ export interface ArchiveInspection {
   families: ArchiveFamilySummary[];
   samples: ArchiveEntryPreview[];
 }
+
+export interface AccountBootstrap {
+  hasAccount: boolean;
+}
+
+export interface AccountProfile {
+  id: string;
+  email: string;
+  displayName: string;
+  firstName: string;
+  lastName: string;
+  avatarPath?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OnboardingPreferences {
+  accountId: string;
+  completed: boolean;
+  storageDirectory?: string | null;
+  language: 'fr' | 'en' | 'de' | string;
+  beginnerMode: boolean;
+  preserveOriginals: boolean;
+  notifications: boolean;
+  confirmDestructiveActions: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AuthSessionResponse {
+  token: string;
+  expiresAt: string;
+  profile: AccountProfile;
+  onboarding: OnboardingPreferences;
+}
+
+export interface CreateAccountRequest {
+  email: string;
+  password: string;
+  displayName: string;
+  firstName: string;
+  lastName: string;
+}
+
+export interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+export interface ChangePasswordRequest {
+  currentPassword: string;
+  newPassword: string;
+}
+
+export interface ProfileUpdate {
+  displayName: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+}
+
+export interface AvatarPayload {
+  mimeType: string;
+  bytes: number[];
+}

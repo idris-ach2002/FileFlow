@@ -1058,6 +1058,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fileflow-adapter-lz4"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "fileflow-domain",
+ "fileflow-engine",
+]
+
+[[package]]
 name = "fileflow-adapter-metadata"
 version = "0.1.0"
 dependencies = [
@@ -1130,6 +1139,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fileflow-adapter-zstd"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "fileflow-domain",
+ "fileflow-engine",
+]
+
+[[package]]
 name = "fileflow-analysis"
 version = "0.1.0"
 dependencies = [
@@ -1158,6 +1176,8 @@ dependencies = [
 name = "fileflow-desktop"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
+ "parking_lot",
  "chrono",
  "dashmap",
  "fileflow-adapter-archive",
@@ -1165,6 +1185,7 @@ dependencies = [
  "fileflow-adapter-ghostscript",
  "fileflow-adapter-imagemagick",
  "fileflow-adapter-img2pdf",
+ "fileflow-adapter-lz4",
  "fileflow-adapter-metadata",
  "fileflow-adapter-ocr",
  "fileflow-adapter-office",
@@ -1173,6 +1194,7 @@ dependencies = [
  "fileflow-adapter-qpdf",
  "fileflow-adapter-tesseract",
  "fileflow-adapter-vips",
+ "fileflow-adapter-zstd",
  "fileflow-analysis",
  "fileflow-core",
  "fileflow-domain",
@@ -1291,6 +1313,7 @@ dependencies = [
 name = "fileflow-storage"
 version = "0.1.0"
 dependencies = [
+ "sha2",
  "chrono",
  "parking_lot",
  "rusqlite",

@@ -20,6 +20,8 @@ fileflow-adapter-img2pdf = { path = "../crates/adapters/fileflow-adapter-img2pdf
 fileflow-adapter-poppler = { path = "../crates/adapters/fileflow-adapter-poppler" }
 fileflow-adapter-ghostscript = { path = "../crates/adapters/fileflow-adapter-ghostscript" }
 fileflow-adapter-tesseract = { path = "../crates/adapters/fileflow-adapter-tesseract" }
+fileflow-adapter-zstd = { path = "../crates/adapters/fileflow-adapter-zstd" }
+fileflow-adapter-lz4 = { path = "../crates/adapters/fileflow-adapter-lz4" }
 fileflow-adapter-pandoc = { path = "../crates/adapters/fileflow-adapter-pandoc" }
 fileflow-adapter-ocr = { path = "../crates/adapters/fileflow-adapter-ocr" }
 fileflow-adapter-office = { path = "../crates/adapters/fileflow-adapter-office" }
@@ -47,3 +49,6 @@ dashmap.workspace = true
 tokio-util.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+
+parking_lot.workspace = true
+serde_json.workspace = true

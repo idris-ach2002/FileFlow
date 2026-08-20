@@ -1,10 +1,15 @@
+@if (auth.phase() === 'loading') {
+  <div class="boot-screen"><div class="boot-logo">F</div><strong>FileFlow</strong><span>Préparation de votre espace…</span></div>
+} @else if (auth.needsWelcome()) {
+  <router-outlet />
+} @else {
 <div class="app-shell">
   <aside class="sidebar">
     <a class="brand" routerLink="/" aria-label="FileFlow — Accueil">
       <div class="brand-mark"><span>F</span></div>
       <div class="brand-copy">
         <strong>FileFlow</strong>
-        <span>Local file studio</span>
+        <span>Vos fichiers, simplement</span>
       </div>
     </a>
 
@@ -28,12 +33,23 @@
       <a routerLink="/history" routerLinkActive="active">
         <span class="nav-icon">↺</span><span class="nav-label">Historique</span>
       </a>
+      <a routerLink="/help" routerLinkActive="active">
+        <span class="nav-icon">?</span><span class="nav-label">Aide & guides</span>
+      </a>
       <a routerLink="/settings" routerLinkActive="active">
         <span class="nav-icon">⚙</span><span class="nav-label">Paramètres</span>
       </a>
     </nav>
 
     <div class="sidebar-spacer"></div>
+
+    <a class="profile-card" routerLink="/settings" aria-label="Ouvrir mon profil">
+      <span class="profile-avatar">
+        @if (auth.avatarUrl(); as avatar) { <img [src]="avatar" alt="" /> } @else { {{ auth.initials() }} }
+      </span>
+      <span class="profile-copy"><strong>{{ auth.profile()?.displayName }}</strong><small>Mon profil</small></span>
+      <span class="profile-arrow">›</span>
+    </a>
 
     <div class="privacy-card">
       <span class="privacy-icon">●</span>
@@ -74,7 +90,7 @@
               <span class="palette-mark" [attr.data-category]="action.category">{{ action.title.slice(0, 2).toUpperCase() }}</span>
               <span class="palette-copy"><strong>{{ action.title }}</strong><small>{{ action.description }}</small></span>
               @if (capabilities.isActionExecutable(action)) { <span class="ready-dot" title="Exécution locale prête"></span> }
-              @else { <span class="missing-label">moteur requis</span> }
+              @else { <span class="missing-label">indisponible ici</span> }
             </button>
           } @empty {
             <div class="palette-empty">Aucune action ne correspond à cette recherche.</div>
@@ -85,3 +101,5 @@
     </div>
   }
 </div>
+
+}

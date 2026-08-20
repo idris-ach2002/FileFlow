@@ -1,4 +1,4 @@
-use crate::AppState;
+use crate::{AppState, commands::account::require_active_session};
 use fileflow_analysis::{DuplicateInput, DuplicateReport};
 use fileflow_domain::{Asset, AssetId, ResourceProfile, WorkspaceId};
 use fileflow_executor::ArchiveInspection;
@@ -10,6 +10,7 @@ pub async fn confirm_duplicates(
     state: State<'_, AppState>,
     workspace_id: WorkspaceId,
 ) -> Result<DuplicateReport, String> {
+    require_active_session(&state)?;
     let assets = state
         .core
         .workspaces
@@ -31,12 +32,12 @@ pub async fn confirm_duplicates(
         max_parallel_instances: 1,
     };
     let cancellation = CancellationToken::new();
-    let _lease = state
-        .scheduler
+    let scheduler = { state.runtime.read().scheduler.clone() };
+    let _lease = scheduler
         .acquire("native-duplicates", profile, &cancellation)
         .await
         .map_err(|error| error.to_string())?;
-    let threads = state.scheduler.budget().cpu_tokens.clamp(1, 4);
+    let threads = scheduler.budget().cpu_tokens.clamp(1, 4);
     tokio::task::spawn_blocking(move || fileflow_analysis::confirm_duplicates(inputs, threads))
         .await
         .map_err(|error| format!("Le worker de détection de doublons a échoué : {error}"))
@@ -48,6 +49,7 @@ pub async fn inspect_archive(
     workspace_id: WorkspaceId,
     asset_id: Option<AssetId>,
 ) -> Result<ArchiveInspection, String> {
+    require_active_session(&state)?;
     let selected = asset_id.into_iter().collect::<Vec<_>>();
     let assets = state
         .core
@@ -71,8 +73,8 @@ pub async fn inspect_archive(
         .and_then(|probe| probe.executable)
         .ok_or_else(|| "7-Zip n’est pas disponible pour inspecter cette archive.".to_owned())?;
     let cancellation = CancellationToken::new();
-    let _lease = state
-        .scheduler
+    let scheduler = { state.runtime.read().scheduler.clone() };
+    let _lease = scheduler
         .acquire("archive", ResourceProfile::ARCHIVE, &cancellation)
         .await
         .map_err(|error| error.to_string())?;

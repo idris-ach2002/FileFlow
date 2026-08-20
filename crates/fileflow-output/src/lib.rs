@@ -130,6 +130,70 @@ impl OutputResolver {
         })
     }
 
+    pub fn plan_named(
+        &self,
+        request: &OutputRequest,
+        preferred_file_name: &str,
+    ) -> Result<OutputPlan, OutputError> {
+        let source_parent = request
+            .source
+            .parent()
+            .ok_or_else(|| OutputError::MissingParent(request.source.clone()))?;
+        let destination_directory = match request.policy.destination {
+            DestinationPolicy::SameFolder | DestinationPolicy::AskEveryTime => {
+                source_parent.to_path_buf()
+            }
+            DestinationPolicy::Subfolder => {
+                source_parent.join(sanitize_component(&request.policy.subfolder_name))
+            }
+            DestinationPolicy::CustomFolder => request
+                .policy
+                .custom_directory
+                .clone()
+                .ok_or(OutputError::MissingCustomDirectory)?,
+        };
+        let destination_directory = if request.policy.preserve_tree {
+            relative_parent(request.source_root.as_deref(), &request.source)
+                .map_or(destination_directory.clone(), |relative| {
+                    destination_directory.join(relative)
+                })
+        } else {
+            destination_directory
+        };
+
+        let safe_name = Path::new(preferred_file_name)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.is_empty())
+            .map(sanitize_file_name)
+            .unwrap_or_else(|| "resultat".into());
+        let candidate = destination_directory.join(safe_name);
+        let (final_path, replaces_existing, skipped) =
+            resolve_conflict(&candidate, request.policy.conflict)?;
+        if !request.policy.overwrite_original && same_path(&final_path, &request.source) {
+            return Err(OutputError::SourceOverwrite(final_path));
+        }
+
+        let final_stem = final_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("result");
+        let token = Uuid::new_v4().simple();
+        let temporary_name = match final_path.extension().and_then(|value| value.to_str()) {
+            Some(extension) => format!(".{final_stem}.fileflow-{token}.tmp.{extension}"),
+            None => format!(".{final_stem}.fileflow-{token}.tmp"),
+        };
+        let temporary_path = destination_directory.join(temporary_name);
+
+        Ok(OutputPlan {
+            destination_directory,
+            final_path,
+            temporary_path,
+            replaces_existing,
+            skipped,
+        })
+    }
+
     pub async fn prepare(&self, plan: &OutputPlan) -> Result<(), OutputError> {
         if plan.skipped {
             return Ok(());
@@ -253,6 +317,23 @@ fn sanitize_component(value: &str) -> String {
     }
 }
 
+fn sanitize_file_name(value: &str) -> String {
+    let cleaned = value
+        .trim()
+        .chars()
+        .map(|character| match character {
+            '/' | '\\' | ':' | '\0' => '-',
+            other if other.is_control() => '-',
+            other => other,
+        })
+        .collect::<String>();
+    if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
+        "resultat".into()
+    } else {
+        cleaned
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,6 +400,24 @@ mod tests {
             Some("webp")
         );
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn named_plan_supports_extension_stripping_for_decompression() {
+        let resolver = OutputResolver;
+        let request = OutputRequest {
+            source: PathBuf::from("/tmp/archive.tar.zst"),
+            source_root: None,
+            desired_extension: None,
+            operation_suffix: Some("decompresse".into()),
+            policy: OutputPolicy::default(),
+        };
+        let plan = resolver.plan_named(&request, "archive.tar").unwrap();
+        assert_eq!(plan.final_path, PathBuf::from("/tmp/FileFlow/archive.tar"));
+        assert_eq!(
+            plan.temporary_path.extension().and_then(|value| value.to_str()),
+            Some("tar")
+        );
     }
 
     #[test]

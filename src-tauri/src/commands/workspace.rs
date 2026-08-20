@@ -1,4 +1,4 @@
-use crate::AppState;
+use crate::{AppState, commands::account::require_active_session};
 use fileflow_core::WorkspaceIntakeEvent;
 use fileflow_domain::{ActionRecommendation, WorkspaceId};
 use fileflow_intake::ScanOptions;
@@ -14,6 +14,7 @@ pub async fn create_workspace(
     options: Option<ScanOptions>,
     on_event: Channel<WorkspaceIntakeEvent>,
 ) -> Result<WorkspaceSnapshot, String> {
+    require_active_session(&state)?;
     if paths.is_empty() {
         return Err("Aucun fichier ou dossier n'a été fourni.".into());
     }
@@ -42,6 +43,7 @@ pub fn get_workspace(
     state: State<'_, AppState>,
     workspace_id: WorkspaceId,
 ) -> Result<WorkspaceSnapshot, String> {
+    require_active_session(&state)?;
     state
         .core
         .workspace(workspace_id)
@@ -54,6 +56,7 @@ pub fn list_workspace_assets(
     workspace_id: WorkspaceId,
     query: AssetQuery,
 ) -> Result<AssetPage, String> {
+    require_active_session(&state)?;
     state
         .core
         .list_workspace_assets(workspace_id, query)
@@ -65,6 +68,7 @@ pub fn workspace_insights(
     state: State<'_, AppState>,
     workspace_id: WorkspaceId,
 ) -> Result<WorkspaceInsights, String> {
+    require_active_session(&state)?;
     state
         .core
         .workspace_insights(workspace_id)
@@ -76,6 +80,7 @@ pub async fn workspace_recommendations(
     state: State<'_, AppState>,
     workspace_id: WorkspaceId,
 ) -> Result<Vec<ActionRecommendation>, String> {
+    require_active_session(&state)?;
     state
         .core
         .workspace_recommendations(workspace_id)
