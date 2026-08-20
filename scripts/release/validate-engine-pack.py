@@ -16,6 +16,12 @@ ENGINE_ROOT=ROOT/'src-tauri/resources/engines'
 BIN=ENGINE_ROOT/'bin'; LIB=ENGINE_ROOT/'lib'; META=ROOT/'src-tauri/resources/engine-pack.json'
 
 
+def is_linux_virtual_dependency(dep: str) -> bool:
+    # Kernel-provided ELF pseudo shared objects are not filesystem dependencies.
+    token = dep.strip().split(" (", 1)[0]
+    return token in {"linux-vdso.so.1", "linux-gate.so.1"}
+
+
 def run(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
 
@@ -63,6 +69,8 @@ def validate_macos(paths: list[Path], target: str, require_signature: bool) -> l
         if deps.returncode!=0: failures.append(f'{path}: otool failed: {deps.stdout.strip()}')
         for line in deps.stdout.splitlines()[1:]:
             dep=line.strip().split(' (',1)[0]
+            if is_linux_virtual_dependency(dep):
+                continue
             if dep.startswith(('/opt/homebrew/','/usr/local/','/tmp/','/private/tmp/','/Users/','/home/runner/')):
                 failures.append(f'{path}: non-portable dependency {dep}')
         if require_signature:
