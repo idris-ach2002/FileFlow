@@ -4,6 +4,13 @@
   <router-outlet />
 } @else {
 <div class="app-shell">
+  @if (updater.available()) {
+    <aside class="update-banner" aria-live="polite">
+      <div><strong>FileFlow {{ updater.version() }} est disponible</strong><span>La mise à jour est signée et sera installée localement.</span></div>
+      <button type="button" class="update-install" (click)="updater.install()" [disabled]="updater.busy()">Installer</button>
+      <button type="button" class="update-dismiss" aria-label="Plus tard" (click)="updater.dismiss()">×</button>
+    </aside>
+  }
   <aside class="sidebar">
     <a class="brand" routerLink="/" aria-label="FileFlow — Accueil">
       <div class="brand-mark"><span>F</span></div>

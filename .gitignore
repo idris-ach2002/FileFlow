@@ -23,3 +23,9 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+src-tauri/tauri.release.conf.json
+src-tauri/resources/engines/bin/
+release/engines/packs/
+__pycache__/
+*.pyc
+release/engines/out/

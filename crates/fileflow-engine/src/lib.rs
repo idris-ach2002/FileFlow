@@ -4,7 +4,39 @@ use serde::{Deserialize, Serialize};
 use std::{
     env,
     path::{Path, PathBuf},
+    sync::{OnceLock, RwLock},
 };
+
+static BUNDLED_ENGINE_ROOT: OnceLock<RwLock<Option<PathBuf>>> = OnceLock::new();
+
+pub fn set_bundled_engine_root(root: PathBuf) {
+    let slot = BUNDLED_ENGINE_ROOT.get_or_init(|| RwLock::new(None));
+    if let Ok(mut guard) = slot.write() {
+        *guard = Some(root);
+    }
+}
+
+fn bundled_engine_root() -> Option<PathBuf> {
+    BUNDLED_ENGINE_ROOT
+        .get()
+        .and_then(|slot| slot.read().ok())
+        .and_then(|guard| guard.as_ref().cloned())
+}
+
+fn executable_variants(executable: &str) -> Vec<String> {
+    #[cfg(target_os = "windows")]
+    {
+        if executable.to_ascii_lowercase().ends_with(".exe") {
+            vec![executable.to_owned()]
+        } else {
+            vec![executable.to_owned(), format!("{executable}.exe")]
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        vec![executable.to_owned()]
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -64,14 +96,28 @@ pub trait EngineAdapter: Send + Sync {
 }
 
 pub fn find_executable(executable: &str) -> Option<PathBuf> {
+    let variants = executable_variants(executable);
     let candidate = Path::new(executable);
-    if candidate.components().count() > 1 && is_executable_file(candidate) {
-        return Some(candidate.to_path_buf());
+    if candidate.components().count() > 1 {
+        if let Some(found) = variants.iter().map(PathBuf::from).find(|path| is_executable_file(path)) {
+            return Some(found);
+        }
+    }
+
+    // Packaged engines always win so a release behaves identically regardless
+    // of the user's shell PATH or package manager configuration.
+    if let Some(root) = bundled_engine_root()
+        && let Some(found) = variants
+            .iter()
+            .map(|name| root.join(name))
+            .find(|candidate| is_executable_file(candidate))
+    {
+        return Some(found);
     }
 
     if let Some(path) = env::var_os("PATH")
         && let Some(found) = env::split_paths(&path)
-            .map(|directory| directory.join(executable))
+            .flat_map(|directory| variants.iter().map(move |name| directory.join(name)))
             .find(|candidate| is_executable_file(candidate))
     {
         return Some(found);
@@ -79,7 +125,7 @@ pub fn find_executable(executable: &str) -> Option<PathBuf> {
 
     platform_search_directories()
         .into_iter()
-        .map(|directory| directory.join(executable))
+        .flat_map(|directory| variants.iter().map(move |name| directory.join(name)))
         .find(|candidate| is_executable_file(candidate))
 }
 

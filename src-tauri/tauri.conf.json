@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "FileFlow",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "identifier": "com.fileflow.desktop",
   "build": {
     "beforeDevCommand": "pnpm run frontend:dev",
@@ -37,6 +37,14 @@
       "icons/icon.icns"
     ],
     "category": "Utility",
-    "shortDescription": "Local file conversion and organisation toolbox"
+    "shortDescription": "Local file conversion and organisation toolbox",
+    "resources": {
+      "resources/engines/": "engines/",
+      "resources/licenses/": "licenses/",
+      "resources/engine-pack.json": "engine-pack.json"
+    },
+    "createUpdaterArtifacts": false,
+    "longDescription": "FileFlow est une boîte à outils locale de conversion, compression, organisation et automatisation de fichiers.",
+    "publisher": "FileFlow"
   }
 }

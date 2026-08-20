@@ -1,6 +1,6 @@
 {
   "name": "fileflow-workspace",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "scripts": {
     "frontend:dev": "pnpm --filter @fileflow/frontend start",
@@ -19,8 +19,17 @@
     "setup": "sh scripts/setup.sh",
     "build:mac": "tauri build --bundles app,dmg",
     "build:mac:universal": "tauri build --target universal-apple-darwin --bundles app,dmg",
-    "build:linux": "tauri build --bundles deb,appimage",
-    "verify": "sh scripts/verify.sh"
+    "build:linux": "tauri build --bundles deb,appimage,rpm",
+    "verify": "node scripts/verify.mjs",
+    "build:windows": "tauri build --bundles nsis,msi",
+    "release:check": "node scripts/release/run-python.mjs scripts/release/check-release.py",
+    "release:config": "node scripts/release/run-python.mjs scripts/release/generate-release-config.py",
+    "release:engines": "node scripts/release/run-python.mjs scripts/release/stage-engines.py",
+    "release:version": "node scripts/release/run-python.mjs scripts/release/set-version.py",
+    "release:bootstrap": "node scripts/release/run-python.mjs scripts/release/bootstrap-release.py",
+    "release:fetch-engines": "node scripts/release/run-python.mjs scripts/release/fetch-engine-pack.py",
+    "release:pack-engines": "node scripts/release/run-python.mjs scripts/release/make-engine-pack.py",
+    "release:smoke-engines": "node scripts/release/run-python.mjs scripts/release/smoke-engines.py"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.4"

@@ -1,0 +1,173 @@
+{
+  "schemaVersion": 1,
+  "description": "FileFlow native engine release manifest",
+  "engines": [
+    {
+      "id": "ffmpeg",
+      "executables": [
+        "ffmpeg",
+        "ffprobe"
+      ],
+      "tier": "core",
+      "license": "LGPL-2.1-or-later / build-dependent",
+      "probeArgs": [
+        "-version"
+      ]
+    },
+    {
+      "id": "imagemagick",
+      "executables": [
+        "magick"
+      ],
+      "tier": "core",
+      "license": "ImageMagick",
+      "probeArgs": [
+        "-version"
+      ]
+    },
+    {
+      "id": "vips",
+      "executables": [
+        "vips"
+      ],
+      "tier": "core",
+      "license": "LGPL-2.1-or-later",
+      "probeArgs": [
+        "--version"
+      ]
+    },
+    {
+      "id": "qpdf",
+      "executables": [
+        "qpdf"
+      ],
+      "tier": "core",
+      "license": "Apache-2.0",
+      "probeArgs": [
+        "--version"
+      ]
+    },
+    {
+      "id": "archive",
+      "executables": [
+        "7zz"
+      ],
+      "tier": "core",
+      "license": "LGPL-2.1-or-later / BSD-3-Clause",
+      "probeArgs": [
+        "i"
+      ]
+    },
+    {
+      "id": "zstd",
+      "executables": [
+        "zstd"
+      ],
+      "tier": "core",
+      "license": "BSD-3-Clause",
+      "probeArgs": [
+        "--version"
+      ]
+    },
+    {
+      "id": "lz4",
+      "executables": [
+        "lz4"
+      ],
+      "tier": "core",
+      "license": "BSD-2-Clause / GPL-2.0 for CLI",
+      "probeArgs": [
+        "--version"
+      ]
+    },
+    {
+      "id": "metadata",
+      "executables": [
+        "exiftool"
+      ],
+      "tier": "extended",
+      "license": "Artistic-1.0 / GPL-1.0-or-later",
+      "probeArgs": [
+        "-ver"
+      ]
+    },
+    {
+      "id": "tesseract",
+      "executables": [
+        "tesseract"
+      ],
+      "tier": "extended",
+      "license": "Apache-2.0",
+      "probeArgs": [
+        "--version"
+      ]
+    },
+    {
+      "id": "poppler",
+      "executables": [
+        "pdftoppm",
+        "pdftotext"
+      ],
+      "tier": "extended",
+      "license": "GPL-2.0-or-later",
+      "probeArgs": [
+        "-v"
+      ]
+    },
+    {
+      "id": "ghostscript",
+      "executables": [
+        "gs"
+      ],
+      "tier": "extended",
+      "license": "AGPL-3.0-or-later / commercial",
+      "probeArgs": [
+        "--version"
+      ]
+    },
+    {
+      "id": "pandoc",
+      "executables": [
+        "pandoc"
+      ],
+      "tier": "extended",
+      "license": "GPL-2.0-or-later",
+      "probeArgs": [
+        "--version"
+      ]
+    },
+    {
+      "id": "office",
+      "executables": [
+        "soffice"
+      ],
+      "tier": "optional",
+      "license": "MPL-2.0",
+      "probeArgs": [
+        "--version"
+      ]
+    },
+    {
+      "id": "ocr",
+      "executables": [
+        "ocrmypdf"
+      ],
+      "tier": "optional",
+      "license": "MPL-2.0",
+      "probeArgs": [
+        "--version"
+      ]
+    },
+    {
+      "id": "img2pdf",
+      "executables": [
+        "img2pdf"
+      ],
+      "tier": "optional",
+      "license": "LGPL-3.0-or-later",
+      "probeArgs": [
+        "--version"
+      ]
+    }
+  ]
+}

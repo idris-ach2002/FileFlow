@@ -1,0 +1,211 @@
+name: release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: app,dmg
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            bundles: nsis,msi
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,appimage,rpm
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            bundles: deb,appimage,rpm
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Linux prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xdg-utils \
+            libfuse2 \
+            rpm
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.22.3'
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Enable pnpm
+        shell: bash
+        run: corepack enable && corepack prepare pnpm@11.20.0 --activate
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.1'
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+
+      - name: Install dependencies
+        shell: bash
+        run: pnpm install --frozen-lockfile
+
+      - name: Resolve and validate release tag
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          EXPECTED="v${VERSION}"
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" && "${GITHUB_REF_NAME:-}" != "$EXPECTED" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match FileFlow version $EXPECTED" >&2
+            exit 2
+          fi
+          echo "FILEFLOW_RELEASE_TAG=$EXPECTED" >> "$GITHUB_ENV"
+
+      - name: Import macOS signing certificate
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          if [[ -z "${APPLE_CERTIFICATE:-}" ]]; then
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+            echo "No Apple certificate configured; using ad-hoc signing."
+            exit 0
+          fi
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 16)
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          Path('certificate.p12').write_bytes(base64.b64decode(os.environ['APPLE_CERTIFICATE']))
+          PY
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          IDENTITY=$(security find-identity -v -p codesigning build.keychain | awk -F'"' '/Developer ID Application/ {print $2; exit}')
+          if [[ -z "$IDENTITY" ]]; then
+            IDENTITY=$(security find-identity -v -p codesigning build.keychain | awk -F'"' '/[0-9A-F]{40}/ {print $2; exit}')
+          fi
+          test -n "$IDENTITY"
+          echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+
+      - name: Import Windows signing certificate
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE)) {
+            Write-Host 'No Windows signing certificate configured; producing an unsigned installer.'
+            exit 0
+          }
+          New-Item -ItemType Directory -Force -Path certificate | Out-Null
+          Set-Content -Path certificate/tempCert.txt -Value $env:WINDOWS_CERTIFICATE
+          certutil -decode certificate/tempCert.txt certificate/certificate.pfx | Out-Null
+          Remove-Item certificate/tempCert.txt
+          $password = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
+          $cert = Import-PfxCertificate -FilePath certificate/certificate.pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          "WINDOWS_CERTIFICATE_THUMBPRINT=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Fetch official FileFlow engine pack
+        shell: bash
+        env:
+          FILEFLOW_ENGINE_MODE: ${{ vars.FILEFLOW_ENGINE_MODE }}
+          FILEFLOW_ENGINE_PACK_URL_TEMPLATE: ${{ vars.FILEFLOW_ENGINE_PACK_URL_TEMPLATE }}
+        run: |
+          MODE="${FILEFLOW_ENGINE_MODE:-core}"
+          if [[ "$MODE" == "optional" ]]; then
+            echo "Optional engine mode: no remote pack is required."
+          else
+            test -n "${FILEFLOW_ENGINE_PACK_URL_TEMPLATE:-}" || {
+              echo "FILEFLOW_ENGINE_PACK_URL_TEMPLATE is required for $MODE releases" >&2
+              exit 2
+            }
+            python scripts/release/fetch-engine-pack.py --target '${{ matrix.target }}'
+          fi
+
+      - name: Stage FileFlow engines
+        shell: bash
+        env:
+          FILEFLOW_ENGINE_MODE: ${{ vars.FILEFLOW_ENGINE_MODE }}
+        run: |
+          python scripts/release/stage-engines.py \
+            --target '${{ matrix.target }}' \
+            --mode "${FILEFLOW_ENGINE_MODE:-core}"
+
+      - name: Smoke-test staged native engines
+        shell: bash
+        env:
+          FILEFLOW_ENGINE_MODE: ${{ vars.FILEFLOW_ENGINE_MODE }}
+        run: python scripts/release/smoke-engines.py --mode "${FILEFLOW_ENGINE_MODE:-core}"
+
+      - name: Configure updater and signing
+        shell: bash
+        env:
+          TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          FILEFLOW_UPDATE_ENDPOINT: ${{ vars.FILEFLOW_UPDATE_ENDPOINT }}
+          WINDOWS_CERTIFICATE_THUMBPRINT: ${{ env.WINDOWS_CERTIFICATE_THUMBPRINT }}
+          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+        run: python scripts/release/generate-release-config.py --target '${{ matrix.target }}'
+
+      - name: Verify source
+        shell: bash
+        run: pnpm run verify
+
+      - name: Build and publish
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: v__VERSION__
+          releaseName: FileFlow v__VERSION__
+          releaseBody: 'Installateurs officiels FileFlow pour macOS, Windows et Linux.'
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config src-tauri/tauri.release.conf.json
+
+      - name: Generate SHA-256 checksums
+        shell: bash
+        run: python scripts/release/checksums.py --target '${{ matrix.target }}' --output 'SHA256SUMS-${{ matrix.target }}.txt'
+
+      - name: Upload checksums to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$FILEFLOW_RELEASE_TAG" "SHA256SUMS-${{ matrix.target }}.txt" --clobber

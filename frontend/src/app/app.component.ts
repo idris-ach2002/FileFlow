@@ -18,6 +18,7 @@ import { AuthStore } from './core/auth/auth.store';
 import { CapabilityStore } from './core/catalog/capability.store';
 import { PreferencesService } from './core/preferences/preferences.service';
 import { WorkspaceStore } from './features/workspace/data-access/workspace.store';
+import { UpdateService } from './core/update/update.service';
 
 @Component({
   selector: 'ff-root',
@@ -33,6 +34,7 @@ export class AppComponent {
   protected readonly auth = inject(AuthStore);
   protected readonly capabilities = inject(CapabilityStore);
   protected readonly preferences = inject(PreferencesService);
+  protected readonly updater = inject(UpdateService);
   protected readonly paletteOpen = signal(false);
   protected readonly paletteQuery = signal('');
   private shellInitialized = false;
@@ -71,6 +73,9 @@ export class AppComponent {
       if (profileId) await this.initializeAuthenticatedContext(profileId);
     } finally {
       await this.revealDesktopWindow();
+      // Update checks are deliberately non-blocking: startup/authentication must
+      // remain instant even when GitHub or the update endpoint is unavailable.
+      setTimeout(() => void this.updater.check(true), 2500);
     }
   }
 
