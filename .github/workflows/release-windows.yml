@@ -60,7 +60,7 @@ jobs:
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
           FILEFLOW_UPDATE_ENDPOINT: ${{ vars.FILEFLOW_UPDATE_ENDPOINT }}
           FILEFLOW_ENGINE_PACK_URL_TEMPLATE: ${{ vars.FILEFLOW_ENGINE_PACK_URL_TEMPLATE }}
-          FILEFLOW_ENGINE_MODE: ${{ vars.FILEFLOW_ENGINE_MODE }}
+          FILEFLOW_ENGINE_MODE: full
           WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
         run: |
           $required = @(
@@ -105,7 +105,10 @@ jobs:
 
       - name: Release source preflight
         shell: pwsh
-        run: pnpm run ci:preflight
+        run: |
+          pnpm run ci:preflight
+          pnpm run release:self-test
+          pnpm run release:check
 
       - name: Deterministic Windows gate
         shell: pwsh
@@ -139,11 +142,14 @@ jobs:
           FILEFLOW_ENGINE_PACK_URL_TEMPLATE: ${{ vars.FILEFLOW_ENGINE_PACK_URL_TEMPLATE }}
           FILEFLOW_ENGINE_PACK_TOKEN: ${{ secrets.FILEFLOW_ENGINE_PACK_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
-          FILEFLOW_ENGINE_MODE: ${{ vars.FILEFLOW_ENGINE_MODE }}
+          FILEFLOW_ENGINE_MODE: full
         run: |
           python scripts/release/fetch-engine-pack.py --target x86_64-pc-windows-msvc
           python scripts/release/stage-engines.py --target x86_64-pc-windows-msvc --mode $env:FILEFLOW_ENGINE_MODE
           python scripts/release/harden-engine-pack.py --target x86_64-pc-windows-msvc
+          python scripts/release/validate-engine-pack.py --target x86_64-pc-windows-msvc --audit-full
+          python scripts/release/smoke-engines.py --mode $env:FILEFLOW_ENGINE_MODE
+          python scripts/release/functional-engine-tests.py --mode $env:FILEFLOW_ENGINE_MODE
 
       - name: Authenticode-sign Windows engine binaries
         shell: pwsh
@@ -164,13 +170,12 @@ jobs:
             }
           }
 
-      - name: Re-harden + validate Windows engines
+      - name: Validate signed Windows engines
         shell: pwsh
         env:
-          FILEFLOW_ENGINE_MODE: ${{ vars.FILEFLOW_ENGINE_MODE }}
+          FILEFLOW_ENGINE_MODE: full
         run: |
-          python scripts/release/harden-engine-pack.py --target x86_64-pc-windows-msvc
-          python scripts/release/validate-engine-pack.py --target x86_64-pc-windows-msvc --require-signature
+          python scripts/release/validate-engine-pack.py --target x86_64-pc-windows-msvc --require-signature --audit-full
           python scripts/release/smoke-engines.py --mode $env:FILEFLOW_ENGINE_MODE
           python scripts/release/functional-engine-tests.py --mode $env:FILEFLOW_ENGINE_MODE
 
@@ -190,6 +195,13 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm exec tauri build --target x86_64-pc-windows-msvc --bundles nsis,msi --config src-tauri/tauri.release.conf.json
+
+      - name: Validate engines from final packaged artifact
+        timeout-minutes: 12
+        shell: pwsh
+        env:
+          FILEFLOW_ENGINE_MODE: full
+        run: python scripts/release/smoke-packaged-engines.py --target x86_64-pc-windows-msvc --mode $env:FILEFLOW_ENGINE_MODE
 
       - name: Validate + runtime smoke
         shell: pwsh

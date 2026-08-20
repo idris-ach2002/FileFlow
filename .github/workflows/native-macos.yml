@@ -27,51 +27,118 @@ jobs:
             os: macos-15-intel
             target: x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
-
     steps:
       - uses: actions/checkout@v7
-
       - uses: pnpm/action-setup@v6
-
       - uses: actions/setup-node@v6
         with:
           node-version: '22.22.3'
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.97.1'
           targets: ${{ matrix.target }}
           components: clippy
-
       - uses: swatinem/rust-cache@v2
         with:
           shared-key: native-macos-${{ matrix.target }}
           cache-on-failure: true
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
       - name: Platform preflight
         run: |
           pnpm run ci:platform-info
           pnpm run ci:preflight
+          pnpm run release:self-test
+          python scripts/release/check-release.py --allow-dirty
           cargo metadata --locked --no-deps --format-version 1 >/dev/null
-
       - name: Native compile + Clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-
       - name: Native Rust tests
         run: cargo test --workspace --locked
 
+  engine-certify:
+    name: Engine certification macOS / ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ARM64
+            os: macos-15
+            target: aarch64-apple-darwin
+          - name: Intel
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Restore immutable certified engine cache
+        id: engine-cache
+        uses: actions/cache@v4
+        with:
+          path: release/engines/out
+          key: fileflow-engines-${{ matrix.target }}-${{ hashFiles('release/engines/**', 'scripts/release/*engine*.py', 'scripts/release/windows-engine-launcher.rs') }}
+      - name: Provision FULL engine runtime
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: fileflow-engines
+          create-args: "python=3.12 pip ffmpeg imagemagick libvips qpdf 7zip zstd lz4 exiftool tesseract poppler ghostscript pandoc"
+          cache-environment: true
+          cache-downloads: true
+      - name: Install portable Python engines
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        run: |
+          micromamba run -n fileflow-engines python -m pip install --disable-pip-version-check --no-cache-dir -r release/engines/python-requirements.txt
+          micromamba run -n fileflow-engines python -c "import PIL, pikepdf, img2pdf, ocrmypdf; print('FileFlow Python engines OK')"
+      - name: Provision LibreOffice build input
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        run: brew list --cask libreoffice >/dev/null 2>&1 || brew install --cask libreoffice
+      - name: Build + relocate + certify FULL engines
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 60
+        shell: bash -el {0}
+        run: |
+          set -euo pipefail
+          python scripts/release/build-native-engine-pack.py --target '${{ matrix.target }}' --prefix "$CONDA_PREFIX"
+          python scripts/release/stage-engines.py --target '${{ matrix.target }}' --mode full
+          python scripts/release/harden-engine-pack.py --target '${{ matrix.target }}' --sign-identity -
+          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --require-signature --audit-full
+          python scripts/release/smoke-engines.py --mode full
+          python scripts/release/functional-engine-tests.py --mode full
+          python scripts/release/make-engine-pack.py --target '${{ matrix.target }}' --source src-tauri/resources/engines --licenses src-tauri/resources/licenses
+      - name: Re-stage immutable artifact and validate closure
+        run: |
+          python scripts/release/stage-local-engine-pack.py --target '${{ matrix.target }}' --directory release/engines/out --mode full
+          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --require-signature --audit-full
+          python scripts/release/smoke-engines.py --mode full
+      - name: Functional clean-host certification of restored cache
+        if: steps.engine-cache.outputs.cache-hit == 'true'
+        timeout-minutes: 10
+        run: python scripts/release/functional-engine-tests.py --mode full
+      - name: Upload certified immutable engine pack
+        uses: actions/upload-artifact@v7
+        with:
+          name: engines-${{ matrix.target }}
+          path: |
+            release/engines/out/fileflow-engines-*-${{ matrix.target }}.tar.gz
+            release/engines/out/fileflow-engines-*-${{ matrix.target }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
   package-smoke:
     name: Package smoke macOS / ${{ matrix.name }}
-    needs: native
+    needs: [native, engine-certify]
+    # A failed sibling architecture must not suppress this target candidate.
+    # Target-local artifact/build checks below decide this matrix leg independently.
+    if: ${{ always() && !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
@@ -104,36 +171,21 @@ jobs:
           cache-on-failure: true
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Provision FULL engine runtime
-        uses: mamba-org/setup-micromamba@v2
+      - uses: actions/download-artifact@v8
         with:
-          environment-name: fileflow-engines
-          create-args: "python=3.12 pip ffmpeg imagemagick libvips qpdf 7zip zstd lz4 exiftool tesseract poppler ghostscript pandoc"
-          cache-environment: true
-          cache-downloads: true
-      - name: Install portable Python engines
+          name: engines-${{ matrix.target }}
+          path: release/engines/out
+      - name: Stage certified engines without rebuilding them
         run: |
-          micromamba run -n fileflow-engines python -m pip install --disable-pip-version-check --no-cache-dir -r release/engines/python-requirements.txt
-          micromamba run -n fileflow-engines python -c "import img2pdf, ocrmypdf; print('FileFlow Python engines OK')"
-
-      - name: Provision LibreOffice engine
-        run: |
-          brew list --cask libreoffice >/dev/null 2>&1 || brew install --cask libreoffice
-      - name: Build + certify FULL engines
-        timeout-minutes: 60
-        shell: bash -el {0}
-        run: |
-          set -euo pipefail
-          python scripts/release/build-native-engine-pack.py --target '${{ matrix.target }}' --prefix "$CONDA_PREFIX"
-          python scripts/release/stage-engines.py --target '${{ matrix.target }}' --mode full
-          python scripts/release/harden-engine-pack.py --target '${{ matrix.target }}' --sign-identity -
-          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}'
+          python scripts/release/stage-local-engine-pack.py --target '${{ matrix.target }}' --directory release/engines/out --mode full
+          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --require-signature --audit-full
           python scripts/release/smoke-engines.py --mode full
-          python scripts/release/functional-engine-tests.py --mode full
-          python scripts/release/make-engine-pack.py --target '${{ matrix.target }}' --source src-tauri/resources/engines --licenses src-tauri/resources/licenses
           python scripts/release/generate-release-config.py --target '${{ matrix.target }}'
       - name: Build package smoke
         run: pnpm exec tauri build --target '${{ matrix.target }}' --bundles app,dmg --config src-tauri/tauri.release.conf.json
+      - name: Validate engines from final packaged artifact
+        timeout-minutes: 12
+        run: python scripts/release/smoke-packaged-engines.py --target '${{ matrix.target }}' --mode full
       - name: Validate package smoke
         timeout-minutes: 3
         run: |
@@ -141,7 +193,6 @@ jobs:
           node scripts/release/smoke-packaged-app.mjs --target '${{ matrix.target }}'
       - name: Collect candidate artifacts
         run: node scripts/release/collect-artifacts.mjs --target '${{ matrix.target }}'
-
       - name: Upload macOS candidate
         uses: actions/upload-artifact@v7
         with:
@@ -149,7 +200,6 @@ jobs:
           path: dist/release/${{ matrix.target }}
           if-no-files-found: error
           retention-days: 14
-
       - name: Publish Git-only install payload
         if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
         run: python scripts/release/publish-git-payload.py --target '${{ matrix.target }}' --root 'dist/release/${{ matrix.target }}'

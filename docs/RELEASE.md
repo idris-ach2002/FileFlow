@@ -21,49 +21,37 @@ Linux est construit sur Ubuntu 22.04 pour conserver une baseline glibc raisonnab
 
 `pnpm run ci:preflight` refuse une toolchain incompatible ou des versions FileFlow désynchronisées.
 
-## Les quatre workflows
+## Workflows de certification et de release
 
 ### `ci.yml`
 
-Pull requests et pushes `main/develop` : matrice macOS/Windows/Linux, build Angular, tests Angular, rustfmt, cargo check/test et Clippy strict. Aucun bundle n'est publié.
+Pull requests et pushes `main/develop` : qualité source Angular/Rust et invariants distribution. Aucun bundle n'est publié.
 
-### `package-smoke.yml`
+### `native-linux.yml`, `native-macos.yml`, `native-windows.yml`
 
-Push sur `main` ou lancement manuel : cinq cibles natives, bundle complet non-production, lancement réel de l'application packagée et handshake Angular -> Tauri. Linux utilise Xvfb. Le workflow exécute aussi les tests de stress/recovery/cancellation.
+Ces workflows certifient les cinq targets nativement. La certification moteurs est séparée du build Tauri :
+
+1. construction FULL du runtime moteurs ;
+2. relocation/hardening ;
+3. fermeture des dépendances natives ;
+4. fixtures fonctionnelles en environnement nettoyé ;
+5. archive moteur immuable + SHA-256 ;
+6. réutilisation de cette archive pour le build Tauri ;
+7. nouvelle exécution des fixtures moteurs depuis le bundle final ;
+8. smoke Angular -> Tauri ;
+9. publication du payload Git-only uniquement sur `main` ou lancement manuel.
+
+Les matrices utilisent `fail-fast: false`. Une architecture sœur en échec ne supprime pas automatiquement le package-smoke d'une cible qui possède son propre pack moteur certifié ; le téléchargement de l'artefact et le build de cette cible restent ses gates locaux.
 
 ### `engine-packs.yml`
 
-Promotion manuelle des packs moteurs. Chaque candidat doit déjà être immuable (`packVersion`, target, inventaire SHA-256). Le workflow :
+Workflow manuel officiel de fabrication des packs moteurs. Il **ne consomme plus un candidat externe** : il construit les cinq runtimes FULL depuis le dépôt sur leurs runners natifs, les relocalise, exécute fermeture + tests fonctionnels, ré-extrait l'archive produite pour la recertifier, puis crée un draft atomique `engines-vX.Y.Z`. Une release moteur existante avec le même tag n'est jamais remplacée.
 
-1. télécharge et vérifie le candidat ;
-2. stage les moteurs ;
-3. durcit les dépendances natives (`@loader_path`/RPATH) ;
-4. lance les probes ;
-5. exécute les fixtures fonctionnelles ;
-6. inspecte architecture et dépendances ;
-7. reconstruit un pack immuable ;
-8. ne crée le draft `engines-vX.Y.Z` que si les cinq targets réussissent.
+### `release-linux.yml`, `release-macos.yml`, `release-windows.yml`
 
-### `release.yml`
+Releases de production séparées par OS. Elles consomment uniquement le pack `engines-v<packVersion>` déjà publié, imposent `FILEFLOW_ENGINE_MODE=full`, construisent/signent le bundle final et rejouent les tests moteurs depuis l'artefact final. macOS effectue le codesign final puis la notarisation ; Windows effectue le hardening avant Authenticode et ne mute plus les PE ensuite.
 
-Déclenché uniquement par un tag `vX.Y.Z`. Les jobs de build ont `contents: read` et uploadent des artefacts Actions privés. Le job `publish-release`, seul détenteur de `contents: write`, ne s'exécute qu'après succès de toute la matrice.
-
-```text
-5 builds natifs
-      |
-      +-- engines / tests / bundle / smoke / signatures
-      |
-      v
-artifacts Actions privés
-      |
-      v
-normalize -> latest.json -> SHA256SUMS -> verify
-      |
-      v
-GitHub Release DRAFT unique
-```
-
-Une cible rouge => aucun GitHub Release n'est créé.
+Une cible rouge ne peut publier sa release. Les trois familles d'OS sont indépendantes.
 
 ## Gate source
 
@@ -191,8 +179,9 @@ La release publique refuse le fallback non signé.
 
 Variables :
 
-- `FILEFLOW_ENGINE_MODE=core` (ou `full` après audit complet des licences)
 - `FILEFLOW_ENGINE_PACK_URL_TEMPLATE` avec `{packVersion}` + `{target}`
+
+Le tier de production est fixé à `full` dans les workflows. Une release utilisateur partielle `core` est interdite par `release:check`.
 
 ## Updater et publication atomique
 
@@ -232,4 +221,4 @@ Ne fusionner une branche de distribution vers `main` et ne publier le draft qu'a
 
 ### Runtime Windows
 
-Le bundle Windows active `bundleVCRuntime` afin que l’application et les moteurs/sidecars natifs ne dépendent pas d’une installation préalable du redistribuable Visual C++ sur la machine cible.
+Le bundle Windows active `bundle.windows.staticVCRuntime=true` (clé Tauri v2) afin de ne pas exiger l’installation préalable du redistribuable Visual C++ sur la machine cible. `windows-preflight.ps1` refuse aussi l’ancienne clé invalide `bundleVCRuntime`.

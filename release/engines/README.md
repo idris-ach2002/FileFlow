@@ -27,11 +27,11 @@ Les targets certifiés sont :
 
 ## Flavors
 
-- `optional` : aucun moteur embarqué obligatoire, utilisé pour développement/package-smoke ;
-- `core` : FFmpeg/FFprobe, ImageMagick, libvips, qpdf, 7-Zip, zstd et lz4 obligatoires ;
+- `optional` : développement local uniquement ;
+- `core` : tier interne partiel, non distribuable aux utilisateurs ;
 - `full` : tous les moteurs du manifeste obligatoires.
 
-Ne promouvoir `full` qu'après audit des licences de redistribution de chaque build exact.
+Les workflows natifs, `engine-packs.yml`, les releases et `publish-git-payload.py` imposent `full` pour toute distribution utilisateur.
 
 ## Construction locale
 
@@ -63,10 +63,16 @@ https://github.com/ORG/REPO/releases/download/engines-v{packVersion}/fileflow-en
 
 ## Promotion
 
-`.github/workflows/engine-packs.yml` prend une URL de candidats, certifie les cinq targets et crée seulement ensuite un draft atomique `engines-v<packVersion>`. Le draft doit être publié avant qu'une release FileFlow `core/full` puisse utiliser son URL publique.
+`.github/workflows/engine-packs.yml` est désormais la fabrique officielle : il construit directement les cinq packs FULL sur leurs runners natifs, les relocalise, vérifie leur fermeture de dépendances, exécute les fixtures, recrée une archive déterministe puis la ré-extrait pour une seconde certification. Il crée ensuite seulement un draft atomique `engines-v<packVersion>`.
 
-Le durcissement/signature finale est target-native : `install_name_tool`/codesign sur macOS, RPATH `$ORIGIN` sur Linux, PE/DLL + Authenticode sur Windows.
+Le draft doit être publié avant les releases applicatives. Le même tag moteur ne peut pas être remplacé, ce qui rend le pack consommé par les releases immuable. Le codesign Developer ID / Authenticode de production est appliqué dans les workflows de release après toute mutation du runtime.
 
 ### Dépôts privés
 
 Le téléchargeur accepte `FILEFLOW_ENGINE_PACK_TOKEN` (prioritaire) ou `GITHUB_TOKEN` pour authentifier les téléchargements HTTPS. Les releases applicatives utilisent automatiquement le token GitHub en lecture ; un token dédié reste possible pour une source de packs située dans un autre dépôt privé.
+
+## Contrat machine cliente
+
+Les packs sont conçus pour le contrat FileFlow **Git-only** : Node, pnpm, Rust, Cargo, Python système, Conda, FFmpeg, ImageMagick, Ghostscript, LibreOffice, qpdf, Tesseract, Docker et GitHub CLI ne sont jamais des prérequis client. Les wrappers moteurs neutralisent les variables de build et utilisent uniquement le runtime privé embarqué, plus les composants fondamentaux de l'OS explicitement considérés comme ABI de plateforme.
+
+`pack-manifest.json` contient l'inventaire de fichiers, `contentSha256` et la provenance exacte des paquets Conda/Python copiés. `make-engine-pack.py` produit une archive déterministe et affiche la taille totale, les plus gros fichiers et dossiers ; `FILEFLOW_ENGINE_PACK_MAX_BYTES` peut imposer une limite.

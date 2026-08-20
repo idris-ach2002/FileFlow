@@ -254,21 +254,30 @@ BIN_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 PACK_ROOT="$(CDPATH= cd -- "$BIN_DIR/.." && pwd)"
 RUNTIME="$PACK_ROOT/share/runtime"
 
-export PATH="$RUNTIME/bin:$RUNTIME/Library/bin:$RUNTIME/Scripts:${{PATH:-}}"
-[ ! -d "$RUNTIME/lib" ] || export LD_LIBRARY_PATH="$RUNTIME/lib:${{LD_LIBRARY_PATH:-}}"
-[ ! -d "$RUNTIME/lib" ] || export DYLD_LIBRARY_PATH="$RUNTIME/lib:${{DYLD_LIBRARY_PATH:-}}"
+# Zero-dependency host contract: never inherit Conda/Python/library paths from
+# the machine that happens to launch FileFlow. Engine-to-engine subprocesses
+# resolve through FileFlow's own wrappers first.
+unset CONDA_PREFIX CONDA_DEFAULT_ENV CONDA_EXE MAMBA_EXE PYTHONPATH LD_PRELOAD
+export PYTHONNOUSERSITE=1
+export PATH="$BIN_DIR:$RUNTIME/bin:$RUNTIME/Library/bin:$RUNTIME/Scripts:/usr/bin:/bin"
+[ ! -d "$RUNTIME/lib" ] || export LD_LIBRARY_PATH="$RUNTIME/lib"
+[ ! -d "$RUNTIME/lib" ] || export DYLD_LIBRARY_PATH="$RUNTIME/lib"
 export PYTHONHOME="$RUNTIME"
 
 for TESS in "$RUNTIME/share/tessdata" "$RUNTIME/Library/share/tessdata"; do
   if [ -d "$TESS" ]; then export TESSDATA_PREFIX="$TESS"; break; fi
 done
 
-for MAGICK in "$RUNTIME/etc/ImageMagick-"* "$RUNTIME/share/ImageMagick-"*; do
+export MAGICK_HOME="$RUNTIME"
+for MAGICK in "$RUNTIME/etc/ImageMagick-"* "$RUNTIME/share/ImageMagick-"* "$RUNTIME/Library/etc/ImageMagick-"* "$RUNTIME/Library/share/ImageMagick-"*; do
   if [ -d "$MAGICK" ]; then export MAGICK_CONFIGURE_PATH="$MAGICK"; break; fi
+done
+for CODERS in "$RUNTIME/lib/ImageMagick-"*/modules-*/coders "$RUNTIME/Library/lib/ImageMagick-"*/modules-*/coders; do
+  if [ -d "$CODERS" ]; then export MAGICK_CODER_MODULE_PATH="$CODERS"; break; fi
 done
 
 GS_PATHS=""
-for GSDIR in "$RUNTIME/share/ghostscript/"*/Resource/Init "$RUNTIME/share/ghostscript/"*/lib; do
+for GSDIR in "$RUNTIME/share/ghostscript/"*/Resource/Init "$RUNTIME/share/ghostscript/"*/lib "$RUNTIME/Library/share/ghostscript/"*/Resource/Init "$RUNTIME/Library/share/ghostscript/"*/lib; do
   if [ -d "$GSDIR" ]; then
     if [ -z "$GS_PATHS" ]; then GS_PATHS="$GSDIR"; else GS_PATHS="$GS_PATHS:$GSDIR"; fi
   fi
@@ -295,13 +304,102 @@ fn replace_pack(value: &str, pack: &Path) -> OsString {
     OsString::from(value)
 }
 
-fn prepend_path(entries: &[PathBuf]) {
+fn configured_private_paths(pack: &Path, bin: &Path) -> Vec<PathBuf> {
+    let mut values = vec![bin.to_path_buf()];
+    let config = pack.join("engine-runtime-paths.txt");
+    if let Ok(text) = fs::read_to_string(config) {
+        for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+            let path = pack.join(line.replace('/', "\\"));
+            if path.is_dir() && !values.contains(&path) {
+                values.push(path);
+            }
+        }
+    }
+    values
+}
+
+fn set_private_path(entries: &[PathBuf]) {
     let mut values: Vec<PathBuf> = entries.iter().filter(|p| p.is_dir()).cloned().collect();
-    if let Some(existing) = env::var_os("PATH") {
-        values.extend(env::split_paths(&existing));
+    if let Some(root) = env::var_os("SystemRoot").map(PathBuf::from) {
+        values.push(root.join("System32"));
+        values.push(root);
     }
     if let Ok(joined) = env::join_paths(values) {
         env::set_var("PATH", joined);
+    }
+}
+
+fn first_prefixed_dir(parent: &Path, prefix: &str) -> Option<PathBuf> {
+    let mut found: Vec<PathBuf> = fs::read_dir(parent).ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .filter(|path| path.file_name().and_then(OsStr::to_str).map(|name| name.starts_with(prefix)).unwrap_or(false))
+        .collect();
+    found.sort();
+    found.into_iter().next()
+}
+
+fn first_named_dir_below(root: &Path, wanted: &str, depth: usize) -> Option<PathBuf> {
+    if depth == 0 || !root.is_dir() { return None; }
+    let mut entries: Vec<PathBuf> = fs::read_dir(root).ok()?.filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
+    entries.sort();
+    for path in &entries {
+        if path.file_name().and_then(OsStr::to_str) == Some(wanted) { return Some(path.clone()); }
+    }
+    for path in entries {
+        if let Some(found) = first_named_dir_below(&path, wanted, depth - 1) { return Some(found); }
+    }
+    None
+}
+
+fn configure_engine_environment(runtime: &Path) {
+    env::remove_var("CONDA_PREFIX");
+    env::remove_var("CONDA_DEFAULT_ENV");
+    env::remove_var("CONDA_EXE");
+    env::remove_var("MAMBA_EXE");
+    env::remove_var("PYTHONPATH");
+    env::set_var("PYTHONHOME", runtime);
+    env::set_var("PYTHONNOUSERSITE", "1");
+
+    for tess in [
+        runtime.join("share").join("tessdata"),
+        runtime.join("Library").join("share").join("tessdata"),
+    ] {
+        if tess.is_dir() {
+            env::set_var("TESSDATA_PREFIX", tess);
+            break;
+        }
+    }
+
+    env::set_var("MAGICK_HOME", runtime);
+    for parent in [runtime.join("etc"), runtime.join("share"), runtime.join("Library").join("etc"), runtime.join("Library").join("share")] {
+        if let Some(path) = first_prefixed_dir(&parent, "ImageMagick-") {
+            env::set_var("MAGICK_CONFIGURE_PATH", path);
+            break;
+        }
+    }
+    for parent in [runtime.join("lib"), runtime.join("Library").join("lib")] {
+        if let Some(coders) = first_named_dir_below(&parent, "coders", 4) {
+            env::set_var("MAGICK_CODER_MODULE_PATH", coders);
+            break;
+        }
+    }
+
+    let mut ghost_paths: Vec<PathBuf> = Vec::new();
+    for ghost_root in [runtime.join("share").join("ghostscript"), runtime.join("Library").join("share").join("ghostscript")] {
+        if let Ok(entries) = fs::read_dir(&ghost_root) {
+            let mut versions: Vec<PathBuf> = entries.filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
+            versions.sort();
+            if let Some(version) = versions.into_iter().last() {
+                for candidate in [version.join("Resource").join("Init"), version.join("lib")] {
+                    if candidate.is_dir() { ghost_paths.push(candidate); }
+                }
+            }
+        }
+    }
+    if let Ok(joined) = env::join_paths(ghost_paths) {
+        env::set_var("GS_LIB", joined);
     }
 }
 
@@ -336,25 +434,9 @@ fn main() -> ExitCode {
     };
 
     let runtime = pack.join("share").join("runtime");
-    let office = pack.join("share").join("libreoffice").join("program");
-    prepend_path(&[
-        runtime.clone(),
-        runtime.join("Library").join("bin"),
-        runtime.join("Scripts"),
-        runtime.join("DLLs"),
-        office,
-    ]);
-    env::set_var("PYTHONHOME", &runtime);
-
-    for tess in [
-        runtime.join("share").join("tessdata"),
-        runtime.join("Library").join("share").join("tessdata"),
-    ] {
-        if tess.is_dir() {
-            env::set_var("TESSDATA_PREFIX", tess);
-            break;
-        }
-    }
+    let private_paths = configured_private_paths(pack, bin);
+    set_private_path(&private_paths);
+    configure_engine_environment(&runtime);
 
     let mut command = Command::new(&target);
     for line in lines {
@@ -371,6 +453,7 @@ fn main() -> ExitCode {
     }
 }
 '''
+
 
 
 def write_windows_launcher_source() -> Path:
@@ -455,6 +538,50 @@ def write_license_declarations(pack: Path, manifest: dict) -> None:
         )
 
 
+
+def capture_provenance(pack: Path, prefix: Path, runtime: Path, target: str) -> Path:
+    conda_packages = []
+    conda_meta = prefix / "conda-meta"
+    if conda_meta.is_dir():
+        for meta_path in sorted(conda_meta.glob("*.json")):
+            try:
+                raw = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            conda_packages.append({
+                key: raw.get(key)
+                for key in ("name", "version", "build", "build_number", "channel", "url", "sha256", "md5")
+                if raw.get(key) is not None
+            })
+
+    python_packages = []
+    for metadata in sorted(runtime.rglob("*.dist-info/METADATA")):
+        name = version = None
+        try:
+            for line in metadata.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.startswith("Name: ") and name is None:
+                    name = line[6:].strip()
+                elif line.startswith("Version: ") and version is None:
+                    version = line[9:].strip()
+                if name and version:
+                    break
+        except OSError:
+            continue
+        if name and version:
+            python_packages.append({"name": name, "version": version})
+
+    payload = {
+        "schemaVersion": 1,
+        "target": target,
+        "factory": "native-conda-forge+libreoffice",
+        "condaPackages": conda_packages,
+        "pythonPackages": python_packages,
+    }
+    destination = pack / "provenance" / "runtime-packages.json"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return destination
+
 def expected_count(manifest: dict) -> int:
     return sum(len(engine["executables"]) for engine in manifest["engines"])
 
@@ -494,6 +621,8 @@ def main() -> None:
     log(f"copying private engine runtime from {prefix}")
     copy_runtime(prefix, runtime)
     office_target = install_libreoffice(pack)
+    provenance = capture_provenance(pack, prefix, runtime, args.target)
+    log(f"captured exact runtime provenance -> {provenance.relative_to(pack)}")
 
     launcher = build_windows_launcher(pack) if os.name == "nt" else None
 
@@ -572,6 +701,7 @@ def main() -> None:
         "flavor": "full",
         "expectedExecutableCount": expected_count(manifest),
         "factory": "native-conda-forge+libreoffice",
+        "provenanceSha256": digest(provenance),
         "files": inventory(pack),
     }
     (pack / "pack-manifest.json").write_text(

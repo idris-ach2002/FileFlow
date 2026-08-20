@@ -10,8 +10,7 @@ function Fail-Install([string]$c,[string]$u,[string]$d=''){Write-Host '';Write-H
 if(-not(Get-Command git.exe -ErrorAction SilentlyContinue)){Fail-Install 'FF-I-010' 'FileFlow nécessite uniquement Git pour l’installation initiale.' 'git.exe absent'}
 try{
  git rev-parse --is-inside-work-tree 2>$null|Out-Null;if($LASTEXITCODE -ne 0){Fail-Install 'FF-I-010' 'Exécute install.ps1 depuis le dépôt FileFlow cloné.' 'not a git worktree'}
- if((Test-Path $Marker)-and -not $Force){Write-Host '';Write-Host '✓ FileFlow est déjà installé.';Write-Host 'Aucune réinstallation nécessaire.';Write-Host 'Le dépôt cloné peut être supprimé.';exit 0}
- $arch=[System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString();if($arch -notin @('X64','Arm64')){Fail-Install 'FF-I-001' 'Cette architecture Windows n’est pas prise en charge.' "arch=$arch"}
+  $arch=[System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString();if($arch -ne 'X64'){Fail-Install 'FF-I-001' 'Cette architecture Windows n’est pas prise en charge. FileFlow Windows est actuellement certifié x64 uniquement.' "arch=$arch"}
  $script:Step='récupération du paquet';git update-ref -d $Ref 2>$null|Out-Null;git fetch --quiet --depth=1 $Remote "refs/heads/${DistBranch}:${Ref}";if($LASTEXITCODE -ne 0){Fail-Install 'FF-I-003' 'Le paquet FileFlow Windows x64 n’est pas encore publié.' "branch=$DistBranch"}
  $temp=Join-Path ([IO.Path]::GetTempPath()) ('fileflow-install-'+[Guid]::NewGuid().ToString('N'));New-Item -ItemType Directory -Force -Path $temp|Out-Null
  try{

@@ -72,7 +72,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           FILEFLOW_UPDATE_ENDPOINT: ${{ vars.FILEFLOW_UPDATE_ENDPOINT }}
           FILEFLOW_ENGINE_PACK_URL_TEMPLATE: ${{ vars.FILEFLOW_ENGINE_PACK_URL_TEMPLATE }}
-          FILEFLOW_ENGINE_MODE: ${{ vars.FILEFLOW_ENGINE_MODE }}
+          FILEFLOW_ENGINE_MODE: full
         run: |
           for name in \
             TAURI_UPDATER_PUBKEY TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
@@ -97,19 +97,22 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Release source preflight
-        run: pnpm run ci:preflight
+        run: |
+          pnpm run ci:preflight
+          pnpm run release:self-test
+          pnpm run release:check
 
       - name: Prepare immutable native engines
         env:
           FILEFLOW_ENGINE_PACK_URL_TEMPLATE: ${{ vars.FILEFLOW_ENGINE_PACK_URL_TEMPLATE }}
           FILEFLOW_ENGINE_PACK_TOKEN: ${{ secrets.FILEFLOW_ENGINE_PACK_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
-          FILEFLOW_ENGINE_MODE: ${{ vars.FILEFLOW_ENGINE_MODE }}
+          FILEFLOW_ENGINE_MODE: full
         run: |
           python scripts/release/fetch-engine-pack.py --target '${{ matrix.target }}'
           python scripts/release/stage-engines.py --target '${{ matrix.target }}' --mode "$FILEFLOW_ENGINE_MODE"
           python scripts/release/harden-engine-pack.py --target '${{ matrix.target }}'
-          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --require-signature
+          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --require-signature --audit-full
           python scripts/release/smoke-engines.py --mode "$FILEFLOW_ENGINE_MODE"
           python scripts/release/functional-engine-tests.py --mode "$FILEFLOW_ENGINE_MODE"
 
@@ -126,6 +129,12 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm exec tauri build --target '${{ matrix.target }}' --bundles deb,appimage,rpm --config src-tauri/tauri.release.conf.json
+
+      - name: Validate engines from final packaged artifact
+        timeout-minutes: 12
+        env:
+          FILEFLOW_ENGINE_MODE: full
+        run: python scripts/release/smoke-packaged-engines.py --target '${{ matrix.target }}' --mode "$FILEFLOW_ENGINE_MODE"
 
       - name: Validate + runtime smoke
         run: |

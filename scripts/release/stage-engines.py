@@ -61,6 +61,7 @@ def main() -> None:
     for directory in (BIN_DEST, LIB_DEST, SHARE_DEST, LICENSE_DEST):
         if directory.exists():
             shutil.rmtree(directory)
+    (ENGINE_ROOT / "engine-runtime-paths.txt").unlink(missing_ok=True)
     BIN_DEST.mkdir(parents=True)
     LICENSE_DEST.mkdir(parents=True)
 
@@ -87,6 +88,8 @@ def main() -> None:
                     target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     copy_tree(source / "lib", LIB_DEST)
     copy_tree(source / "share", SHARE_DEST)
+    if (source / "engine-runtime-paths.txt").is_file():
+        shutil.copy2(source / "engine-runtime-paths.txt", ENGINE_ROOT / "engine-runtime-paths.txt")
 
     staged: list[dict[str, str]] = []
     missing: list[str] = []

@@ -2,28 +2,36 @@ name: FileFlow Engine Packs
 
 on:
   workflow_dispatch:
-    inputs:
-      source_url_template:
-        description: 'Immutable candidate URL containing {packVersion} and {target}'
-        required: true
-        type: string
-      mode:
-        description: 'Engine tier to certify'
-        required: true
-        default: core
-        type: choice
-        options: [core, full]
 
 permissions:
   contents: read
 
 concurrency:
-  group: engine-packs-${{ github.run_id }}
+  group: engine-packs-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  preflight:
+    name: Engine source/tooling preflight
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.22.3'
+      - name: Native engine tooling regression suite
+        run: python scripts/release/test-native-engine-tooling.py
+      - name: Release/tooling self-tests
+        run: node scripts/release/test-release-tooling.mjs
+      - name: Release invariants
+        run: python scripts/release/check-release.py
+
   certify:
-    name: Engines / ${{ matrix.name }}
+    name: Build + certify engines / ${{ matrix.name }}
+    needs: preflight
     strategy:
       fail-fast: false
       matrix:
@@ -48,51 +56,112 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Linux inspection tools
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y file binutils patchelf
-
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
 
-      - name: Fetch immutable candidate pack
+      - name: Linux inspection + LibreOffice build input
+        if: runner.os == 'Linux'
         shell: bash
-        env:
-          FILEFLOW_ENGINE_PACK_URL_TEMPLATE: ${{ inputs.source_url_template }}
-          GITHUB_TOKEN: ${{ github.token }}
-          FILEFLOW_ENGINE_PACK_TOKEN: ${{ secrets.FILEFLOW_ENGINE_PACK_TOKEN }}
-        run: python scripts/release/fetch-engine-pack.py --target '${{ matrix.target }}'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            file binutils patchelf \
+            libreoffice-core libreoffice-writer libreoffice-calc libreoffice-impress
 
-      - name: Stage candidate pack
+      - name: macOS LibreOffice build input
+        if: runner.os == 'macOS'
         shell: bash
-        run: python scripts/release/stage-engines.py --target '${{ matrix.target }}' --mode '${{ inputs.mode }}'
+        run: brew list --cask libreoffice >/dev/null 2>&1 || brew install --cask libreoffice
 
-      - name: Harden native dependencies
-        shell: bash
-        run: python scripts/release/harden-engine-pack.py --target '${{ matrix.target }}'
+      - name: Windows LibreOffice build input
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install libreoffice-fresh -y --no-progress
 
-      - name: Probe executables
-        shell: bash
-        run: python scripts/release/smoke-engines.py --mode '${{ inputs.mode }}'
+      - uses: dtolnay/rust-toolchain@stable
+        if: runner.os == 'Windows'
+        with:
+          toolchain: '1.97.1'
+          targets: x86_64-pc-windows-msvc
 
-      - name: Functional engine fixtures
-        shell: bash
-        run: python scripts/release/functional-engine-tests.py --mode '${{ inputs.mode }}'
+      - name: Provision FULL private runtime
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: fileflow-engines
+          create-args: "python=3.12 pip ffmpeg imagemagick libvips qpdf 7zip zstd lz4 exiftool tesseract poppler ghostscript pandoc"
+          cache-environment: true
+          cache-downloads: true
+          init-shell: ${{ runner.os == 'Windows' && 'powershell' || 'bash' }}
 
-      - name: Native dependency/architecture validation
-        shell: bash
-        run: python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}'
+      - name: Install exactly pinned direct Python engines
+        shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash -el {0}' }}
+        run: |
+          micromamba run -n fileflow-engines python -m pip install --disable-pip-version-check --no-cache-dir -r release/engines/python-requirements.txt
+          micromamba run -n fileflow-engines python -c "import PIL, pikepdf, img2pdf, ocrmypdf; print('FileFlow Python engines OK')"
 
-      - name: Build certified immutable pack
+      - name: Build + relocate + certify FULL engines (Unix)
+        if: runner.os != 'Windows'
+        timeout-minutes: 60
+        shell: bash -el {0}
+        run: |
+          set -euo pipefail
+          python scripts/release/build-native-engine-pack.py --target '${{ matrix.target }}' --prefix "$CONDA_PREFIX"
+          python scripts/release/stage-engines.py --target '${{ matrix.target }}' --mode full
+          if [[ '${{ runner.os }}' == 'macOS' ]]; then
+            python scripts/release/harden-engine-pack.py --target '${{ matrix.target }}' --sign-identity -
+            python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --require-signature --audit-full
+          else
+            python scripts/release/harden-engine-pack.py --target '${{ matrix.target }}'
+            python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --audit-full
+          fi
+          python scripts/release/smoke-engines.py --mode full
+          python scripts/release/functional-engine-tests.py --mode full
+          python scripts/release/make-engine-pack.py \
+            --target '${{ matrix.target }}' \
+            --source src-tauri/resources/engines \
+            --licenses src-tauri/resources/licenses
+
+      - name: Build + harden + certify FULL engines (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 60
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python scripts/release/build-native-engine-pack.py --target '${{ matrix.target }}' --prefix "$env:CONDA_PREFIX"
+          python scripts/release/stage-engines.py --target '${{ matrix.target }}' --mode full
+          python scripts/release/harden-engine-pack.py --target '${{ matrix.target }}'
+          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --audit-full
+          python scripts/release/smoke-engines.py --mode full
+          python scripts/release/functional-engine-tests.py --mode full
+          python scripts/release/make-engine-pack.py --target '${{ matrix.target }}' --source src-tauri/resources/engines --licenses src-tauri/resources/licenses
+
+      - name: Re-stage archive and prove it is self-contained (Unix)
+        if: runner.os != 'Windows'
+        timeout-minutes: 15
         shell: bash
-        run: >-
-          python scripts/release/make-engine-pack.py
-          --target '${{ matrix.target }}'
-          --source src-tauri/resources/engines
-          --licenses src-tauri/resources/licenses
+        run: |
+          set -euo pipefail
+          python scripts/release/stage-local-engine-pack.py --target '${{ matrix.target }}' --directory release/engines/out --mode full
+          if [[ '${{ runner.os }}' == 'macOS' ]]; then
+            python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --require-signature --audit-full
+          else
+            python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --audit-full
+          fi
+          python scripts/release/smoke-engines.py --mode full
+          python scripts/release/functional-engine-tests.py --mode full
+
+      - name: Re-stage archive and prove it is self-contained (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python scripts/release/stage-local-engine-pack.py --target '${{ matrix.target }}' --directory release/engines/out --mode full
+          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --audit-full
+          python scripts/release/smoke-engines.py --mode full
+          python scripts/release/functional-engine-tests.py --mode full
 
       - uses: actions/upload-artifact@v7
         with:
@@ -118,24 +187,28 @@ jobs:
           path: engine-artifacts
           merge-multiple: true
 
-      - name: Verify complete engine pack matrix
+      - name: Verify complete five-target engine matrix
         shell: bash
         run: |
+          set -euo pipefail
           PACK_VERSION=$(python3 -c "import json; print(json.load(open('release/engines/manifest.json'))['packVersion'])")
           echo "PACK_VERSION=$PACK_VERSION" >> "$GITHUB_ENV"
           for target in \
             aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-msvc \
             x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
-            test -f "engine-artifacts/fileflow-engines-${PACK_VERSION}-${target}.tar.gz"
-            test -f "engine-artifacts/fileflow-engines-${PACK_VERSION}-${target}.tar.gz.sha256"
-            (cd engine-artifacts && sha256sum -c "fileflow-engines-${PACK_VERSION}-${target}.tar.gz.sha256")
+            archive="engine-artifacts/fileflow-engines-${PACK_VERSION}-${target}.tar.gz"
+            checksum="${archive}.sha256"
+            test -f "$archive"
+            test -f "$checksum"
+            (cd engine-artifacts && sha256sum -c "$(basename "$checksum")")
           done
 
-      - name: Create atomic draft release
+      - name: Create immutable atomic draft release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           TAG="engines-v${PACK_VERSION}"
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Engine release $TAG already exists; refusing mutable replacement." >&2
@@ -145,4 +218,4 @@ jobs:
             --target "$GITHUB_SHA" \
             --draft \
             --title "FileFlow engine pack ${PACK_VERSION}" \
-            --notes "Certified native FileFlow engine packs for the five supported desktop targets."
+            --notes "Self-contained FULL FileFlow engine packs certified natively for all five supported desktop targets."
