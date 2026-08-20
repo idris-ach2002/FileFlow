@@ -121,23 +121,7 @@ jobs:
         uses: mamba-org/setup-micromamba@v2
         with:
           environment-name: fileflow-engines
-          create-args: >-
-          python=3.12
-          pip
-          ffmpeg
-          imagemagick
-          libvips
-          qpdf
-          7zip
-          zstd
-          lz4
-          exiftool
-          tesseract
-          poppler
-          ghostscript
-          pandoc
-          ocrmypdf
-          img2pdf
+          create-args: "python=3.12 pip ffmpeg imagemagick libvips qpdf 7zip zstd lz4 exiftool tesseract poppler ghostscript pandoc ocrmypdf img2pdf"
           cache-environment: true
           cache-downloads: true
       - name: Provision LibreOffice engine
