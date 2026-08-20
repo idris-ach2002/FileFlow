@@ -80,8 +80,10 @@ export class AppComponent {
       const window = getCurrentWindow();
       await window.show();
       await window.setFocus();
-    } catch {
-      // A window-reveal failure must never prevent the app from booting.
+    } catch (error) {
+      // Keep bootstrap alive, but never hide startup-window failures:
+      // a denied Tauri capability would otherwise leave the app invisible.
+      console.error('[FileFlow] Unable to reveal main window', error);
     }
   }
 
