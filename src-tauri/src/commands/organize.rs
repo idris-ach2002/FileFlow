@@ -751,9 +751,28 @@ fn sanitize_filename(value: &str) -> String {
         .to_ascii_uppercase();
     let reserved = matches!(
         stem.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL"
-            | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
-            | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
     );
     if reserved {
         portable.insert(0, '_');
@@ -835,7 +854,10 @@ mod portability_tests {
 
     #[test]
     fn filename_sanitizer_is_portable_to_windows() {
-        assert_eq!(sanitize_filename(r#"report<>:"/\|?*.pdf"#), "report_________.pdf");
+        assert_eq!(
+            sanitize_filename(r#"report<>:"/\|?*.pdf"#),
+            "report_________.pdf"
+        );
         assert_eq!(sanitize_filename("NUL.txt"), "_NUL.txt");
         assert_eq!(sanitize_filename("NUL.tar.gz"), "_NUL.tar.gz");
         assert_eq!(sanitize_filename("  ...  "), "fichier");
