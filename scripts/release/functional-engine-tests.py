@@ -174,7 +174,10 @@ def run(exe: Path, args: list[str], env: dict[str, str], timeout: int = 60) -> s
         timeout=timeout,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"{exe.name} exited {result.returncode}: {(result.stdout or '')[-1600:]}")
+        output = result.stdout or ""
+        if len(output) > 12000:
+            output = output[:6000] + "\n... <output truncated> ...\n" + output[-6000:]
+        raise RuntimeError(f"{exe.name} exited {result.returncode}: {output}")
     return result.stdout or ""
 
 

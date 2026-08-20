@@ -139,6 +139,17 @@ def main() -> None:
         "LINUX_BASE_ABI", "MACOS_SYSTEM_PREFIXES", "WINDOWS_SYSTEM_DLLS",
         "is_linux_system_dependency", "is_macos_system_dependency", "is_windows_system_dependency",
     ])
+    require_tokens("scripts/release/fetch-libreoffice-runtime.py", [
+        "download.documentfoundation.org", 'url + ".sha256"', "dpkg-deb", "hdiutil", "msiexec",
+        ".fileflow-source.json",
+    ])
+    libreoffice_recipe = json.loads((ROOT / "release/engines/libreoffice-runtime.json").read_text())
+    certified_targets = {
+        "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu",
+        "aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-pc-windows-msvc",
+    }
+    if set(libreoffice_recipe.get("targets", {})) != certified_targets:
+        raise SystemExit("LibreOffice source recipe must cover every certified target exactly")
     if "${PATH:-}" in factory:
         raise SystemExit("Unix engine wrappers must not inherit arbitrary host PATH")
     if "def windows_harden() -> None:\n    #" in hardener and "return" in hardener.split("def windows_harden() -> None:", 1)[1].split("\ndef ", 1)[0]:
@@ -148,15 +159,26 @@ def main() -> None:
 
     engine_workflow = require_tokens(".github/workflows/engine-packs.yml", [
         "Build + certify engines", "build-native-engine-pack.py", "functional-engine-tests.py",
-        "Re-stage archive and prove it is self-contained", "engines-v${PACK_VERSION}",
+        "fetch-libreoffice-runtime.py", "Re-stage archive and prove it is self-contained", "engines-v${PACK_VERSION}",
     ])
     if "source_url_template" in engine_workflow:
         raise SystemExit("engine-packs workflow must build packs itself; external candidate URLs are forbidden")
 
+    for rel in [
+        ".github/workflows/engine-packs.yml",
+        ".github/workflows/native-linux.yml",
+        ".github/workflows/native-macos.yml",
+        ".github/workflows/native-windows.yml",
+    ]:
+        text = (ROOT / rel).read_text().lower()
+        for forbidden in ("libreoffice-core", "brew install --cask libreoffice", "choco install libreoffice"):
+            if forbidden in text:
+                raise SystemExit(f"{rel} must use the pinned TDF LibreOffice artifact, not {forbidden}")
+
     linux_native = require_tokens(".github/workflows/native-linux.yml", [
         "pull_request:", "engine-certify:", "package-smoke:", "needs: [native, engine-certify]",
         "needs.native.result == 'success'", "needs.engine-certify.result == 'success'",
-        "stage-local-engine-pack.py", "smoke-packaged-engines.py", "--scope full",
+        "stage-local-engine-pack.py", "smoke-packaged-engines.py", "fetch-libreoffice-runtime.py", "--scope full",
     ])
     if "always() && !cancelled()" in linux_native:
         raise SystemExit("Linux package smoke must not run after failed engine certification")
@@ -165,7 +187,7 @@ def main() -> None:
         native_text = require_tokens(rel, [
             "pull_request:", "engine-certify:", "package-smoke:", "needs: [native, engine-certify]",
             "needs.native.result == 'success'", "needs.engine-certify.result == 'success'",
-            "stage-local-engine-pack.py", "smoke-packaged-engines.py", "--scope full",
+            "stage-local-engine-pack.py", "smoke-packaged-engines.py", "fetch-libreoffice-runtime.py", "--scope full",
         ])
         if "always() && !cancelled()" in native_text:
             raise SystemExit(f"{rel} package smoke must not run after failed engine certification")

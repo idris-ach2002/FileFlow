@@ -92,7 +92,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: release/engines/out
-          key: fileflow-engines-${{ matrix.target }}-${{ hashFiles('.github/workflows/native-linux.yml', 'release/engines/**', 'scripts/release/*engine*.py', 'scripts/release/native_dependency_policy.py', 'scripts/release/windows-engine-launcher.rs') }}
+          key: fileflow-engines-${{ matrix.target }}-${{ hashFiles('.github/workflows/native-linux.yml', 'release/engines/**', 'scripts/release/*engine*.py', 'scripts/release/native_dependency_policy.py', 'scripts/release/fetch-libreoffice-runtime.py', 'scripts/release/windows-engine-launcher.rs') }}
       - name: Provision FULL engine runtime
         if: steps.engine-cache.outputs.cache-hit != 'true'
         uses: mamba-org/setup-micromamba@v2
@@ -106,10 +106,9 @@ jobs:
         run: |
           micromamba run -n fileflow-engines python -m pip install --disable-pip-version-check --no-cache-dir -r release/engines/python-requirements.txt
           micromamba run -n fileflow-engines python -c "import PIL, pikepdf, img2pdf, ocrmypdf; print('FileFlow Python engines OK')"
-      - name: Provision LibreOffice build input
+      - name: Fetch verified official LibreOffice runtime
         if: steps.engine-cache.outputs.cache-hit != 'true'
-        run: |
-          sudo apt-get install -y --no-install-recommends libreoffice-core libreoffice-writer libreoffice-calc libreoffice-impress liblpsolve55-dev
+        run: python scripts/release/fetch-libreoffice-runtime.py --target '${{ matrix.target }}'
       - name: Build + relocate + certify FULL engines
         if: steps.engine-cache.outputs.cache-hit != 'true'
         timeout-minutes: 60

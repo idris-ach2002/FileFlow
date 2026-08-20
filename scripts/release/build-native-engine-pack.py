@@ -26,6 +26,7 @@ from native_dependency_policy import (
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "release/engines/manifest.json"
 PACK_ROOT = ROOT / "release/engines/packs"
+LIBREOFFICE_VENDOR_ROOT = ROOT / "release/engines/vendor/libreoffice"
 
 DIRECT = {
     "ffmpeg": ["ffmpeg"],
@@ -696,47 +697,41 @@ def vendor_windows_external_dependencies(pack: Path, target: str, prefix: Path) 
     return records
 
 
-def install_libreoffice(pack: Path) -> Path:
+def install_libreoffice(pack: Path, target_triple: str) -> Path:
+    """Copy the pinned upstream LibreOffice payload prepared by CI.
+
+    Never copy a distro/Homebrew/Chocolatey installation here. Those installed
+    trees can contain absolute /etc, /var, /usr/share or package-manager links
+    and are not portable build inputs. fetch-libreoffice-runtime.py normalizes
+    the official TDF artifact into a target-specific tree first.
+    """
+    source = LIBREOFFICE_VENDOR_ROOT / target_triple
+    metadata = source / ".fileflow-source.json"
+    if not source.is_dir() or not metadata.is_file():
+        raise SystemExit(
+            "official LibreOffice runtime is not prepared for "
+            f"{target_triple}; run scripts/release/fetch-libreoffice-runtime.py "
+            f"--target {target_triple}"
+        )
+
     destination = pack / "share" / "libreoffice"
     if destination.exists():
         shutil.rmtree(destination)
+    # Preserve the upstream layout and symlinks. Location-sensitive UNO/URE
+    # components must remain in the exact relative structure shipped by TDF.
+    shutil.copytree(source, destination, symlinks=True)
 
     if sys.platform.startswith("linux"):
-        source = Path("/usr/lib/libreoffice")
-        if not source.is_dir():
-            raise SystemExit(
-                "LibreOffice is missing. CI must install libreoffice-core/libreoffice-writer."
-            )
-        copytree(source, destination)
         target = destination / "program" / "soffice"
     elif sys.platform == "darwin":
-        source = Path("/Applications/LibreOffice.app/Contents")
-        if not source.is_dir():
-            raise SystemExit(
-                "LibreOffice.app is missing. CI must install the libreoffice cask."
-            )
-        copytree(source, destination / "Contents")
         target = destination / "Contents" / "MacOS" / "soffice"
     elif os.name == "nt":
-        roots = [
-            Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "LibreOffice",
-            Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "LibreOffice",
-        ]
-        source = next(
-            (root for root in roots if (root / "program" / "soffice.exe").is_file()),
-            None,
-        )
-        if source is None:
-            raise SystemExit(
-                "LibreOffice is missing. CI must install chocolatey libreoffice-fresh."
-            )
-        copytree(source, destination)
         target = destination / "program" / "soffice.exe"
     else:
         raise SystemExit(f"unsupported host for LibreOffice: {sys.platform}")
 
     if not target.is_file():
-        raise SystemExit(f"LibreOffice launcher missing after copy: {target}")
+        raise SystemExit(f"LibreOffice launcher missing after upstream copy: {target}")
     return target
 
 
@@ -768,14 +763,11 @@ unset CONDA_PREFIX CONDA_DEFAULT_ENV CONDA_EXE MAMBA_EXE PYTHONPATH LD_PRELOAD
 export PYTHONNOUSERSITE=1
 export PATH="$BIN_DIR:$RUNTIME/bin:$RUNTIME/Library/bin:$RUNTIME/Scripts:/usr/bin:/bin"
 if [ "{office_mode}" = "1" ]; then
-  # LibreOffice has its own vendored namespace. Do not inject Conda's Python
-  # or shared-library namespace into it, but expose its private closure for
-  # dlopen/plugin loads in addition to direct loader-relative references.
+  # Preserve LibreOffice's upstream loader namespace. Injecting a broad
+  # LD_LIBRARY_PATH changes resolution order for UNO/URE/plugin components and
+  # can produce DeploymentException/abort failures. Linux/Mach-O hardening
+  # gives each native object loader-relative access to any extra vendored lib.
   unset PYTHONHOME PYTHONPATH LD_LIBRARY_PATH DYLD_LIBRARY_PATH
-  if [ -d "$OFFICE_LIB" ]; then
-    export LD_LIBRARY_PATH="$OFFICE_LIB"
-    export DYLD_LIBRARY_PATH="$OFFICE_LIB"
-  fi
   export SAL_USE_VCLPLUGIN=svp
 else
   PRIVATE_LIBS=""
@@ -1125,7 +1117,7 @@ def capture_provenance(
     payload = {
         "schemaVersion": 1,
         "target": target,
-        "factory": "native-conda-forge+libreoffice",
+        "factory": "native-conda-forge+tdf-libreoffice",
         "condaPackages": conda_packages,
         "pythonPackages": python_packages,
         "vendoredHostLibraries": vendored_host_libraries,
@@ -1173,7 +1165,7 @@ def main() -> None:
     runtime = pack / "share" / "runtime"
     log(f"copying private engine runtime from {prefix}")
     copy_runtime(prefix, runtime)
-    office_target = install_libreoffice(pack)
+    office_target = install_libreoffice(pack, args.target)
 
     # The Windows command wrappers are native PE binaries themselves. Build the
     # canonical launcher before dependency closure so its imports are certified
@@ -1265,7 +1257,7 @@ def main() -> None:
         "target": args.target,
         "flavor": "full",
         "expectedExecutableCount": expected_count(manifest),
-        "factory": "native-conda-forge+libreoffice",
+        "factory": "native-conda-forge+tdf-libreoffice",
         "provenanceSha256": digest(provenance),
         "files": inventory(pack),
     }

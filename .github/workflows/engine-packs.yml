@@ -60,25 +60,23 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Linux inspection + LibreOffice build input
+      - name: Linux native inspection tools
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            file binutils patchelf \
-            libreoffice-core libreoffice-writer libreoffice-calc libreoffice-impress liblpsolve55-dev
+          sudo apt-get install -y --no-install-recommends file binutils patchelf
 
-      - name: macOS LibreOffice build input
-        if: runner.os == 'macOS'
+      - name: Fetch verified official LibreOffice runtime (Unix)
+        if: runner.os != 'Windows'
         shell: bash
-        run: brew list --cask libreoffice >/dev/null 2>&1 || brew install --cask libreoffice
+        run: python scripts/release/fetch-libreoffice-runtime.py --target '${{ matrix.target }}'
 
-      - name: Windows LibreOffice build input
+      - name: Fetch verified official LibreOffice runtime (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: choco install libreoffice-fresh -y --no-progress
+        run: python scripts/release/fetch-libreoffice-runtime.py --target '${{ matrix.target }}'
 
       - uses: dtolnay/rust-toolchain@stable
         if: runner.os == 'Windows'

@@ -25,9 +25,38 @@ validator = load("fileflow_validator", "scripts/release/validate-engine-pack.py"
 factory = load("fileflow_factory", "scripts/release/build-native-engine-pack.py")
 packer = load("fileflow_packer", "scripts/release/make-engine-pack.py")
 functional = load("fileflow_functional", "scripts/release/functional-engine-tests.py")
+libreoffice_source = load("fileflow_libreoffice_source", "scripts/release/fetch-libreoffice-runtime.py")
 
 
 class NativeEngineToolingTests(unittest.TestCase):
+
+    def test_official_libreoffice_recipe_covers_all_certified_targets(self):
+        manifest = __import__("json").loads((ROOT / "release/engines/libreoffice-runtime.json").read_text())
+        expected = {
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu",
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "x86_64-pc-windows-msvc",
+        }
+        self.assertEqual(set(manifest["targets"]), expected)
+        for entry in manifest["targets"].values():
+            self.assertTrue(entry["url"].startswith("https://download.documentfoundation.org/"))
+
+    def test_official_libreoffice_sha_sidecar_must_match_pin(self):
+        sha = "a" * 64
+        with mock.patch.object(libreoffice_source, "fetch_text", return_value=f"{sha}  LibreOffice.bin\n"):
+            self.assertEqual(libreoffice_source.official_sha256("https://example.invalid/LibreOffice.bin", sha), sha)
+            with self.assertRaises(SystemExit):
+                libreoffice_source.official_sha256("https://example.invalid/LibreOffice.bin", "b" * 64)
+
+    def test_office_wrapper_does_not_preload_private_library_namespace(self):
+        wrapper = factory.unix_wrapper("share/libreoffice/program/soffice", office=True)
+        office_branch = wrapper.split('if [ "1" = "1" ]; then', 1)[1].split("else", 1)[0]
+        self.assertIn("unset PYTHONHOME PYTHONPATH LD_LIBRARY_PATH DYLD_LIBRARY_PATH", office_branch)
+        self.assertNotIn("export LD_LIBRARY_PATH", office_branch)
+        self.assertNotIn("export DYLD_LIBRARY_PATH", office_branch)
+
     def test_vdso_is_not_a_missing_file_but_real_missing_library_is(self):
         output = """
             linux-vdso.so.1 (0x0000)

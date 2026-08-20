@@ -73,7 +73,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: release/engines/out
-          key: fileflow-engines-x86_64-pc-windows-msvc-${{ hashFiles('.github/workflows/native-windows.yml', 'release/engines/**', 'scripts/release/*engine*.py', 'scripts/release/native_dependency_policy.py', 'scripts/release/windows-engine-launcher.rs') }}
+          key: fileflow-engines-x86_64-pc-windows-msvc-${{ hashFiles('.github/workflows/native-windows.yml', 'release/engines/**', 'scripts/release/*engine*.py', 'scripts/release/native_dependency_policy.py', 'scripts/release/fetch-libreoffice-runtime.py', 'scripts/release/windows-engine-launcher.rs') }}
       - uses: dtolnay/rust-toolchain@stable
         if: steps.engine-cache.outputs.cache-hit != 'true'
         with:
@@ -94,10 +94,10 @@ jobs:
         run: |
           micromamba run -n fileflow-engines python -m pip install --disable-pip-version-check --no-cache-dir -r release/engines/python-requirements.txt
           micromamba run -n fileflow-engines python -c "import PIL, pikepdf, img2pdf, ocrmypdf; print('FileFlow Python engines OK')"
-      - name: Provision LibreOffice build input
+      - name: Fetch verified official LibreOffice runtime
         if: steps.engine-cache.outputs.cache-hit != 'true'
         shell: pwsh
-        run: choco install libreoffice-fresh -y --no-progress
+        run: python scripts/release/fetch-libreoffice-runtime.py --target x86_64-pc-windows-msvc
       - name: Build + harden + certify FULL engines
         if: steps.engine-cache.outputs.cache-hit != 'true'
         timeout-minutes: 60
