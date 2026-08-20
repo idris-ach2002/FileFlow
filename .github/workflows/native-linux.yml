@@ -121,9 +121,14 @@ jobs:
         uses: mamba-org/setup-micromamba@v2
         with:
           environment-name: fileflow-engines
-          create-args: "python=3.12 pip ffmpeg imagemagick libvips qpdf 7zip zstd lz4 exiftool tesseract poppler ghostscript pandoc ocrmypdf img2pdf"
+          create-args: "python=3.12 pip ffmpeg imagemagick libvips qpdf 7zip zstd lz4 exiftool tesseract poppler ghostscript pandoc"
           cache-environment: true
           cache-downloads: true
+      - name: Install portable Python engines
+        run: |
+          micromamba run -n fileflow-engines python -m pip install --disable-pip-version-check --no-cache-dir -r release/engines/python-requirements.txt
+          micromamba run -n fileflow-engines python -c "import img2pdf, ocrmypdf; print('FileFlow Python engines OK')"
+
       - name: Provision LibreOffice engine
         run: |
           sudo apt-get update
