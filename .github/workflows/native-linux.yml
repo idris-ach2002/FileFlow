@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: native-linux-${{ github.ref }}
+  group: native-linux-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -79,7 +79,6 @@ jobs:
   package-smoke:
     name: Package smoke Linux / ${{ matrix.name }}
     needs: native
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
     strategy:
       fail-fast: false
       matrix:
@@ -135,7 +134,7 @@ jobs:
       - name: Upload Linux candidate
         uses: actions/upload-artifact@v7
         with:
-          name: fileflow-linux-${{ matrix.target }}-candidate
+          name: fileflow-linux-${{ matrix.target }}-${{ github.event.pull_request.head.sha || github.sha }}-candidate
           path: dist/release/${{ matrix.target }}
           if-no-files-found: error
           retention-days: 14

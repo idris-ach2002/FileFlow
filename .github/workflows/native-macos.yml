@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: native-macos-${{ github.ref }}
+  group: native-macos-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -72,7 +72,6 @@ jobs:
   package-smoke:
     name: Package smoke macOS / ${{ matrix.name }}
     needs: native
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
     strategy:
       fail-fast: false
       matrix:
@@ -122,7 +121,7 @@ jobs:
       - name: Upload macOS candidate
         uses: actions/upload-artifact@v7
         with:
-          name: fileflow-macos-${{ matrix.target }}-candidate
+          name: fileflow-macos-${{ matrix.target }}-${{ github.event.pull_request.head.sha || github.sha }}-candidate
           path: dist/release/${{ matrix.target }}
           if-no-files-found: error
           retention-days: 14
