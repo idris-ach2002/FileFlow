@@ -71,7 +71,10 @@ pub fn set_performance_mode(
     mode: PerformanceMode,
 ) -> Result<SchedulerSnapshot, String> {
     if !state.jobs.is_empty() {
-        return Err("Attendez la fin des traitements en cours avant de changer le mode de performance.".into());
+        return Err(
+            "Attendez la fin des traitements en cours avant de changer le mode de performance."
+                .into(),
+        );
     }
     let runtime = crate::ExecutionRuntime::new(mode);
     let snapshot = runtime.scheduler.snapshot();

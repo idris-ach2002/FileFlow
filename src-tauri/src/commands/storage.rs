@@ -17,7 +17,10 @@ pub fn history(
 #[tauri::command]
 pub fn favorites(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     let account_id = require_active_session(&state)?;
-    state.storage.favorites_for(account_id).map_err(|error| error.to_string())
+    state
+        .storage
+        .favorites_for(account_id)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -36,7 +39,10 @@ pub fn set_favorite(
 #[tauri::command]
 pub fn recipes(state: State<'_, AppState>) -> Result<Vec<RecipeRecord>, String> {
     let account_id = require_active_session(&state)?;
-    state.storage.recipes_for(account_id).map_err(|error| error.to_string())
+    state
+        .storage
+        .recipes_for(account_id)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -48,9 +54,10 @@ pub fn save_recipe(state: State<'_, AppState>, recipe: RecipeRecord) -> Result<(
         .map_err(|error| error.to_string())
 }
 
-
 #[tauri::command]
-pub fn load_app_preferences(state: State<'_, AppState>) -> Result<Option<serde_json::Value>, String> {
+pub fn load_app_preferences(
+    state: State<'_, AppState>,
+) -> Result<Option<serde_json::Value>, String> {
     let account_key = preference_key(&state);
     let stored = state
         .storage

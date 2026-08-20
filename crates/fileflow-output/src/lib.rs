@@ -415,7 +415,9 @@ mod tests {
         let plan = resolver.plan_named(&request, "archive.tar").unwrap();
         assert_eq!(plan.final_path, PathBuf::from("/tmp/FileFlow/archive.tar"));
         assert_eq!(
-            plan.temporary_path.extension().and_then(|value| value.to_str()),
+            plan.temporary_path
+                .extension()
+                .and_then(|value| value.to_str()),
             Some("tar")
         );
     }

@@ -947,10 +947,9 @@ async fn execute_tar_compressed_archive(
     }
     resolver.prepare(&plan).await?;
 
-    let staging_tar = plan.destination_directory.join(format!(
-        ".fileflow-stage-{}.tar",
-        Uuid::new_v4().simple()
-    ));
+    let staging_tar = plan
+        .destination_directory
+        .join(format!(".fileflow-stage-{}.tar", Uuid::new_v4().simple()));
 
     {
         let _archive_lease = scheduler
@@ -1398,10 +1397,7 @@ async fn run_ffmpeg(
                     OsString::from("160k"),
                 ]);
                 if matches!(extension.as_str(), "mp4" | "mov") {
-                    args.extend([
-                        OsString::from("-movflags"),
-                        OsString::from("+faststart"),
-                    ]);
+                    args.extend([OsString::from("-movflags"), OsString::from("+faststart")]);
                 }
             }
         }
@@ -1498,7 +1494,8 @@ async fn run_zstd_compress(
 ) -> Result<(), ExecutionError> {
     if !input.is_file() {
         return Err(ExecutionError::InvalidInput(
-            "Zstandard compresse un fichier à la fois. Pour un dossier, créez d’abord une archive.".into(),
+            "Zstandard compresse un fichier à la fois. Pour un dossier, créez d’abord une archive."
+                .into(),
         ));
     }
     let level = match quality {
@@ -1522,7 +1519,6 @@ async fn run_zstd_compress(
     .await
 }
 
-
 fn validate_pandoc_ebook_input(input: &Path) -> Result<(), ExecutionError> {
     let extension = input
         .extension()
@@ -1535,7 +1531,11 @@ fn validate_pandoc_ebook_input(input: &Path) -> Result<(), ExecutionError> {
 
     Err(ExecutionError::InvalidInput(format!(
         "Le format .{} est reconnu comme livre numérique, mais la conversion directe est actuellement limitée aux fichiers EPUB et FB2.",
-        if extension.is_empty() { "?" } else { &extension }
+        if extension.is_empty() {
+            "?"
+        } else {
+            &extension
+        }
     )))
 }
 
@@ -1643,7 +1643,8 @@ async fn run_lz4_compress(
 ) -> Result<(), ExecutionError> {
     if !input.is_file() {
         return Err(ExecutionError::InvalidInput(
-            "LZ4 compresse un fichier à la fois. Pour un dossier, créez d’abord une archive.".into(),
+            "LZ4 compresse un fichier à la fois. Pour un dossier, créez d’abord une archive."
+                .into(),
         ));
     }
     let level = match quality {
@@ -2369,8 +2370,23 @@ fn is_audio_extension(extension: Option<&str>) -> bool {
     extension.is_some_and(|extension| {
         matches!(
             extension.to_ascii_lowercase().as_str(),
-            "mp3" | "wav" | "aac" | "m4a" | "flac" | "ogg" | "opus" | "wma" | "aiff" | "aif"
-                | "alac" | "ape" | "ac3" | "eac3" | "ec3" | "dts" | "amr"
+            "mp3"
+                | "wav"
+                | "aac"
+                | "m4a"
+                | "flac"
+                | "ogg"
+                | "opus"
+                | "wma"
+                | "aiff"
+                | "aif"
+                | "alac"
+                | "ape"
+                | "ac3"
+                | "eac3"
+                | "ec3"
+                | "dts"
+                | "amr"
         )
     })
 }
@@ -2385,7 +2401,8 @@ fn normalize_target_format(
     let normalized = format.trim().trim_start_matches('.').to_ascii_lowercase();
     let allowed: &[&str] = match action_id {
         "image-convert" | "image-batch-convert" | "image-optimize" | "image-resize" => &[
-            "jpg", "jpeg", "png", "webp", "avif", "heic", "heif", "jxl", "tif", "tiff", "bmp", "gif",
+            "jpg", "jpeg", "png", "webp", "avif", "heic", "heif", "jxl", "tif", "tiff", "bmp",
+            "gif",
         ],
         "audio-convert" | "extract-audio" => &["mp3", "m4a", "aac", "wav", "flac", "ogg", "opus"],
         "video-convert" => &["mp4", "webm", "mkv", "mov"],
@@ -2553,14 +2570,23 @@ mod tests {
 
     #[test]
     fn zstd_output_name_strips_compression_suffix() {
-        assert_eq!(zstd_decompressed_name(Path::new("backup.tar.zst")), "backup.tar");
-        assert_eq!(zstd_decompressed_name(Path::new("backup.tzst")), "backup.tar");
+        assert_eq!(
+            zstd_decompressed_name(Path::new("backup.tar.zst")),
+            "backup.tar"
+        );
+        assert_eq!(
+            zstd_decompressed_name(Path::new("backup.tzst")),
+            "backup.tar"
+        );
         assert_eq!(zstd_decompressed_name(Path::new("data.zstd")), "data");
     }
 
     #[test]
     fn lz4_output_name_strips_compression_suffix() {
-        assert_eq!(lz4_decompressed_name(Path::new("dataset.csv.lz4")), "dataset.csv");
+        assert_eq!(
+            lz4_decompressed_name(Path::new("dataset.csv.lz4")),
+            "dataset.csv"
+        );
         assert_eq!(lz4_decompressed_name(Path::new("backup.lz4")), "backup");
     }
 

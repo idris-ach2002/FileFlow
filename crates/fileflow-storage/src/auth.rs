@@ -172,7 +172,11 @@ fn hmac_sha256_prepared(inner_key: &[u8; 64], outer_key: &[u8; 64], data: &[u8])
 /// Performs the same expensive KDF work for a login attempt when no account exists.
 /// This reduces the usefulness of local timing differences for account discovery.
 pub fn consume_password_work(password: &str) {
-    let _ = pbkdf2_hmac_sha256(password.as_bytes(), b"fileflow-login-dummy-salt", PASSWORD_ITERATIONS);
+    let _ = pbkdf2_hmac_sha256(
+        password.as_bytes(),
+        b"fileflow-login-dummy-salt",
+        PASSWORD_ITERATIONS,
+    );
 }
 
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
@@ -225,7 +229,8 @@ mod tests {
 
     #[test]
     fn password_round_trip_rejects_wrong_secret() {
-        let record = hash_password_with("correct horse battery staple", b"0123456789abcdef", 10_000);
+        let record =
+            hash_password_with("correct horse battery staple", b"0123456789abcdef", 10_000);
         assert!(verify_password("correct horse battery staple", &record));
         assert!(!verify_password("incorrect password", &record));
     }

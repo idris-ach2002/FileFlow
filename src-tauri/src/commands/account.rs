@@ -144,7 +144,9 @@ pub async fn login(
     let Some((profile, password_hash, onboarding)) = account else {
         tokio::task::spawn_blocking(move || consume_password_work(&password))
             .await
-            .map_err(|error| format!("La vérification du mot de passe a été interrompue : {error}"))?;
+            .map_err(|error| {
+                format!("La vérification du mot de passe a été interrompue : {error}")
+            })?;
         record_login_failure(&state, &email);
         return Err("Adresse e-mail ou mot de passe incorrect.".into());
     };
@@ -184,9 +186,12 @@ pub async fn change_password(
     }
 
     let current_password = request.current_password;
-    let valid = tokio::task::spawn_blocking(move || verify_password(&current_password, &password_hash))
-        .await
-        .map_err(|error| format!("La vérification du mot de passe a été interrompue : {error}"))?;
+    let valid =
+        tokio::task::spawn_blocking(move || verify_password(&current_password, &password_hash))
+            .await
+            .map_err(|error| {
+                format!("La vérification du mot de passe a été interrompue : {error}")
+            })?;
     if !valid {
         return Err("Le mot de passe actuel est incorrect.".into());
     }
@@ -194,7 +199,9 @@ pub async fn change_password(
     let new_password = request.new_password;
     let new_hash = tokio::task::spawn_blocking(move || hash_password(&new_password))
         .await
-        .map_err(|error| format!("Le calcul sécurisé du nouveau mot de passe a été interrompu : {error}"))?
+        .map_err(|error| {
+            format!("Le calcul sécurisé du nouveau mot de passe a été interrompu : {error}")
+        })?
         .map_err(|error| error.to_string())?;
     state
         .storage
@@ -207,7 +214,9 @@ pub async fn change_password(
 #[tauri::command]
 pub fn logout(state: State<'_, AppState>, token: String) -> bool {
     let mut session = state.session.write();
-    let matches = session.as_ref().is_some_and(|current| current.token == token);
+    let matches = session
+        .as_ref()
+        .is_some_and(|current| current.token == token);
     if matches {
         *session = None;
         drop(session);
@@ -410,7 +419,10 @@ pub fn choose_storage_directory(app: AppHandle) -> Result<Option<PathBuf>, Strin
     else {
         return Ok(None);
     };
-    folder.into_path().map(Some).map_err(|error| error.to_string())
+    folder
+        .into_path()
+        .map(Some)
+        .map_err(|error| error.to_string())
 }
 
 fn start_session(
@@ -523,9 +535,8 @@ fn normalize_storage_directory(path: Option<PathBuf>) -> Result<Option<PathBuf>,
             return Err("Le dossier FileFlow doit être un dossier réel, pas un fichier ou un lien symbolique.".into());
         }
     } else {
-        std::fs::create_dir_all(&path).map_err(|error| {
-            format!("Impossible de créer le dossier FileFlow : {error}")
-        })?;
+        std::fs::create_dir_all(&path)
+            .map_err(|error| format!("Impossible de créer le dossier FileFlow : {error}"))?;
     }
     path.canonicalize()
         .map(Some)
@@ -552,9 +563,9 @@ fn validate_avatar_content(path: &Path) -> Result<&'static str, String> {
 
 fn validate_email(email: &str) -> Result<(), String> {
     let valid = email.len() <= 254
-        && email
-            .split_once('@')
-            .is_some_and(|(local, domain)| !local.is_empty() && domain.contains('.') && !domain.ends_with('.'));
+        && email.split_once('@').is_some_and(|(local, domain)| {
+            !local.is_empty() && domain.contains('.') && !domain.ends_with('.')
+        });
     if valid {
         Ok(())
     } else {

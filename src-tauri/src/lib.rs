@@ -1,14 +1,13 @@
 mod commands;
 
+use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use fileflow_core::FileFlowCore;
 use fileflow_domain::{JobId, PerformanceMode};
 use fileflow_executor::ActionExecutor;
 use fileflow_scheduler::{ResourceScheduler, SchedulerSettings};
 use fileflow_storage::Storage;
-use chrono::{DateTime, Utc};
 use parking_lot::RwLock;
-use uuid::Uuid;
 use std::{
     path::PathBuf,
     sync::{Arc, atomic::AtomicU64},
@@ -19,6 +18,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
 };
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub(crate) struct LoginAttempt {
@@ -52,7 +52,10 @@ impl ExecutionRuntime {
             custom_budget: None,
         }));
         let executor = Arc::new(ActionExecutor::new(scheduler.clone()));
-        Self { scheduler, executor }
+        Self {
+            scheduler,
+            executor,
+        }
     }
 }
 
@@ -184,7 +187,12 @@ fn stored_performance_mode(storage: &Storage) -> PerformanceMode {
         .get_json::<serde_json::Value>("app.preferences.v2")
         .ok()
         .flatten()
-        .and_then(|value| value.get("performanceMode").and_then(|value| value.as_str()).map(str::to_owned))
+        .and_then(|value| {
+            value
+                .get("performanceMode")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+        })
         .map(|mode| match mode.as_str() {
             "eco" => PerformanceMode::Eco,
             "fast" => PerformanceMode::Fast,

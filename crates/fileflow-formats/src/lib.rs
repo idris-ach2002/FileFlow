@@ -142,10 +142,8 @@ fn extension_descriptor(extension: &str) -> Option<ExtensionDescriptor> {
         "jxl" => image("jxl", "image/jxl"),
         "psd" | "psb" => image("photoshop", "image/vnd.adobe.photoshop"),
         "eps" => image("eps", "application/postscript"),
-        "dng" | "cr2" | "cr3" | "nef" | "nrw" | "arw" | "srf" | "sr2" | "orf"
-        | "raf" | "rw2" | "pef" | "x3f" | "erf" | "kdc" | "dcr" | "mos" | "mef" => {
-            image("raw", "image/x-raw")
-        }
+        "dng" | "cr2" | "cr3" | "nef" | "nrw" | "arw" | "srf" | "sr2" | "orf" | "raf" | "rw2"
+        | "pef" | "x3f" | "erf" | "kdc" | "dcr" | "mos" | "mef" => image("raw", "image/x-raw"),
 
         "pdf" => simple("pdf", Some("application/pdf"), FormatFamily::Pdf),
 

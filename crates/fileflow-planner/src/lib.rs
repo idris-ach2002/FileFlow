@@ -605,7 +605,19 @@ fn default_actions() -> Vec<ActionDescriptor> {
             "Compresser avec Zstandard",
             "Créer un fichier .zst très rapidement, idéal pour les gros fichiers et les sauvegardes.",
             OperationCategory::Optimize,
-            &[Image, Pdf, Document, Spreadsheet, Presentation, Audio, Video, Archive, Ebook, Text, Unknown],
+            &[
+                Image,
+                Pdf,
+                Document,
+                Spreadsheet,
+                Presentation,
+                Audio,
+                Video,
+                Archive,
+                Ebook,
+                Text,
+                Unknown,
+            ],
             &["zstd"],
             Some("zst"),
             true,
@@ -629,7 +641,19 @@ fn default_actions() -> Vec<ActionDescriptor> {
             "Compresser très vite avec LZ4",
             "Créer un fichier .lz4 avec un algorithme lossless conçu pour la vitesse maximale.",
             OperationCategory::Optimize,
-            &[Image, Pdf, Document, Spreadsheet, Presentation, Audio, Video, Archive, Ebook, Text, Unknown],
+            &[
+                Image,
+                Pdf,
+                Document,
+                Spreadsheet,
+                Presentation,
+                Audio,
+                Video,
+                Archive,
+                Ebook,
+                Text,
+                Unknown,
+            ],
             &["lz4"],
             Some("lz4"),
             true,
@@ -826,7 +850,8 @@ fn default_conversion_edges() -> Vec<ConversionEdge> {
     }
 
     for from in [
-        "doc", "docx", "odt", "rtf", "pages", "wpd", "xls", "xlsx", "ods", "numbers", "ppt", "pptx", "odp", "keynote",
+        "doc", "docx", "odt", "rtf", "pages", "wpd", "xls", "xlsx", "ods", "numbers", "ppt",
+        "pptx", "odp", "keynote",
     ] {
         edges.push(edge(from, "pdf", "office", 1, false));
     }
@@ -895,8 +920,14 @@ mod tests {
         let lz4 = catalog.action("tar-lz4-create").expect("TAR.LZ4 action");
         assert_eq!(zstd.output_format.as_deref(), Some("tar.zst"));
         assert_eq!(lz4.output_format.as_deref(), Some("tar.lz4"));
-        assert_eq!(zstd.required_engines, vec!["archive".to_string(), "zstd".to_string()]);
-        assert_eq!(lz4.required_engines, vec!["archive".to_string(), "lz4".to_string()]);
+        assert_eq!(
+            zstd.required_engines,
+            vec!["archive".to_string(), "zstd".to_string()]
+        );
+        assert_eq!(
+            lz4.required_engines,
+            vec!["archive".to_string(), "lz4".to_string()]
+        );
     }
 
     #[test]
