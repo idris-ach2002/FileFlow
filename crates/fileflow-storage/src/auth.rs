@@ -123,15 +123,21 @@ fn hash_password_with(password: &str, salt: &[u8], iterations: u32) -> PasswordH
 }
 
 fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], iterations: u32) -> [u8; 32] {
-    let (inner_key, outer_key) = prepare_hmac_key(password);
+    // Keep the exact PBKDF2-HMAC-SHA256 format used by existing FileFlow accounts,
+    // but pre-hash the HMAC ipad/opad blocks once. The previous implementation
+    // rebuilt and hashed both 64-byte blocks for every PBKDF2 round, which made
+    // the intentionally expensive 600k-round login substantially slower than it
+    // needs to be. Cloning a pre-seeded Sha256 state preserves byte-for-byte
+    // compatibility while removing that redundant work.
+    let prepared = prepare_hmac(password);
     let mut block = Vec::with_capacity(salt.len() + 4);
     block.extend_from_slice(salt);
     block.extend_from_slice(&1_u32.to_be_bytes());
 
-    let mut u = hmac_sha256_prepared(&inner_key, &outer_key, &block);
+    let mut u = hmac_sha256_prepared(&prepared, &block);
     let mut output = u;
     for _ in 1..iterations {
-        u = hmac_sha256_prepared(&inner_key, &outer_key, &u);
+        u = hmac_sha256_prepared(&prepared, &u);
         for (target, byte) in output.iter_mut().zip(u) {
             *target ^= byte;
         }
@@ -139,7 +145,13 @@ fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], iterations: u32) -> [u8; 32]
     output
 }
 
-fn prepare_hmac_key(key: &[u8]) -> ([u8; 64], [u8; 64]) {
+#[derive(Clone)]
+struct PreparedHmacSha256 {
+    inner: Sha256,
+    outer: Sha256,
+}
+
+fn prepare_hmac(key: &[u8]) -> PreparedHmacSha256 {
     const BLOCK: usize = 64;
     let mut normalized = [0_u8; BLOCK];
     if key.len() > BLOCK {
@@ -154,17 +166,20 @@ fn prepare_hmac_key(key: &[u8]) -> ([u8; 64], [u8; 64]) {
         inner_key[index] ^= normalized[index];
         outer_key[index] ^= normalized[index];
     }
-    (inner_key, outer_key)
-}
 
-fn hmac_sha256_prepared(inner_key: &[u8; 64], outer_key: &[u8; 64], data: &[u8]) -> [u8; 32] {
     let mut inner = Sha256::new();
     inner.update(inner_key);
+    let mut outer = Sha256::new();
+    outer.update(outer_key);
+    PreparedHmacSha256 { inner, outer }
+}
+
+fn hmac_sha256_prepared(prepared: &PreparedHmacSha256, data: &[u8]) -> [u8; 32] {
+    let mut inner = prepared.inner.clone();
     inner.update(data);
     let inner_hash = inner.finalize();
 
-    let mut outer = Sha256::new();
-    outer.update(outer_key);
+    let mut outer = prepared.outer.clone();
     outer.update(inner_hash);
     outer.finalize().into()
 }

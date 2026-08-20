@@ -181,7 +181,9 @@ export class AuthStore {
       this.session.set(session);
       this.hasAccount.set(true);
       this.phase.set('authenticated');
-      await this.loadAvatar();
+      // The avatar is cosmetic and can involve an additional IPC call plus disk I/O.
+      // Do not keep the login button blocked while it is loaded.
+      queueMicrotask(() => void this.loadAvatar());
       return true;
     } catch (error) {
       this.error.set(this.message(error));
