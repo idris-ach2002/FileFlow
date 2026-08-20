@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm run frontend:dev",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "pnpm run frontend:build",
+    "beforeBuildCommand": "pnpm run frontend:build && node scripts/release/validate-frontend-dist.mjs",
     "frontendDist": "../frontend/dist/fileflow/browser"
   },
   "app": {
@@ -24,7 +24,10 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost",
+      "dangerousDisableAssetCspModification": [
+        "style-src"
+      ]
     }
   },
   "bundle": {

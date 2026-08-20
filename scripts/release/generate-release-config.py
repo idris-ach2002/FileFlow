@@ -61,15 +61,38 @@ private_key = os.environ.get("TAURI_SIGNING_PRIVATE_KEY", "").strip()
 updater_enabled = bool(pubkey and endpoint and private_key)
 bundle["createUpdaterArtifacts"] = updater_enabled
 
+# macOS must always carry a real bundle signature.
+# In CI, APPLE_SIGNING_IDENTITY contains the Developer ID identity.
+# For local/test builds without a certificate, explicitly use ad-hoc signing.
+if "apple-darwin" in target:
+    macos = bundle.setdefault("macOS", {})
+    assert isinstance(macos, dict)
+    signing_identity = os.environ.get("APPLE_SIGNING_IDENTITY", "").strip()
+    macos["signingIdentity"] = signing_identity or "-"
+
 config: dict[str, object] = {"bundle": bundle}
+
+# tauri-plugin-updater 2.x expects plugins.updater to deserialize to
+# an object whenever the plugin is registered. Leaving the key absent in
+# an overlay release configuration can materialize as JSON null in the
+# generated runtime configuration and abort application startup.
+#
+# Keep a valid but disabled configuration when updater credentials are
+# unavailable. An empty endpoint list makes update checks fail safely
+# without preventing FileFlow from starting.
 if updater_enabled:
-    config["plugins"] = {
-        "updater": {
-            "pubkey": pubkey,
-            "endpoints": [endpoint],
-            "windows": {"installMode": "passive"},
-        }
+    updater_config = {
+        "pubkey": pubkey,
+        "endpoints": [endpoint],
+        "windows": {"installMode": "passive"},
     }
+else:
+    updater_config = {
+        "pubkey": "",
+        "endpoints": [],
+    }
+
+config["plugins"] = {"updater": updater_config}
 
 thumbprint = os.environ.get("WINDOWS_CERTIFICATE_THUMBPRINT", "").strip()
 if thumbprint and "windows" in target:
@@ -84,5 +107,9 @@ if thumbprint and "windows" in target:
 out.write_text(json.dumps(config, indent=2) + "\n")
 print(f"target: {target}")
 print(f"updater artifacts: {'enabled' if updater_enabled else 'disabled'}")
+if "apple-darwin" in target:
+    macos_config = bundle.get("macOS", {})
+    identity = macos_config.get("signingIdentity", "?") if isinstance(macos_config, dict) else "?"
+    print(f"macOS signing: {identity}")
 print(f"windows signing: {'configured' if thumbprint and 'windows' in target else 'not configured'}")
 print(out)

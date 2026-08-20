@@ -29,7 +29,8 @@
     "release:bootstrap": "node scripts/release/run-python.mjs scripts/release/bootstrap-release.py",
     "release:fetch-engines": "node scripts/release/run-python.mjs scripts/release/fetch-engine-pack.py",
     "release:pack-engines": "node scripts/release/run-python.mjs scripts/release/make-engine-pack.py",
-    "release:smoke-engines": "node scripts/release/run-python.mjs scripts/release/smoke-engines.py"
+    "release:smoke-engines": "node scripts/release/run-python.mjs scripts/release/smoke-engines.py",
+    "release:validate-frontend": "node scripts/release/validate-frontend-dist.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.4"

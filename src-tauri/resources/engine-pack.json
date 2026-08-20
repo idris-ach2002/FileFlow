@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "target": "development",
+  "target": "aarch64-apple-darwin",
   "flavor": "optional",
   "engines": []
 }

@@ -9,6 +9,7 @@ python3 scripts/release/generate-release-config.py --target "$TARGET"
 corepack enable
 pnpm install --frozen-lockfile
 pnpm run verify
+node scripts/release/validate-frontend-dist.mjs
 case "$TARGET" in
   *apple-darwin) BUNDLES="app,dmg";;
   *windows-msvc) BUNDLES="nsis,msi";;
