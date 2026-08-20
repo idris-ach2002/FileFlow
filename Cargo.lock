@@ -1034,7 +1034,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-adapter-archive"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "fileflow-domain",
@@ -1043,7 +1043,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-adapter-ffmpeg"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "fileflow-domain",
@@ -1052,7 +1052,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-adapter-ghostscript"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "fileflow-domain",
@@ -1061,7 +1061,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-adapter-imagemagick"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "fileflow-domain",
@@ -1070,7 +1070,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-adapter-img2pdf"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "fileflow-domain",
@@ -1079,7 +1079,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-adapter-lz4"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "fileflow-domain",
@@ -1088,7 +1088,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-adapter-metadata"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "fileflow-domain",
@@ -1097,7 +1097,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-adapter-ocr"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "fileflow-domain",
@@ -1106,7 +1106,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-adapter-office"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "fileflow-domain",
@@ -1115,7 +1115,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-adapter-pandoc"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "fileflow-domain",
@@ -1124,7 +1124,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-adapter-poppler"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "fileflow-domain",
@@ -1133,7 +1133,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-adapter-qpdf"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "fileflow-domain",
@@ -1142,7 +1142,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-adapter-tesseract"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "fileflow-domain",
@@ -1151,7 +1151,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-adapter-vips"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "fileflow-domain",
@@ -1160,7 +1160,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-adapter-zstd"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "fileflow-domain",
@@ -1169,7 +1169,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-analysis"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "fileflow-domain",
  "serde",
@@ -1178,7 +1178,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-core"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "fileflow-domain",
  "fileflow-engine",
@@ -1244,7 +1244,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-domain"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "chrono",
  "serde",
@@ -1253,7 +1253,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-engine"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "fileflow-domain",
@@ -1263,7 +1263,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-executor"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "chrono",
  "fileflow-domain",
@@ -1281,7 +1281,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-formats"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "fileflow-domain",
  "infer",
@@ -1289,7 +1289,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-intake"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "chrono",
  "fileflow-domain",
@@ -1303,7 +1303,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-output"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "chrono",
  "fileflow-domain",
@@ -1315,7 +1315,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-planner"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "fileflow-domain",
  "serde",
@@ -1323,7 +1323,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-scheduler"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "dashmap",
  "fileflow-domain",
@@ -1336,7 +1336,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-storage"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "chrono",
  "parking_lot",
@@ -1351,7 +1351,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-workflows"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "fileflow-domain",
  "serde",
@@ -1362,7 +1362,7 @@ dependencies = [
 
 [[package]]
 name = "fileflow-workspace"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "chrono",
  "fileflow-domain",

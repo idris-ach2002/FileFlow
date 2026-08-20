@@ -9,6 +9,13 @@ const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
 const tauri = JSON.parse(readFileSync(resolve(root, 'src-tauri/tauri.conf.json'), 'utf8'));
 const frontend = JSON.parse(readFileSync(resolve(root, 'frontend/package.json'), 'utf8'));
 const toolchain = readFileSync(resolve(root, 'rust-toolchain.toml'), 'utf8');
+const workspaceCargo = readFileSync(resolve(root, 'Cargo.toml'), 'utf8');
+const workspaceSection = workspaceCargo
+  .split('[workspace.package]')[1]
+  ?.split(/\n\[/)[0];
+const workspaceVersion = workspaceSection
+  ?.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+
 const expectedRust = toolchain.match(/channel\s*=\s*"([^"]+)"/)?.[1];
 
 function fail(message) {
@@ -35,6 +42,7 @@ if (pnpmVersion !== '11.20.0') fail(`pnpm ${pnpmVersion}; expected 11.20.0`);
 const rustVersion = output(rustcCmd).match(/rustc\s+(\d+\.\d+\.\d+)/)?.[1];
 if (!rustVersion || rustVersion !== expectedRust) fail(`rustc ${rustVersion ?? '?'}; expected ${expectedRust}`);
 if (new Set([pkg.version, frontend.version, tauri.version]).size !== 1) fail('package/frontend/Tauri versions are not synchronized');
+if (!workspaceVersion || workspaceVersion !== pkg.version) fail(`Cargo workspace version ${workspaceVersion ?? '?'}; expected ${pkg.version}`);
 if (!readFileSync(resolve(root, 'pnpm-lock.yaml'), 'utf8').startsWith("lockfileVersion: '9.0'")) fail('unexpected pnpm lockfile version');
 if (!readFileSync(resolve(root, 'Cargo.lock'), 'utf8').includes(`name = "fileflow-desktop"\nversion = "${pkg.version}"`)) fail('Cargo.lock FileFlow version is stale');
 

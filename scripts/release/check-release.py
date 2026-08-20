@@ -17,6 +17,12 @@ versions={
  'src-tauri/tauri.conf.json':load_json('src-tauri/tauri.conf.json')['version'],
 }
 cargo_text=(ROOT/'src-tauri/Cargo.toml').read_text(); match=re.search(r'(?m)^version = "([^"]+)"$',cargo_text); versions['src-tauri/Cargo.toml']=match.group(1) if match else '?'
+
+workspace_cargo=(ROOT/'Cargo.toml').read_text()
+workspace_section=workspace_cargo.split('[workspace.package]',1)[1].split('\n[',1)[0] if '[workspace.package]' in workspace_cargo else ''
+workspace_match=re.search(r'(?m)^version\s*=\s*"([^"]+)"$',workspace_section)
+versions['Cargo.toml [workspace.package]']=workspace_match.group(1) if workspace_match else '?'
+
 lock_text=(ROOT/'Cargo.lock').read_text(); match=re.search(r'name = "fileflow-desktop"\nversion = "([^"]+)"',lock_text); versions['Cargo.lock']=match.group(1) if match else '?'
 if len(set(versions.values()))!=1: raise SystemExit(f'version mismatch: {versions}')
 version=next(iter(versions.values()))
