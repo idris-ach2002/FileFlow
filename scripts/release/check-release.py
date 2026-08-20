@@ -146,7 +146,15 @@ def main() -> None:
     if "source_url_template" in engine_workflow:
         raise SystemExit("engine-packs workflow must build packs itself; external candidate URLs are forbidden")
 
-    for rel in [".github/workflows/native-linux.yml", ".github/workflows/native-macos.yml", ".github/workflows/native-windows.yml"]:
+    linux_native = require_tokens(".github/workflows/native-linux.yml", [
+        "pull_request:", "engine-certify:", "package-smoke:", "needs: [native, engine-certify]",
+        "needs.native.result == 'success'", "needs.engine-certify.result == 'success'",
+        "stage-local-engine-pack.py", "smoke-packaged-engines.py", "--audit-full",
+    ])
+    if "always() && !cancelled()" in linux_native:
+        raise SystemExit("Linux package smoke must not run after failed engine certification")
+
+    for rel in [".github/workflows/native-macos.yml", ".github/workflows/native-windows.yml"]:
         require_tokens(rel, [
             "pull_request:", "engine-certify:", "package-smoke:", "needs: [native, engine-certify]",
             "always() && !cancelled()", "stage-local-engine-pack.py", "smoke-packaged-engines.py", "--audit-full",

@@ -142,7 +142,22 @@ def resolve_linux_needed(
     if local.is_file() and local in candidates:
         return local
 
-    # Conda's canonical shared-library directory is a deterministic fallback.
+    # LibreOffice is deliberately isolated from Conda.  Bind every external
+    # Ubuntu dependency to its private distro closure before considering the
+    # Conda runtime fallback.
+    office_root = ENGINE_ROOT / "share" / "libreoffice"
+    try:
+        source.relative_to(office_root)
+        in_office = True
+    except ValueError:
+        in_office = False
+    if in_office:
+        office_lib = office_root / "lib" / needed
+        if office_lib.is_file() and office_lib in candidates:
+            return office_lib
+
+    # Conda's canonical shared-library directory is a deterministic fallback
+    # for non-LibreOffice engines.
     runtime_lib = ENGINE_ROOT / "share" / "runtime" / "lib" / needed
     if runtime_lib.is_file() and runtime_lib in candidates:
         return runtime_lib
@@ -191,12 +206,18 @@ def linux_harden() -> None:
             if derived not in entries:
                 entries.append(derived)
 
-        # A dynamic ELF with no internal dependency does not need an artificial
-        # RPATH. Otherwise write only pack-relative entries; never copy host paths.
+        # Write only pack-relative entries.  If the original RPATH contained
+        # only build-host paths, remove it completely instead of leaving Conda
+        # / feedstock absolute paths embedded in the certified pack.
         if entries:
             result = run(patchelf, "--set-rpath", ":".join(entries), str(path), check=False)
             if result.returncode != 0:
                 raise SystemExit(f"patchelf failed for {path}: {result.stdout}")
+            patched += 1
+        elif old_rpath:
+            result = run(patchelf, "--remove-rpath", str(path), check=False)
+            if result.returncode != 0:
+                raise SystemExit(f"patchelf --remove-rpath failed for {path}: {result.stdout}")
             patched += 1
 
     print(f"[hardening] Linux dependency-aware relocation patched {patched}/{len(native)} ELF file(s)")

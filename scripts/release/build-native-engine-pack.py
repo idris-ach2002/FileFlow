@@ -271,24 +271,25 @@ def find_linux_host_library(soname: str, index: dict[str, list[Path]]) -> Path |
 
 
 def vendor_linux_libreoffice_dependencies(pack: Path) -> None:
-    """Vendor LibreOffice's non-baseline Linux DT_NEEDED closure.
+    """Vendor LibreOffice's non-baseline Linux DT_NEEDED closure in isolation.
 
-    Ubuntu's LibreOffice packages intentionally rely on distro shared libraries.
-    FileFlow's client contract does not: only the baseline glibc/kernel ABI may
-    remain external. Everything else is copied into share/runtime/lib and will
-    subsequently receive dependency-aware $ORIGIN RPATHs from the hardener.
+    LibreOffice comes from Ubuntu while the other engines come from Conda.  A
+    shared SONAME can exist in both worlds with different build options.  Never
+    satisfy a LibreOffice dependency merely because a Conda library with the same
+    basename exists.  Copy the Ubuntu closure into share/libreoffice/lib and let
+    the relocator bind LibreOffice binaries to that private directory.
     """
     office = pack / "share" / "libreoffice"
-    runtime_lib = pack / "share" / "runtime" / "lib"
-    runtime_lib.mkdir(parents=True, exist_ok=True)
+    office_lib = office / "lib"
+    office_lib.mkdir(parents=True, exist_ok=True)
 
     index = linux_host_library_index()
-    all_native = [path for path in pack.rglob("*") if path.is_file() and linux_elf(path)]
-    by_name: dict[str, list[Path]] = {}
-    for path in all_native:
-        by_name.setdefault(path.name, []).append(path)
+    office_native = [path for path in office.rglob("*") if path.is_file() and linux_elf(path)]
+    office_by_name: dict[str, list[Path]] = {}
+    for path in office_native:
+        office_by_name.setdefault(path.name, []).append(path)
 
-    queue = [path for path in office.rglob("*") if path.is_file() and linux_elf(path)]
+    queue = list(office_native)
     scanned: set[Path] = set()
     copied: list[str] = []
 
@@ -301,8 +302,13 @@ def vendor_linux_libreoffice_dependencies(pack: Path) -> None:
         for soname in linux_needed(source):
             if soname in LINUX_BASE_ABI or soname.startswith("linux-vdso"):
                 continue
-            if by_name.get(soname):
+
+            # LibreOffice's own program libraries are already part of the copied
+            # installation.  Distro dependencies must come from the distro too,
+            # even when Conda happens to ship the same SONAME elsewhere in pack.
+            if office_by_name.get(soname):
                 continue
+
             host = find_linux_host_library(soname, index)
             if host is None:
                 raise SystemExit(
@@ -310,19 +316,16 @@ def vendor_linux_libreoffice_dependencies(pack: Path) -> None:
                     f"{source.relative_to(pack)} -> {soname}. "
                     "Install the providing package in the engine-certification job."
                 )
-            destination = runtime_lib / soname
+            destination = office_lib / soname
             shutil.copy2(host.resolve(), destination)
-            by_name.setdefault(soname, []).append(destination)
+            office_by_name.setdefault(soname, []).append(destination)
             queue.append(destination)
             copied.append(soname)
-            log(
-                "vendored LibreOffice host dependency "
-                f"{soname} <- {host}"
-            )
+            log(f"vendored LibreOffice host dependency {soname} <- {host}")
 
     log(
         "LibreOffice Linux host dependency closure: "
-        f"vendored={len(copied)} unique={len(set(copied))}"
+        f"vendored={len(copied)} unique={len(set(copied))} root={office_lib.relative_to(pack)}"
     )
 
 
@@ -377,11 +380,12 @@ def shell_arg(arg: str) -> str:
     return shlex.quote(arg)
 
 
-def unix_wrapper(target_rel: str, fixed_args: list[str] | None = None) -> str:
+def unix_wrapper(target_rel: str, fixed_args: list[str] | None = None, *, office: bool = False) -> str:
     fixed_args = fixed_args or []
     fixed = " ".join(shell_arg(arg) for arg in fixed_args)
     target = target_rel.replace('"', '\\"')
     spacer = f" {fixed}" if fixed else ""
+    office_mode = "1" if office else "0"
     return f'''#!/bin/sh
 set -eu
 BIN_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -394,9 +398,16 @@ RUNTIME="$PACK_ROOT/share/runtime"
 unset CONDA_PREFIX CONDA_DEFAULT_ENV CONDA_EXE MAMBA_EXE PYTHONPATH LD_PRELOAD
 export PYTHONNOUSERSITE=1
 export PATH="$BIN_DIR:$RUNTIME/bin:$RUNTIME/Library/bin:$RUNTIME/Scripts:/usr/bin:/bin"
-[ ! -d "$RUNTIME/lib" ] || export LD_LIBRARY_PATH="$RUNTIME/lib"
-[ ! -d "$RUNTIME/lib" ] || export DYLD_LIBRARY_PATH="$RUNTIME/lib"
-export PYTHONHOME="$RUNTIME"
+if [ "{office_mode}" = "1" ]; then
+  # LibreOffice is an Ubuntu build with its own vendored distro closure.  Do
+  # not inject Conda's Python or shared-library namespace into it.
+  unset PYTHONHOME PYTHONPATH LD_LIBRARY_PATH DYLD_LIBRARY_PATH
+  export SAL_USE_VCLPLUGIN=svp
+else
+  [ ! -d "$RUNTIME/lib" ] || export LD_LIBRARY_PATH="$RUNTIME/lib"
+  [ ! -d "$RUNTIME/lib" ] || export DYLD_LIBRARY_PATH="$RUNTIME/lib"
+  export PYTHONHOME="$RUNTIME"
+fi
 
 for TESS in "$RUNTIME/share/tessdata" "$RUNTIME/Library/share/tessdata"; do
   if [ -d "$TESS" ]; then export TESSDATA_PREFIX="$TESS"; break; fi
@@ -614,10 +625,12 @@ def add_unix_command(
     name: str,
     target: Path,
     fixed: list[str] | None = None,
+    *,
+    office: bool = False,
 ) -> None:
     path = pack / "bin" / name
     path.write_text(
-        unix_wrapper(relative_to_pack(target, pack), fixed),
+        unix_wrapper(relative_to_pack(target, pack), fixed, office=office),
         encoding="utf-8",
     )
     path.chmod(
@@ -806,7 +819,7 @@ def main() -> None:
         assert launcher is not None
         add_windows_command(pack, launcher, "soffice", office_target)
     else:
-        add_unix_command(pack, "soffice", office_target)
+        add_unix_command(pack, "soffice", office_target, office=True)
 
     if launcher is not None:
         launcher.unlink(missing_ok=True)

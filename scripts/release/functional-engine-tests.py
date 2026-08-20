@@ -2,20 +2,32 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import os
 import subprocess
 import tempfile
+import struct
+import zlib
 import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_RESOURCE_ROOT = ROOT / "src-tauri/resources/engines"
 DEFAULT_META = ROOT / "src-tauri/resources/engine-pack.json"
-PNG_1X1 = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
-)
+def write_rgb_png(path: Path, width: int = 64, height: int = 64) -> None:
+    """Write a deterministic opaque RGB PNG without third-party modules."""
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        body = kind + payload
+        return struct.pack(">I", len(payload)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+    row = bytes([0]) + bytes([32, 96, 192]) * width
+    raw = row * height
+    data = bytearray(b"\x89PNG\r\n\x1a\n")
+    data.extend(chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)))
+    data.extend(chunk(b"IDAT", zlib.compress(raw, 9)))
+    data.extend(chunk(b"IEND", b""))
+    path.write_bytes(data)
+
 
 
 def clean_base_environment() -> dict[str, str]:
@@ -54,11 +66,10 @@ def env_for_pack(resource_root: Path) -> dict[str, str]:
     entries.append(Path(env["PATH"].split(os.pathsep)[0]))
     env["PATH"] = os.pathsep.join(str(entry) for entry in entries)
 
-    if runtime.is_dir():
+    # Do not inject host-like loader variables here.  The executable wrapper and
+    # its relocated native dependencies must be sufficient on a clean host.
+    if runtime.is_dir() and os.name == "nt":
         env["PYTHONHOME"] = str(runtime)
-    if os.name != "nt" and (runtime / "lib").is_dir():
-        key = "DYLD_LIBRARY_PATH" if sys_platform() == "darwin" else "LD_LIBRARY_PATH"
-        env[key] = str(runtime / "lib")
 
     for tess in (runtime / "share" / "tessdata", runtime / "Library" / "share" / "tessdata"):
         if tess.is_dir():
@@ -190,7 +201,7 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory(prefix="fileflow-engine-functional-") as tmp:
         root = Path(tmp)
-        png = root / "input.png"; png.write_bytes(PNG_1X1)
+        png = root / "input.png"; write_rgb_png(png)
         ppm = root / "input.ppm"; ppm.write_text("P3\n2 2\n255\n255 0 0  0 255 0\n0 0 255  255 255 255\n")
         ocr_pgm = root / "ocr.pgm"; ocr_pgm.write_bytes(b"P5\n240 80\n255\n" + bytes([255]) * (240 * 80))
         pdf = root / "input.pdf"; minimal_pdf(pdf)
@@ -271,11 +282,24 @@ def main() -> None:
         soffice = exe("soffice")
         if soffice:
             def office_test():
-                profile = root / "lo-profile"; profile.mkdir()
                 for source in (docx, xlsx, pptx):
-                    out_dir = root / f"lo-{source.suffix[1:]}"; out_dir.mkdir()
-                    run(soffice, [f"-env:UserInstallation={profile.as_uri()}", "--headless", "--convert-to", "pdf", "--outdir", str(out_dir), str(source)], env, 180)
-                    assert_file(out_dir / f"{source.stem}.pdf")
+                    # A fresh profile prevents a failed conversion from poisoning
+                    # the following one and proves first-run behaviour.
+                    profile = root / f"lo-profile-{source.suffix[1:]}"
+                    profile.mkdir()
+                    out_dir = root / f"lo-{source.suffix[1:]}"
+                    out_dir.mkdir()
+                    run(
+                        soffice,
+                        [
+                            f"-env:UserInstallation={profile.as_uri()}",
+                            "--headless", "--nologo", "--nodefault", "--nofirststartwizard", "--norestore",
+                            "--convert-to", "pdf", "--outdir", str(out_dir), str(source),
+                        ],
+                        env,
+                        180,
+                    )
+                    assert_file(out_dir / f"{source.stem}.pdf", min_size=100)
             tests.append(("office-docx-xlsx-pptx", office_test))
         ocr = exe("ocrmypdf")
         if ocr:

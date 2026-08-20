@@ -92,7 +92,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: release/engines/out
-          key: fileflow-engines-${{ matrix.target }}-${{ hashFiles('release/engines/**', 'scripts/release/*engine*.py', 'scripts/release/windows-engine-launcher.rs') }}
+          key: fileflow-engines-${{ matrix.target }}-${{ hashFiles('.github/workflows/native-linux.yml', 'release/engines/**', 'scripts/release/*engine*.py', 'scripts/release/windows-engine-launcher.rs') }}
       - name: Provision FULL engine runtime
         if: steps.engine-cache.outputs.cache-hit != 'true'
         uses: mamba-org/setup-micromamba@v2
@@ -123,15 +123,13 @@ jobs:
           python scripts/release/smoke-engines.py --mode full
           python scripts/release/functional-engine-tests.py --mode full
           python scripts/release/make-engine-pack.py --target '${{ matrix.target }}' --source src-tauri/resources/engines --licenses src-tauri/resources/licenses
-      - name: Re-stage immutable artifact and validate closure
+      - name: Re-stage immutable artifact and certify exact bytes
+        timeout-minutes: 15
         run: |
           python scripts/release/stage-local-engine-pack.py --target '${{ matrix.target }}' --directory release/engines/out --mode full
           python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --audit-full
           python scripts/release/smoke-engines.py --mode full
-      - name: Functional clean-host certification of restored cache
-        if: steps.engine-cache.outputs.cache-hit == 'true'
-        timeout-minutes: 10
-        run: python scripts/release/functional-engine-tests.py --mode full
+          python scripts/release/functional-engine-tests.py --mode full
       - name: Upload certified immutable engine pack
         uses: actions/upload-artifact@v7
         with:
@@ -145,9 +143,9 @@ jobs:
   package-smoke:
     name: Package smoke Linux / ${{ matrix.name }}
     needs: [native, engine-certify]
-    # A failed sibling architecture must not suppress this target candidate.
-    # Target-local artifact/build checks below decide this matrix leg independently.
-    if: ${{ always() && !cancelled() }}
+    # Do not manufacture secondary Artifact-not-found failures when native or
+    # engine certification failed. Packaging starts only from certified packs.
+    if: ${{ !cancelled() && needs.native.result == 'success' && needs.engine-certify.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
@@ -161,6 +159,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: engines-${{ matrix.target }}
+          path: release/engines/out
       - name: Linux packaging prerequisites
         run: |
           sudo apt-get update
@@ -184,10 +186,6 @@ jobs:
           cache-on-failure: true
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - uses: actions/download-artifact@v8
-        with:
-          name: engines-${{ matrix.target }}
-          path: release/engines/out
       - name: Stage certified engines without rebuilding them
         run: |
           python scripts/release/stage-local-engine-pack.py --target '${{ matrix.target }}' --directory release/engines/out --mode full

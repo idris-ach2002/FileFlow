@@ -24,6 +24,7 @@ hardener = load("fileflow_hardener", "scripts/release/harden-engine-pack.py")
 validator = load("fileflow_validator", "scripts/release/validate-engine-pack.py")
 factory = load("fileflow_factory", "scripts/release/build-native-engine-pack.py")
 packer = load("fileflow_packer", "scripts/release/make-engine-pack.py")
+functional = load("fileflow_functional", "scripts/release/functional-engine-tests.py")
 
 
 class NativeEngineToolingTests(unittest.TestCase):
@@ -104,9 +105,35 @@ class NativeEngineToolingTests(unittest.TestCase):
                  mock.patch.object(factory, "find_linux_host_library", return_value=host):
                 factory.vendor_linux_libreoffice_dependencies(pack)
 
-            copied = pack / "share/runtime/lib/liblpsolve55.so"
+            copied = pack / "share/libreoffice/lib/liblpsolve55.so"
             self.assertTrue(copied.is_file())
             self.assertEqual(copied.read_bytes(), host.read_bytes())
+
+
+    def test_linux_libreoffice_prefers_isolated_distro_closure_over_conda_duplicate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine_root = Path(tmp) / "engines"
+            old = hardener.ENGINE_ROOT
+            hardener.ENGINE_ROOT = engine_root
+            try:
+                source = engine_root / "share/libreoffice/program/soffice.bin"
+                office_dep = engine_root / "share/libreoffice/lib/libsame.so.1"
+                conda_dep = engine_root / "share/runtime/lib/libsame.so.1"
+                for path in (source, office_dep, conda_dep):
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(b"fixture")
+                resolved = hardener.resolve_linux_needed(
+                    source, "libsame.so.1", [conda_dep, office_dep], []
+                )
+                self.assertEqual(resolved, office_dep)
+            finally:
+                hardener.ENGINE_ROOT = old
+
+    def test_libreoffice_wrapper_does_not_inherit_conda_loader_namespace(self):
+        wrapper = factory.unix_wrapper("share/libreoffice/program/soffice", office=True)
+        self.assertIn('if [ "1" = "1" ]', wrapper)
+        self.assertIn("unset PYTHONHOME PYTHONPATH LD_LIBRARY_PATH DYLD_LIBRARY_PATH", wrapper)
+        self.assertIn("SAL_USE_VCLPLUGIN=svp", wrapper)
 
     def test_linux_ambiguous_internal_dependency_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -168,6 +195,20 @@ class NativeEngineToolingTests(unittest.TestCase):
         self.assertIn('MAGICK_CONFIGURE_PATH', factory.WINDOWS_LAUNCHER)
         self.assertIn('GS_LIB', factory.WINDOWS_LAUNCHER)
         self.assertIn('remove_var("CONDA_PREFIX")', factory.WINDOWS_LAUNCHER)
+
+
+    def test_img2pdf_fixture_is_opaque_and_large_enough_for_pdf(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "fixture.png"
+            functional.write_rgb_png(image)
+            data = image.read_bytes()
+            self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+            width = int.from_bytes(data[16:20], "big")
+            height = int.from_bytes(data[20:24], "big")
+            color_type = data[25]
+            self.assertGreaterEqual(width, 32)
+            self.assertGreaterEqual(height, 32)
+            self.assertEqual(color_type, 2)  # RGB, no alpha channel
 
     def test_engine_archive_is_reproducible_for_identical_content(self):
         with tempfile.TemporaryDirectory() as tmp:
