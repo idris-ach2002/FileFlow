@@ -742,23 +742,27 @@ async fn execute_item_inner(
             run_exiftool_json(engine, input, &plan.temporary_path, &cancellation).await
         }
         "office-to-pdf" => run_office_convert(engine, input, &plan, "pdf", &cancellation).await,
-        "office-convert" => run_office_convert(
-            engine,
-            input,
-            &plan,
-            extension.unwrap_or("pdf"),
-            &cancellation,
-        )
-        .await,
-        action if is_qpdf_action(action) => run_qpdf_action(
-            engine,
-            action,
-            input,
-            &plan.temporary_path,
-            parameters,
-            &cancellation,
-        )
-        .await,
+        "office-convert" => {
+            run_office_convert(
+                engine,
+                input,
+                &plan,
+                extension.unwrap_or("pdf"),
+                &cancellation,
+            )
+            .await
+        }
+        action if is_qpdf_action(action) => {
+            run_qpdf_action(
+                engine,
+                action,
+                input,
+                &plan.temporary_path,
+                parameters,
+                &cancellation,
+            )
+            .await
+        }
         "pdf-compress" => {
             run_pdf_compress(engine, input, &plan.temporary_path, quality, &cancellation).await
         }
@@ -776,9 +780,8 @@ async fn execute_item_inner(
         "pdf-ocr" => run_pdf_ocr(engine, input, &plan.temporary_path, &cancellation).await,
         "ocr-image" => run_tesseract(engine, input, &plan.temporary_path, &cancellation).await,
         "media-compatible" | "media-compress" | "video-convert" | "audio-convert"
-        | "extract-audio" | "video-to-gif" | "video-rotate" | "video-resize"
-        | "video-mute" | "video-thumbnail" | "media-trim" | "audio-normalize"
-        | "audio-gain" | "audio-mono" => {
+        | "extract-audio" | "video-to-gif" | "video-rotate" | "video-resize" | "video-mute"
+        | "video-thumbnail" | "media-trim" | "audio-normalize" | "audio-gain" | "audio-mono" => {
             run_ffmpeg(
                 engine,
                 action_id,
@@ -1141,10 +1144,18 @@ fn item_output<'a>(
         "video-to-gif" => ("ffmpeg", Some("gif"), Some("animation")),
         "video-thumbnail" => ("ffmpeg", Some("jpg"), Some("miniature")),
         "video-rotate" => ("ffmpeg", source_extension.or(Some("mp4")), Some("rotation")),
-        "video-resize" => ("ffmpeg", source_extension.or(Some("mp4")), Some("redimensionne")),
+        "video-resize" => (
+            "ffmpeg",
+            source_extension.or(Some("mp4")),
+            Some("redimensionne"),
+        ),
         "video-mute" => ("ffmpeg", source_extension.or(Some("mp4")), Some("sans-son")),
         "media-trim" => ("ffmpeg", source_extension.or(Some("mp4")), Some("extrait")),
-        "audio-normalize" => ("ffmpeg", source_extension.or(Some("m4a")), Some("normalise")),
+        "audio-normalize" => (
+            "ffmpeg",
+            source_extension.or(Some("m4a")),
+            Some("normalise"),
+        ),
         "audio-gain" => ("ffmpeg", source_extension.or(Some("m4a")), Some("volume")),
         "audio-mono" => ("ffmpeg", source_extension.or(Some("m4a")), Some("mono")),
         "video-convert" => (
@@ -1303,7 +1314,10 @@ async fn run_imagemagick_action(
         "image-rotate-180" => args.extend([OsString::from("-rotate"), OsString::from("180")]),
         "image-rotate" => {
             let angle = parameter_number(parameters, "angle", 90.0, -360.0, 360.0);
-            args.extend([OsString::from("-rotate"), OsString::from(format!("{angle:.2}"))]);
+            args.extend([
+                OsString::from("-rotate"),
+                OsString::from(format!("{angle:.2}")),
+            ]);
         }
         "image-flip-horizontal" => args.push(OsString::from("-flop")),
         "image-flip-vertical" => args.push(OsString::from("-flip")),
@@ -1311,7 +1325,10 @@ async fn run_imagemagick_action(
         "image-grayscale" => args.extend([OsString::from("-colorspace"), OsString::from("Gray")]),
         "image-sepia" => {
             let strength = parameter_number(parameters, "strength", 80.0, 0.0, 100.0);
-            args.extend([OsString::from("-sepia-tone"), OsString::from(format!("{strength:.0}%"))]);
+            args.extend([
+                OsString::from("-sepia-tone"),
+                OsString::from(format!("{strength:.0}%")),
+            ]);
         }
         "image-auto-enhance" => args.extend([
             OsString::from("-auto-orient"),
@@ -1335,20 +1352,32 @@ async fn run_imagemagick_action(
         }
         "image-sharpen" => {
             let amount = parameter_number(parameters, "amount", 1.0, 0.1, 5.0);
-            args.extend([OsString::from("-sharpen"), OsString::from(format!("0x{amount:.2}"))]);
+            args.extend([
+                OsString::from("-sharpen"),
+                OsString::from(format!("0x{amount:.2}")),
+            ]);
         }
         "image-blur" => {
             let radius = parameter_number(parameters, "radius", 2.0, 0.1, 20.0);
-            args.extend([OsString::from("-blur"), OsString::from(format!("0x{radius:.2}"))]);
+            args.extend([
+                OsString::from("-blur"),
+                OsString::from(format!("0x{radius:.2}")),
+            ]);
         }
         "image-noise-reduce" => args.push(OsString::from("-despeckle")),
         "image-threshold" => {
             let threshold = parameter_number(parameters, "threshold", 50.0, 0.0, 100.0);
-            args.extend([OsString::from("-threshold"), OsString::from(format!("{threshold:.0}%"))]);
+            args.extend([
+                OsString::from("-threshold"),
+                OsString::from(format!("{threshold:.0}%")),
+            ]);
         }
         "image-posterize" => {
             let levels = parameter_number(parameters, "levels", 6.0, 2.0, 32.0).round() as u32;
-            args.extend([OsString::from("-posterize"), OsString::from(levels.to_string())]);
+            args.extend([
+                OsString::from("-posterize"),
+                OsString::from(levels.to_string()),
+            ]);
         }
         "image-pixelate" => {
             let percent = parameter_number(parameters, "pixelPercent", 8.0, 1.0, 50.0);
@@ -1371,7 +1400,8 @@ async fn run_imagemagick_action(
         "image-trim" => args.extend([OsString::from("-trim"), OsString::from("+repage")]),
         "image-crop-center" => {
             let width = parameter_number(parameters, "width", 1200.0, 1.0, 20000.0).round() as u32;
-            let height = parameter_number(parameters, "height", 1200.0, 1.0, 20000.0).round() as u32;
+            let height =
+                parameter_number(parameters, "height", 1200.0, 1.0, 20000.0).round() as u32;
             args.extend([
                 OsString::from("-gravity"),
                 OsString::from("center"),
@@ -1382,7 +1412,8 @@ async fn run_imagemagick_action(
         }
         "image-resize-exact" => {
             let width = parameter_number(parameters, "width", 1920.0, 1.0, 20000.0).round() as u32;
-            let height = parameter_number(parameters, "height", 1080.0, 1.0, 20000.0).round() as u32;
+            let height =
+                parameter_number(parameters, "height", 1080.0, 1.0, 20000.0).round() as u32;
             let mode = parameter_string(parameters, "fit", "contain", 12);
             let geometry = match mode.as_str() {
                 "stretch" => format!("{width}x{height}!"),
@@ -1411,7 +1442,10 @@ async fn run_imagemagick_action(
         }
         "image-vignette" => {
             let radius = parameter_number(parameters, "radius", 12.0, 0.0, 100.0);
-            args.extend([OsString::from("-vignette"), OsString::from(format!("0x{radius:.0}"))]);
+            args.extend([
+                OsString::from("-vignette"),
+                OsString::from(format!("0x{radius:.0}")),
+            ]);
         }
         "image-watermark" => {
             let text = parameter_string(parameters, "text", "FileFlow", 120);
@@ -1542,10 +1576,16 @@ fn is_qpdf_action(action_id: &str) -> bool {
 fn sanitize_pdf_pages(value: &str) -> String {
     let filtered: String = value
         .chars()
-        .filter(|character| character.is_ascii_digit() || matches!(character, ',' | '-' | 'z' | 'Z'))
+        .filter(|character| {
+            character.is_ascii_digit() || matches!(character, ',' | '-' | 'z' | 'Z')
+        })
         .take(128)
         .collect();
-    if filtered.is_empty() { "1-z".into() } else { filtered.to_ascii_lowercase() }
+    if filtered.is_empty() {
+        "1-z".into()
+    } else {
+        filtered.to_ascii_lowercase()
+    }
 }
 
 async fn run_qpdf_action(
@@ -1560,13 +1600,21 @@ async fn run_qpdf_action(
     match action_id {
         "pdf-rotate-pages" => {
             let angle = parameter_number(parameters, "angle", 90.0, -270.0, 270.0).round() as i32;
-            let angle = match angle { -270 | -180 | -90 | 90 | 180 | 270 => angle, _ => 90 };
+            let angle = match angle {
+                -270 | -180 | -90 | 90 | 180 | 270 => angle,
+                _ => 90,
+            };
             let pages = sanitize_pdf_pages(&parameter_string(parameters, "pages", "1-z", 128));
             args.push(OsString::from(format!("--rotate={angle}:{pages}")));
         }
         "pdf-select-pages" => {
             let pages = sanitize_pdf_pages(&parameter_string(parameters, "pages", "1-z", 128));
-            args.extend([OsString::from("--pages"), input.as_os_str().into(), OsString::from(pages), OsString::from("--")]);
+            args.extend([
+                OsString::from("--pages"),
+                input.as_os_str().into(),
+                OsString::from(pages),
+                OsString::from("--"),
+            ]);
         }
         "pdf-linearize" => args.push(OsString::from("--linearize")),
         "pdf-optimize-lossless" => args.extend([
@@ -1658,6 +1706,8 @@ async fn run_tesseract(
     Ok(())
 }
 
+// Internal run_ffmpeg boundary: explicit parameters keep execution context visible and avoid opaque mutable state.
+#[allow(clippy::too_many_arguments)]
 async fn run_ffmpeg(
     engine: &Path,
     action_id: &str,
@@ -1799,11 +1849,17 @@ async fn run_ffmpeg(
                 "180" => "hflip,vflip",
                 _ => "transpose=1",
             };
-            args.extend([OsString::from("-vf"), OsString::from(filter), OsString::from("-c:a"), OsString::from("copy")]);
+            args.extend([
+                OsString::from("-vf"),
+                OsString::from(filter),
+                OsString::from("-c:a"),
+                OsString::from("copy"),
+            ]);
         }
         "video-resize" => {
             let width = parameter_number(parameters, "width", 1920.0, 16.0, 7680.0).round() as u32;
-            let height = parameter_number(parameters, "height", 1080.0, 16.0, 4320.0).round() as u32;
+            let height =
+                parameter_number(parameters, "height", 1080.0, 16.0, 4320.0).round() as u32;
             args.extend([
                 OsString::from("-vf"),
                 OsString::from(format!("scale=w={width}:h={height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2")),
@@ -1811,23 +1867,56 @@ async fn run_ffmpeg(
                 OsString::from("-c:a"), OsString::from("aac"),
             ]);
         }
-        "video-mute" => { args.push(OsString::from("-an")); args.extend([OsString::from("-c:v"), OsString::from("copy")]); }
+        "video-mute" => {
+            args.push(OsString::from("-an"));
+            args.extend([OsString::from("-c:v"), OsString::from("copy")]);
+        }
         "video-thumbnail" => {
             let second = parameter_number(parameters, "second", 1.0, 0.0, 86400.0);
-            args.extend([OsString::from("-ss"), OsString::from(format!("{second:.3}")), OsString::from("-frames:v"), OsString::from("1"), OsString::from("-q:v"), OsString::from("2")]);
+            args.extend([
+                OsString::from("-ss"),
+                OsString::from(format!("{second:.3}")),
+                OsString::from("-frames:v"),
+                OsString::from("1"),
+                OsString::from("-q:v"),
+                OsString::from("2"),
+            ]);
         }
         "media-trim" => {
             let start = parameter_number(parameters, "start", 0.0, 0.0, 86400.0);
             let duration = parameter_number(parameters, "duration", 30.0, 0.1, 86400.0);
-            args.extend([OsString::from("-ss"), OsString::from(format!("{start:.3}")), OsString::from("-t"), OsString::from(format!("{duration:.3}"))]);
+            args.extend([
+                OsString::from("-ss"),
+                OsString::from(format!("{start:.3}")),
+                OsString::from("-t"),
+                OsString::from(format!("{duration:.3}")),
+            ]);
         }
-        "audio-normalize" => { args.extend([OsString::from("-vn"), OsString::from("-af"), OsString::from("loudnorm=I=-16:LRA=11:TP=-1.5")]); push_audio_codec(&mut args, output); }
-        "audio-gain" => {
-            let gain = parameter_number(parameters, "gainDb", 0.0, -30.0, 30.0);
-            args.extend([OsString::from("-vn"), OsString::from("-af"), OsString::from(format!("volume={gain:.1}dB"))]);
+        "audio-normalize" => {
+            args.extend([
+                OsString::from("-vn"),
+                OsString::from("-af"),
+                OsString::from("loudnorm=I=-16:LRA=11:TP=-1.5"),
+            ]);
             push_audio_codec(&mut args, output);
         }
-        "audio-mono" => { args.extend([OsString::from("-vn"), OsString::from("-ac"), OsString::from("1")]); push_audio_codec(&mut args, output); }
+        "audio-gain" => {
+            let gain = parameter_number(parameters, "gainDb", 0.0, -30.0, 30.0);
+            args.extend([
+                OsString::from("-vn"),
+                OsString::from("-af"),
+                OsString::from(format!("volume={gain:.1}dB")),
+            ]);
+            push_audio_codec(&mut args, output);
+        }
+        "audio-mono" => {
+            args.extend([
+                OsString::from("-vn"),
+                OsString::from("-ac"),
+                OsString::from("1"),
+            ]);
+            push_audio_codec(&mut args, output);
+        }
         _ => {}
     }
     args.push(output.as_os_str().into());
@@ -2792,7 +2881,9 @@ fn normalize_target_format(
         ],
         "audio-convert" | "extract-audio" => &["mp3", "m4a", "aac", "wav", "flac", "ogg", "opus"],
         "video-convert" => &["mp4", "webm", "mkv", "mov"],
-        "office-convert" => &["pdf", "docx", "odt", "rtf", "txt", "html", "xlsx", "ods", "csv", "pptx", "odp"],
+        "office-convert" => &[
+            "pdf", "docx", "odt", "rtf", "txt", "html", "xlsx", "ods", "csv", "pptx", "odp",
+        ],
         "text-convert" => &["html", "md", "docx", "epub", "txt"],
         "ebook-convert" => &["html", "md", "docx", "txt", "epub"],
         "archive-create" => &["zip", "7z", "tar"],

@@ -258,7 +258,10 @@ pub async fn save_job_output_copy(
             .and_then(|value| value.to_str())
             .map(str::to_owned);
         let file = tokio::task::spawn_blocking(move || {
-            let mut dialog = app_for_dialog.dialog().file().set_title("Enregistrer une copie");
+            let mut dialog = app_for_dialog
+                .dialog()
+                .file()
+                .set_title("Enregistrer une copie");
             if let Some(name) = suggested_name.as_deref() {
                 dialog = dialog.set_file_name(name);
             }
