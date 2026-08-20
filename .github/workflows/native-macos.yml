@@ -116,3 +116,13 @@ jobs:
         run: |
           node scripts/release/validate-distribution.mjs --target '${{ matrix.target }}'
           node scripts/release/smoke-packaged-app.mjs --target '${{ matrix.target }}'
+      - name: Collect candidate artifacts
+        run: node scripts/release/collect-artifacts.mjs --target '${{ matrix.target }}'
+
+      - name: Upload macOS candidate
+        uses: actions/upload-artifact@v7
+        with:
+          name: fileflow-macos-${{ matrix.target }}-candidate
+          path: dist/release/${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 14
