@@ -11,22 +11,50 @@ use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
     sync::Arc,
+    time::{Duration, Instant},
 };
 use thiserror::Error;
 use tokio::sync::mpsc;
 
-#[derive(Default)]
+const ENGINE_PROBE_CACHE_TTL: Duration = Duration::from_secs(30);
+
+struct ProbeCache {
+    created_at: Instant,
+    probes: Vec<EngineProbe>,
+}
+
 pub struct EngineRegistry {
     adapters: RwLock<HashMap<String, Arc<dyn EngineAdapter>>>,
+    probe_cache: RwLock<Option<ProbeCache>>,
+}
+
+impl Default for EngineRegistry {
+    fn default() -> Self {
+        Self {
+            adapters: RwLock::new(HashMap::new()),
+            probe_cache: RwLock::new(None),
+        }
+    }
 }
 
 impl EngineRegistry {
     pub fn register(&self, adapter: Arc<dyn EngineAdapter>) {
         let id = adapter.descriptor().id;
         self.adapters.write().insert(id, adapter);
+        *self.probe_cache.write() = None;
+    }
+
+    pub fn invalidate_probe_cache(&self) {
+        *self.probe_cache.write() = None;
     }
 
     pub async fn probe_all(&self) -> Vec<EngineProbe> {
+        if let Some(cached) = self.probe_cache.read().as_ref()
+            && cached.created_at.elapsed() < ENGINE_PROBE_CACHE_TTL
+        {
+            return cached.probes.clone();
+        }
+
         let adapters: Vec<_> = self.adapters.read().values().cloned().collect();
         let mut tasks = Vec::with_capacity(adapters.len());
 
@@ -52,6 +80,10 @@ impl EngineRegistry {
         }
 
         probes.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+        *self.probe_cache.write() = Some(ProbeCache {
+            created_at: Instant::now(),
+            probes: probes.clone(),
+        });
         probes
     }
 

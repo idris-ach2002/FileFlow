@@ -216,9 +216,21 @@ export interface ConversionPlan {
   steps: ConversionStep[];
 }
 
+export interface FormatCapabilityProfile {
+  id: string;
+  label: string;
+  family: FormatFamily;
+  extensions: string[];
+  preview: boolean;
+  actions: string[];
+  convertTo: string[];
+  compressTo: string[];
+}
+
 export interface CapabilityCatalog {
   actions: ActionDescriptor[];
   conversions: ConversionEdge[];
+  formats: FormatCapabilityProfile[];
 }
 
 export interface ExtensionCount {
@@ -307,6 +319,7 @@ export interface ExecuteWorkspaceActionRequest {
   outputPolicy: OutputPolicy;
   targetFormat?: string | null;
   quality?: 'small' | 'balanced' | 'high' | null;
+  parameters?: Record<string, string | number | boolean | null>;
 }
 
 export interface ItemFailure {

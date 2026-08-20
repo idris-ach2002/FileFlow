@@ -23,6 +23,7 @@ export class CapabilityStore {
   readonly error = signal<string | null>(null);
 
   readonly actions = computed(() => this.catalog()?.actions ?? []);
+  readonly formats = computed(() => this.catalog()?.formats ?? []);
   readonly featuredActions = computed(() => {
     const favorites = this.favoriteActionIds();
     return this.actions()
@@ -82,6 +83,12 @@ export class CapabilityStore {
   action(id: string | null | undefined): ActionDescriptor | null {
     if (!id) return null;
     return this.actions().find((action) => action.id === id) ?? null;
+  }
+
+  formatCapability(id: string | null | undefined) {
+    if (!id) return null;
+    const normalized = id.toLowerCase();
+    return this.formats().find((format) => format.id === normalized || format.extensions.includes(normalized)) ?? null;
   }
 
   isActionReady(action: ActionDescriptor): boolean {

@@ -12,6 +12,7 @@ import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/rou
 import { isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ActionDescriptor } from './core/ipc/tauri.models';
 import { AuthStore } from './core/auth/auth.store';
 import { CapabilityStore } from './core/catalog/capability.store';
@@ -59,14 +60,29 @@ export class AppComponent {
   }
 
   private async initializeApplication(): Promise<void> {
-    await this.auth.initialize();
-    if (this.auth.needsWelcome()) {
-      await this.router.navigate(['/welcome']);
-      return;
+    try {
+      await this.auth.initialize();
+      if (this.auth.needsWelcome()) {
+        await this.router.navigate(['/welcome']);
+        return;
+      }
+      if (this.router.url.startsWith('/welcome')) await this.router.navigate(['/']);
+      const profileId = this.auth.profile()?.id;
+      if (profileId) await this.initializeAuthenticatedContext(profileId);
+    } finally {
+      await this.revealDesktopWindow();
     }
-    if (this.router.url.startsWith('/welcome')) await this.router.navigate(['/']);
-    const profileId = this.auth.profile()?.id;
-    if (profileId) await this.initializeAuthenticatedContext(profileId);
+  }
+
+  private async revealDesktopWindow(): Promise<void> {
+    if (!isTauri()) return;
+    try {
+      const window = getCurrentWindow();
+      await window.show();
+      await window.setFocus();
+    } catch {
+      // A window-reveal failure must never prevent the app from booting.
+    }
   }
 
   private async initializeAuthenticatedContext(profileId: string): Promise<void> {

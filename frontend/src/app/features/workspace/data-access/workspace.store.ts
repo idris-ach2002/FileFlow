@@ -33,7 +33,7 @@ const EMPTY_STATS: IntakeStats = {
   warnings: 0,
 };
 
-const PREVIEW_LIMIT = 200;
+const PREVIEW_LIMIT = 120;
 const PAGE_SIZE = 200;
 
 @Injectable({ providedIn: 'root' })
@@ -41,6 +41,12 @@ export class WorkspaceStore {
   private readonly bridge = inject(TauriBridgeService);
   private readonly preferences = inject(PreferencesService);
   private queryGeneration = 0;
+  private intakeFlushScheduled = false;
+  private executionFlushScheduled = false;
+  private pendingIntakeStats: IntakeStats | null = null;
+  private pendingIntakeAssets: Asset[] = [];
+  private pendingWarnings: IntakeWarning[] = [];
+  private pendingExecutionProgress: { completed: number; total: number } | null = null;
 
   readonly phase = signal<WorkspacePhase>('idle');
   readonly workspace = signal<WorkspaceSnapshot | null>(null);
@@ -297,6 +303,7 @@ export class WorkspaceStore {
   private onExecutionEvent(event: ExecutionEvent): void {
     switch (event.event) {
       case 'started':
+        this.flushExecutionProgress();
         this.runningJobId.set(event.data.jobId);
         this.executionTotal.set(event.data.total);
         this.executionCompleted.set(0);
@@ -305,10 +312,11 @@ export class WorkspaceStore {
         this.executionFailures.update((failures) => [...failures, `${event.data.input}: ${event.data.message}`].slice(-10));
         break;
       case 'progress':
-        this.executionCompleted.set(event.data.completed);
-        this.executionTotal.set(event.data.total);
+        this.pendingExecutionProgress = { completed: event.data.completed, total: event.data.total };
+        this.scheduleExecutionFlush();
         break;
       case 'finished':
+        this.flushExecutionProgress();
         this.executionSummary.set(event.data.summary);
         this.executionCompleted.set(event.data.summary.total);
         this.executionTotal.set(event.data.summary.total);
@@ -317,6 +325,23 @@ export class WorkspaceStore {
       case 'itemCompleted':
         break;
     }
+  }
+
+  private scheduleExecutionFlush(): void {
+    if (this.executionFlushScheduled) return;
+    this.executionFlushScheduled = true;
+    scheduleAnimationFrame(() => {
+      this.executionFlushScheduled = false;
+      this.flushExecutionProgress();
+    });
+  }
+
+  private flushExecutionProgress(): void {
+    const progress = this.pendingExecutionProgress;
+    this.pendingExecutionProgress = null;
+    if (!progress) return;
+    this.executionCompleted.set(progress.completed);
+    this.executionTotal.set(progress.total);
   }
 
   setDragActive(active: boolean): void {
@@ -380,19 +405,52 @@ export class WorkspaceStore {
         this.activeWorkspaceId.set(event.data.workspaceId);
         break;
       case 'batch':
-        this.stats.set(event.data.stats);
-        this.assets.update((current) => [...current, ...event.data.assets].slice(-PREVIEW_LIMIT));
+        this.pendingIntakeStats = event.data.stats;
+        this.pendingIntakeAssets.push(...event.data.assets);
+        if (this.pendingIntakeAssets.length > PREVIEW_LIMIT * 2) {
+          this.pendingIntakeAssets = this.pendingIntakeAssets.slice(-PREVIEW_LIMIT);
+        }
+        this.scheduleIntakeFlush();
         break;
       case 'progress':
-        this.stats.set(event.data.stats);
+        this.pendingIntakeStats = event.data.stats;
+        this.scheduleIntakeFlush();
         break;
       case 'warning':
-        this.stats.set(event.data.stats);
-        this.warnings.update((current) => [...current, event.data.warning].slice(-50));
+        this.pendingIntakeStats = event.data.stats;
+        this.pendingWarnings.push(event.data.warning);
+        this.scheduleIntakeFlush();
         break;
       case 'finished':
+        this.flushIntakeEvents();
         this.workspace.set(event.data.workspace);
         break;
+    }
+  }
+
+  private scheduleIntakeFlush(): void {
+    if (this.intakeFlushScheduled) return;
+    this.intakeFlushScheduled = true;
+    scheduleAnimationFrame(() => {
+      this.intakeFlushScheduled = false;
+      this.flushIntakeEvents();
+    });
+  }
+
+  private flushIntakeEvents(): void {
+    if (this.pendingIntakeStats) {
+      this.stats.set(this.pendingIntakeStats);
+      this.pendingIntakeStats = null;
+    }
+    if (this.pendingIntakeAssets.length) {
+      const pending = this.pendingIntakeAssets;
+      this.pendingIntakeAssets = [];
+      this.assets.update((current) => [...current, ...pending].slice(-PREVIEW_LIMIT));
+    }
+    if (this.pendingWarnings.length) {
+      const pending = this.pendingWarnings;
+      this.pendingWarnings = [];
+      this.warnings.update((current) => [...current, ...pending].slice(-50));
     }
   }
 
@@ -450,7 +508,19 @@ export class WorkspaceStore {
     this.executionCompleted.set(0);
     this.executionTotal.set(0);
     this.executionFailures.set([]);
+    this.pendingIntakeStats = null;
+    this.pendingIntakeAssets = [];
+    this.pendingWarnings = [];
+    this.pendingExecutionProgress = null;
   }
+}
+
+function scheduleAnimationFrame(callback: () => void): void {
+  if (typeof globalThis.requestAnimationFrame === 'function') {
+    globalThis.requestAnimationFrame(() => callback());
+    return;
+  }
+  globalThis.setTimeout(callback, 16);
 }
 
 function normalizeSelection(selection: string | string[] | null): string[] {

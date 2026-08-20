@@ -29,6 +29,8 @@ pub struct ExecuteWorkspaceAction {
     pub output_policy: OutputPolicy,
     pub target_format: Option<String>,
     pub quality: Option<String>,
+    #[serde(default)]
+    pub parameters: HashMap<String, serde_json::Value>,
 }
 
 #[tauri::command]
@@ -124,6 +126,7 @@ pub async fn execute_action(
                 output_policy: request.output_policy,
                 target_format: request.target_format,
                 quality: request.quality,
+                parameters: request.parameters,
             },
             EnginePaths::new(engine_paths),
             cancellation,
@@ -233,22 +236,37 @@ pub async fn save_job_output_copy(
     let source = registered_output(&state, job_id, index)?;
     let metadata = std::fs::metadata(&source).map_err(|error| error.to_string())?;
     let destination = if metadata.is_dir() {
-        let Some(folder) = app
-            .dialog()
-            .file()
-            .set_title("Enregistrer une copie du dossier")
-            .blocking_pick_folder()
-        else {
+        let app_for_dialog = app.clone();
+        let folder = tokio::task::spawn_blocking(move || {
+            app_for_dialog
+                .dialog()
+                .file()
+                .set_title("Enregistrer une copie du dossier")
+                .blocking_pick_folder()
+        })
+        .await
+        .map_err(|error| format!("Le dialogue a été interrompu : {error}"))?;
+        let Some(folder) = folder else {
             return Ok(None);
         };
         let folder = folder.into_path().map_err(|error| error.to_string())?;
         unique_copy_destination(&folder.join(source.file_name().unwrap_or_default()))
     } else {
-        let mut dialog = app.dialog().file().set_title("Enregistrer une copie");
-        if let Some(name) = source.file_name().and_then(|value| value.to_str()) {
-            dialog = dialog.set_file_name(name);
-        }
-        let Some(file) = dialog.blocking_save_file() else {
+        let app_for_dialog = app.clone();
+        let suggested_name = source
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(str::to_owned);
+        let file = tokio::task::spawn_blocking(move || {
+            let mut dialog = app_for_dialog.dialog().file().set_title("Enregistrer une copie");
+            if let Some(name) = suggested_name.as_deref() {
+                dialog = dialog.set_file_name(name);
+            }
+            dialog.blocking_save_file()
+        })
+        .await
+        .map_err(|error| format!("Le dialogue a été interrompu : {error}"))?;
+        let Some(file) = file else {
             return Ok(None);
         };
         file.into_path().map_err(|error| error.to_string())?
