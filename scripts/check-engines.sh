@@ -60,6 +60,7 @@ check "FFmpeg" ffmpeg
 check "libvips" vips
 check "ImageMagick" magick convert
 check "qpdf" qpdf
+check "img2pdf" img2pdf
 check "Poppler" pdftoppm
 check "Ghostscript" gs
 check "OCRmyPDF" ocrmypdf
@@ -68,3 +69,5 @@ check_office
 check "Pandoc" pandoc
 check "ExifTool" exiftool
 check "7-Zip" 7zz 7z
+check "Zstandard" zstd
+check "LZ4" lz4

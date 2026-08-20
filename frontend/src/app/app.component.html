@@ -1,32 +1,115 @@
+@if (auth.phase() === 'loading') {
+  <div class="boot-screen"><div class="boot-logo">F</div><strong>FileFlow</strong><span>Préparation de votre espace…</span></div>
+} @else if (auth.needsWelcome()) {
+  <router-outlet />
+} @else {
 <div class="app-shell">
   <aside class="sidebar">
-    <div class="brand">
-      <div class="brand-mark">F</div>
-      <div>
+    <a class="brand" routerLink="/" aria-label="FileFlow — Accueil">
+      <div class="brand-mark"><span>F</span></div>
+      <div class="brand-copy">
         <strong>FileFlow</strong>
-        <span>Local file toolbox</span>
+        <span>Vos fichiers, simplement</span>
       </div>
-    </div>
+    </a>
 
-    <nav aria-label="Navigation principale">
-      <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">Accueil</a>
-      <a routerLink="/workspace" routerLinkActive="active">Fichiers</a>
-      <a routerLink="/automations" routerLinkActive="active">Automatisations</a>
-      <a routerLink="/history" routerLinkActive="active">Historique</a>
-      <a routerLink="/settings" routerLinkActive="active">Paramètres</a>
+    <button class="command-trigger" type="button" (click)="openPalette()">
+      <span class="command-icon">⌕</span>
+      <span class="command-label">Rechercher une action</span>
+      <kbd>⌘K</kbd>
+    </button>
+
+    <nav class="primary-nav" aria-label="Navigation principale">
+      <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">
+        <span class="nav-icon">⌂</span><span class="nav-label">Accueil</span>
+      </a>
+      <a routerLink="/workspace" routerLinkActive="active">
+        <span class="nav-icon">▦</span><span class="nav-label">Fichiers</span>
+        @if (workspaceStore.hasWorkspace()) { <span class="nav-count">{{ workspaceStore.counts().files }}</span> }
+      </a>
+      <a routerLink="/organize" routerLinkActive="active">
+        <span class="nav-icon">⇄</span><span class="nav-label">Organiser</span>
+      </a>
+      <a routerLink="/automations" routerLinkActive="active">
+        <span class="nav-icon">⚡</span><span class="nav-label">Automatiser</span>
+      </a>
+      <a routerLink="/history" routerLinkActive="active">
+        <span class="nav-icon">↺</span><span class="nav-label">Historique</span>
+      </a>
     </nav>
 
-    <div class="runtime-state">
+    <div class="nav-section-label">RESSOURCES</div>
+    <nav class="secondary-nav" aria-label="Ressources et réglages">
+      <a routerLink="/formats" routerLinkActive="active">
+        <span class="nav-icon">◇</span><span class="nav-label">Formats & possibilités</span>
+      </a>
+      <a routerLink="/help" routerLinkActive="active">
+        <span class="nav-icon">?</span><span class="nav-label">Aide & guides</span>
+      </a>
+      <a routerLink="/settings" routerLinkActive="active">
+        <span class="nav-icon">⚙</span><span class="nav-label">Paramètres</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-spacer"></div>
+
+    <a class="profile-card" routerLink="/settings" aria-label="Ouvrir mon profil">
+      <span class="profile-avatar">
+        @if (auth.avatarUrl(); as avatar) { <img [src]="avatar" alt="" /> } @else { {{ auth.initials() }} }
+      </span>
+      <span class="profile-copy"><strong>{{ auth.profile()?.displayName }}</strong><small>Mon profil</small></span>
+      <span class="profile-arrow">›</span>
+    </a>
+
+    <div class="privacy-card">
+      <span class="privacy-icon">●</span>
+      <div><strong>Traitement local</strong><span>Vos fichiers ne quittent pas cet appareil.</span></div>
+    </div>
+
+    <div class="runtime-state" [class.runtime-error]="capabilities.phase() === 'error'">
       <span class="status-dot"></span>
-      @switch (backendStatus()) {
-        @case ('ready') { Moteur Rust prêt }
-        @case ('browser') { Aperçu navigateur }
-        @default { Initialisation… }
-      }
+      <div><strong>{{ runtimeLabel() }}</strong><span>Rust · Tauri</span></div>
     </div>
   </aside>
 
   <main class="content">
     <router-outlet />
   </main>
+
+  @if (workspaceStore.dragActive()) {
+    <div class="drop-overlay" aria-hidden="true">
+      <div class="drop-overlay-card">
+        <div class="drop-overlay-icon">＋</div>
+        <strong>Déposez dans FileFlow</strong>
+        <span>Fichiers, dossiers et archives seront analysés automatiquement.</span>
+      </div>
+    </div>
+  }
+
+  @if (paletteOpen()) {
+    <div class="palette-backdrop" (click)="closePalette()">
+      <section class="command-palette" role="dialog" aria-modal="true" aria-label="Rechercher une action" (click)="$event.stopPropagation()">
+        <div class="palette-search">
+          <span>⌕</span>
+          <input #paletteInput autofocus type="search" placeholder="PDF, compresser, HEIC, OCR, archive…" [value]="paletteQuery()" (input)="updatePaletteQuery(paletteInput.value)" />
+          <kbd>ESC</kbd>
+        </div>
+        <div class="palette-results">
+          @for (action of paletteActions(); track action.id) {
+            <button type="button" class="palette-item" (click)="choosePaletteAction(action)">
+              <span class="palette-mark" [attr.data-category]="action.category">{{ action.title.slice(0, 2).toUpperCase() }}</span>
+              <span class="palette-copy"><strong>{{ action.title }}</strong><small>{{ action.description }}</small></span>
+              @if (capabilities.isActionExecutable(action)) { <span class="ready-dot" title="Exécution locale prête"></span> }
+              @else { <span class="missing-label">indisponible ici</span> }
+            </button>
+          } @empty {
+            <div class="palette-empty">Aucune action ne correspond à cette recherche.</div>
+          }
+        </div>
+        <footer class="palette-footer"><span>↑↓ naviguer</span><span>Entrée ouvrir</span><span>100 % local</span></footer>
+      </section>
+    </div>
+  }
 </div>
+
+}

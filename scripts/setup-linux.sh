@@ -38,6 +38,7 @@ for package in \
   libvips-tools \
   imagemagick \
   qpdf \
+  img2pdf \
   poppler-utils \
   ghostscript \
   tesseract-ocr \
@@ -45,7 +46,8 @@ for package in \
   ocrmypdf \
   libreoffice \
   pandoc \
-  libimage-exiftool-perl
+  libimage-exiftool-perl \
+  zstd lz4
 do
   install_optional "$package"
 done

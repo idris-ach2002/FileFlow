@@ -49,6 +49,7 @@ for formula in \
   vips \
   imagemagick \
   qpdf \
+  img2pdf \
   poppler \
   ghostscript \
   tesseract \
@@ -56,7 +57,8 @@ for formula in \
   ocrmypdf \
   pandoc \
   exiftool \
-  sevenzip
+  sevenzip \
+  zstd lz4
 do
   install_formula "$formula"
 done
