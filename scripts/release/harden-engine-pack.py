@@ -11,13 +11,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+from native_dependency_policy import is_macos_system_dependency
+
 ROOT = Path(__file__).resolve().parents[2]
 ENGINE_ROOT = ROOT / "src-tauri/resources/engines"
 BIN = ENGINE_ROOT / "bin"
 META = ROOT / "src-tauri/resources/engine-pack.json"
 WINDOWS_PATHS = ENGINE_ROOT / "engine-runtime-paths.txt"
-
-SYSTEM_MAC_PREFIXES = ("/System/Library/", "/usr/lib/")
 
 
 def run(*args: str, check: bool = True, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -162,6 +162,10 @@ def resolve_linux_needed(
     if runtime_lib.is_file() and runtime_lib in candidates:
         return runtime_lib
 
+    vendor_lib = ENGINE_ROOT / "share" / "vendor" / "linux" / needed
+    if vendor_lib.is_file() and vendor_lib in candidates:
+        return vendor_lib
+
     if len(candidates) == 1:
         return candidates[0]
 
@@ -285,7 +289,7 @@ def resolve_macos_dependency(
     candidates: list[Path],
     rpaths: list[str],
 ) -> Path | None:
-    if dep.startswith(SYSTEM_MAC_PREFIXES):
+    if is_macos_system_dependency(dep):
         return None
     if not candidates:
         return None
@@ -321,6 +325,22 @@ def resolve_macos_dependency(
     local = source.parent / Path(dep).name
     if local.is_file() and local in candidates:
         return local
+
+    office_root = ENGINE_ROOT / "share" / "libreoffice"
+    try:
+        source.relative_to(office_root)
+        in_office = True
+    except ValueError:
+        in_office = False
+    if in_office:
+        office_vendor = office_root / "lib" / Path(dep).name
+        if office_vendor.is_file() and office_vendor in candidates:
+            return office_vendor
+
+    generic_vendor = ENGINE_ROOT / "share" / "vendor" / "macos" / Path(dep).name
+    if generic_vendor.is_file() and generic_vendor in candidates:
+        return generic_vendor
+
     if len(candidates) == 1:
         return candidates[0]
 
@@ -354,15 +374,11 @@ def macos_harden(identity: str) -> None:
             raise SystemExit(f"otool failed for {path}: {deps.stdout}")
         for line in deps.stdout.splitlines()[1:]:
             dep = line.strip().split(" (", 1)[0]
-            if not dep or dep.startswith(SYSTEM_MAC_PREFIXES):
+            if not dep or is_macos_system_dependency(dep):
                 continue
             target = resolve_macos_dependency(path, dep, by_name.get(Path(dep).name, []), rpaths)
             if target is None:
-                # Unknown absolute non-system dependency is not portable and must
-                # be rejected now rather than deferred to a later validator.
-                if dep.startswith("/"):
-                    raise SystemExit(f"non-portable unresolved Mach-O dependency for {path}: {dep}")
-                continue
+                raise SystemExit(f"non-portable unresolved Mach-O dependency for {path}: {dep}")
             replacement = loader_relative(path, target)
             if dep != replacement:
                 run(install_name_tool, "-change", dep, replacement, str(path))
@@ -393,12 +409,14 @@ def macos_harden(identity: str) -> None:
 def windows_harden() -> None:
     runtime = ENGINE_ROOT / "share" / "runtime"
     office = ENGINE_ROOT / "share" / "libreoffice" / "program"
+    vendor = ENGINE_ROOT / "share" / "vendor" / "windows"
     preferred = [
         BIN,
         runtime,
         runtime / "Library" / "bin",
         runtime / "Scripts",
         runtime / "DLLs",
+        vendor,
         office,
     ]
     dll_dirs = {path.parent for path in ENGINE_ROOT.rglob("*.dll") if path.is_file()}

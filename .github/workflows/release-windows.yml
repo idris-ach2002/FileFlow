@@ -147,7 +147,7 @@ jobs:
           python scripts/release/fetch-engine-pack.py --target x86_64-pc-windows-msvc
           python scripts/release/stage-engines.py --target x86_64-pc-windows-msvc --mode $env:FILEFLOW_ENGINE_MODE
           python scripts/release/harden-engine-pack.py --target x86_64-pc-windows-msvc
-          python scripts/release/validate-engine-pack.py --target x86_64-pc-windows-msvc --audit-full
+          python scripts/release/validate-engine-pack.py --target x86_64-pc-windows-msvc --scope full
           python scripts/release/smoke-engines.py --mode $env:FILEFLOW_ENGINE_MODE
           python scripts/release/functional-engine-tests.py --mode $env:FILEFLOW_ENGINE_MODE
 
@@ -175,7 +175,7 @@ jobs:
         env:
           FILEFLOW_ENGINE_MODE: full
         run: |
-          python scripts/release/validate-engine-pack.py --target x86_64-pc-windows-msvc --require-signature --audit-full
+          python scripts/release/validate-engine-pack.py --target x86_64-pc-windows-msvc --require-signature --scope full
           python scripts/release/smoke-engines.py --mode $env:FILEFLOW_ENGINE_MODE
           python scripts/release/functional-engine-tests.py --mode $env:FILEFLOW_ENGINE_MODE
 

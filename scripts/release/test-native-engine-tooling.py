@@ -101,6 +101,7 @@ class NativeEngineToolingTests(unittest.TestCase):
                 return ["libc.so.6"]
 
             with mock.patch.object(factory, "linux_needed", side_effect=needed), \
+                 mock.patch.object(factory, "elf_machine", return_value=62), \
                  mock.patch.object(factory, "linux_host_library_index", return_value={}), \
                  mock.patch.object(factory, "find_linux_host_library", return_value=host):
                 factory.vendor_linux_libreoffice_dependencies(pack)
@@ -108,6 +109,62 @@ class NativeEngineToolingTests(unittest.TestCase):
             copied = pack / "share/libreoffice/lib/liblpsolve55.so"
             self.assertTrue(copied.is_file())
             self.assertEqual(copied.read_bytes(), host.read_bytes())
+
+    def test_linux_provider_selection_rejects_wrong_architecture(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wrong = Path(tmp) / "i386/libsample.so.1"
+            right = Path(tmp) / "x64/libsample.so.1"
+            wrong.parent.mkdir(parents=True)
+            right.parent.mkdir(parents=True)
+            wrong.write_bytes(b"wrong")
+            right.write_bytes(b"right")
+            index = {"libsample.so.1": [wrong, right]}
+            with mock.patch.object(factory, "elf_machine", side_effect=lambda path: 62 if Path(path).resolve(strict=False) == right.resolve(strict=False) else 3):
+                selected = factory.find_linux_host_library(
+                    "libsample.so.1", index, "x86_64-unknown-linux-gnu"
+                )
+            self.assertEqual(selected, right)
+
+    def test_macos_external_dependency_is_copied_into_private_vendor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pack = Path(tmp) / "pack"
+            source = pack / "share/runtime/bin/tool"
+            host = Path(tmp) / "host/liboutside.dylib"
+            source.parent.mkdir(parents=True)
+            host.parent.mkdir(parents=True)
+            source.write_bytes(b"mach-source")
+            host.write_bytes(b"mach-host")
+            with mock.patch.object(factory, "macos_is_native", return_value=True), \
+                 mock.patch.object(factory, "macos_dependencies", side_effect=lambda path: ["/opt/vendor/liboutside.dylib"] if path == source else []), \
+                 mock.patch.object(factory, "find_macos_host_dependency", return_value=host):
+                records = factory.vendor_macos_external_dependencies(
+                    pack, "aarch64-apple-darwin", Path(tmp) / "conda"
+                )
+            copied = pack / "share/vendor/macos/liboutside.dylib"
+            self.assertTrue(copied.is_file())
+            self.assertEqual(len(records), 1)
+
+    def test_windows_external_dependency_is_copied_into_private_vendor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pack = Path(tmp) / "pack"
+            source = pack / "share/runtime/bin/tool.exe"
+            prefix = Path(tmp) / "conda"
+            host = prefix / "Library/bin/thirdparty.dll"
+            source.parent.mkdir(parents=True)
+            host.parent.mkdir(parents=True)
+            source.write_bytes(b"pe-source")
+            host.write_bytes(b"pe-host")
+            def machine(path):
+                return 0x8664 if Path(path) in {source, host, pack / "share/vendor/windows/thirdparty.dll"} else None
+            with mock.patch.object(factory, "pe_machine", side_effect=machine), \
+                 mock.patch.object(factory, "pe_imports", side_effect=lambda path: ["thirdparty.dll"] if path == source else []), \
+                 mock.patch.object(factory, "windows_host_dll_index", return_value={"thirdparty.dll": [host]}):
+                records = factory.vendor_windows_external_dependencies(
+                    pack, "x86_64-pc-windows-msvc", prefix
+                )
+            copied = pack / "share/vendor/windows/thirdparty.dll"
+            self.assertTrue(copied.is_file())
+            self.assertEqual(len(records), 1)
 
 
     def test_linux_libreoffice_prefers_isolated_distro_closure_over_conda_duplicate(self):

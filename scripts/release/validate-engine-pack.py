@@ -12,24 +12,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+from native_dependency_policy import (
+    is_linux_system_dependency,
+    is_macos_system_dependency,
+    is_windows_system_dependency,
+)
+
 ROOT = Path(__file__).resolve().parents[2]
 ENGINE_ROOT = ROOT / "src-tauri/resources/engines"
 BIN = ENGINE_ROOT / "bin"
 META = ROOT / "src-tauri/resources/engine-pack.json"
 WINDOWS_PATHS = ENGINE_ROOT / "engine-runtime-paths.txt"
-SYSTEM_MAC_PREFIXES = ("/System/Library/", "/usr/lib/")
-LINUX_BASE_ABI = {
-    "libc.so.6",
-    "libm.so.6",
-    "libpthread.so.0",
-    "libdl.so.2",
-    "librt.so.1",
-    "libutil.so.1",
-    "libresolv.so.2",
-    "libanl.so.1",
-    "ld-linux-x86-64.so.2",
-    "ld-linux-aarch64.so.1",
-}
 
 
 def is_linux_virtual_dependency(dep: str) -> bool:
@@ -270,7 +263,7 @@ def macos_absolute_pack_candidate(dep: str, candidates: list[Path]) -> Path | No
     return None
 
 def resolve_macos_internal(source: Path, dep: str, candidates: list[Path]) -> Path | None:
-    if dep.startswith(SYSTEM_MAC_PREFIXES) or not candidates:
+    if is_macos_system_dependency(dep) or not candidates:
         return None
     hits: list[Path] = []
     if dep.startswith("/"):
@@ -395,19 +388,6 @@ def pe_imports(path: Path) -> list[str]:
         return []
 
 
-WINDOWS_SYSTEM_DLLS = {
-    "advapi32.dll", "bcrypt.dll", "bcryptprimitives.dll", "cfgmgr32.dll", "combase.dll",
-    "comctl32.dll", "comdlg32.dll", "crypt32.dll", "d2d1.dll", "d3d11.dll", "dbghelp.dll",
-    "dnsapi.dll", "dwmapi.dll", "dxgi.dll", "gdi32.dll", "gdi32full.dll", "imm32.dll",
-    "iphlpapi.dll", "kernel32.dll", "kernelbase.dll", "msimg32.dll", "msvcrt.dll",
-    "ncrypt.dll", "netapi32.dll", "normaliz.dll", "ntdll.dll", "ole32.dll", "oleaut32.dll",
-    "powrprof.dll", "profapi.dll", "psapi.dll", "rpcrt4.dll", "sechost.dll", "setupapi.dll",
-    "shell32.dll", "shlwapi.dll", "sspicli.dll", "ucrtbase.dll", "urlmon.dll", "user32.dll",
-    "userenv.dll", "usp10.dll", "version.dll", "winhttp.dll", "wininet.dll", "winmm.dll",
-    "winspool.drv", "ws2_32.dll", "wtsapi32.dll", "oleacc.dll", "propsys.dll",
-}
-
-
 def windows_search_dirs() -> list[Path]:
     if not WINDOWS_PATHS.is_file():
         return []
@@ -422,9 +402,47 @@ def windows_search_dirs() -> list[Path]:
     return result
 
 
-def resolve_windows_dll(name: str, dirs: list[Path]) -> Path | None:
+def resolve_windows_dll(name: str, dirs: list[Path], source: Path | None = None) -> Path | None:
     lowered = name.lower()
-    for directory in dirs:
+    ordered = list(dirs)
+    if source is not None:
+        office = ENGINE_ROOT / "share" / "libreoffice"
+        runtime = ENGINE_ROOT / "share" / "runtime"
+        vendor = ENGINE_ROOT / "share" / "vendor" / "windows"
+        try:
+            source.relative_to(office)
+            namespace = "office"
+        except ValueError:
+            try:
+                source.relative_to(runtime)
+                namespace = "runtime"
+            except ValueError:
+                namespace = "generic"
+
+        def priority(directory: Path) -> tuple[int, int, str]:
+            if namespace == "office" and inside_engine_root(directory):
+                try:
+                    directory.relative_to(office)
+                    return (0, len(directory.parts), str(directory).lower())
+                except ValueError:
+                    pass
+            if namespace == "runtime" and inside_engine_root(directory):
+                try:
+                    directory.relative_to(runtime)
+                    return (0, len(directory.parts), str(directory).lower())
+                except ValueError:
+                    pass
+            if inside_engine_root(directory):
+                try:
+                    directory.relative_to(vendor)
+                    return (1, len(directory.parts), str(directory).lower())
+                except ValueError:
+                    pass
+            return (2, len(directory.parts), str(directory).lower())
+
+        ordered.sort(key=priority)
+
+    for directory in ordered:
         try:
             for candidate in directory.iterdir():
                 if candidate.is_file() and candidate.name.lower() == lowered:
@@ -442,9 +460,9 @@ def windows_closure(seed: list[Path], all_paths: list[Path]) -> list[Path]:
         path = queue.pop()
         for dep in pe_imports(path):
             name = dep.lower()
-            if name in WINDOWS_SYSTEM_DLLS or name.startswith(("api-ms-win-", "ext-ms-win-")):
+            if is_windows_system_dependency(name):
                 continue
-            target = resolve_windows_dll(dep, dirs)
+            target = resolve_windows_dll(dep, dirs, path)
             if target is not None and target not in selected:
                 selected.add(target)
                 queue.append(target)
@@ -480,14 +498,12 @@ def validate_macos(paths: list[Path], target: str, require_signature: bool) -> l
             continue
         for line in deps.stdout.splitlines()[1:]:
             dep = line.strip().split(" (", 1)[0]
-            if dep.startswith(SYSTEM_MAC_PREFIXES):
-                continue
-            if dep.startswith(("/opt/homebrew/", "/usr/local/", "/tmp/", "/private/tmp/", "/Users/", "/home/runner/")):
-                failures.append(f"{path}: non-portable dependency {dep}")
+            if is_macos_system_dependency(dep):
                 continue
             candidates = by_name.get(Path(dep).name, [])
-            if candidates and resolve_macos_internal(path, dep, candidates) is None:
-                failures.append(f"{path}: internal dependency does not resolve deterministically: {dep}")
+            resolved = resolve_macos_internal(path, dep, candidates)
+            if resolved is None:
+                failures.append(f"{path}: non-system Mach-O dependency is not bundled/reachable: {dep}")
         if require_signature:
             result = run("codesign", "--verify", "--strict", "--verbose=2", str(path))
             if result.returncode != 0:
@@ -528,7 +544,9 @@ def validate_linux(paths: list[Path], target: str) -> list[str]:
                 if resolved is None:
                     failures.append(f"{path}: bundled dependency is unreachable via $ORIGIN RPATH: {dep}")
         ldd = run("ldd", str(path), env=env)
-        if ldd.returncode == 0:
+        if needed and ldd.returncode != 0:
+            failures.append(f"{path}: ldd failed for dynamic ELF: {ldd.stdout.strip()}")
+        elif ldd.returncode == 0:
             unresolved = parse_ldd_unresolved(ldd.stdout)
             if unresolved:
                 failures.append(f"{path}: unresolved shared libraries: {', '.join(unresolved)}\n{ldd.stdout.strip()}")
@@ -540,7 +558,7 @@ def validate_linux(paths: list[Path], target: str) -> list[str]:
                 resolved = Path(raw_resolved).resolve(strict=False)
                 if inside_engine_root(resolved):
                     continue
-                if soname in LINUX_BASE_ABI:
+                if is_linux_system_dependency(soname):
                     continue
                 failures.append(
                     f"{path}: non-baseline host dependency is not vendored: "
@@ -560,8 +578,6 @@ def validate_windows(paths: list[Path], target: str, require_signature: bool) ->
     if rendered_path_len > 28000:
         failures.append(f"Windows private loader PATH exceeds safe environment size: {rendered_path_len}")
 
-    system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
-    system_dirs = (system_root / "System32", system_root / "SysWOW64")
     for path in paths:
         machine = pe_machine(path)
         if machine is None:
@@ -570,13 +586,13 @@ def validate_windows(paths: list[Path], target: str, require_signature: bool) ->
             failures.append(f"{path}: PE machine 0x{machine:04x}, expected 0x{expected:04x}")
         for dependency in pe_imports(path):
             name = dependency.lower()
-            if name in WINDOWS_SYSTEM_DLLS or name.startswith(("api-ms-win-", "ext-ms-win-")):
+            if is_windows_system_dependency(name):
                 continue
-            if any((directory / dependency).is_file() for directory in system_dirs):
-                continue
-            resolved = resolve_windows_dll(dependency, dirs)
+            resolved = resolve_windows_dll(dependency, dirs, path)
             if resolved is None:
-                failures.append(f"{path}: imported DLL is not reachable through FileFlow private loader PATH: {dependency}")
+                failures.append(
+                    f"{path}: non-system imported DLL is not bundled/reachable through FileFlow private loader PATH: {dependency}"
+                )
             else:
                 dependency_machine = pe_machine(resolved)
                 if dependency_machine is not None and dependency_machine != expected:

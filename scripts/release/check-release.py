@@ -56,6 +56,8 @@ def main() -> None:
         "release/engines/manifest.json", "release/engines/python-requirements.txt",
         "scripts/ci/verify-platform.mjs", "scripts/ci/run-stress.mjs",
         "scripts/release/build-native-engine-pack.py", "scripts/release/stage-engines.py",
+        "scripts/release/native_dependency_policy.py",
+        "scripts/release/report-engine-footprint.py",
         "scripts/release/stage-local-engine-pack.py", "scripts/release/harden-engine-pack.py",
         "scripts/release/validate-engine-pack.py", "scripts/release/functional-engine-tests.py",
         "scripts/release/test-native-engine-tooling.py", "scripts/release/fetch-engine-pack.py",
@@ -127,10 +129,15 @@ def main() -> None:
         "engine-runtime-paths.txt", "ambiguous internal Mach-O dependency", "refresh_metadata()",
     ])
     validator = require_tokens("scripts/release/validate-engine-pack.py", [
-        "parse_ldd_unresolved", "clean_environment", "--audit-full", "bundled dependency is unreachable via $ORIGIN RPATH",
+        "parse_ldd_unresolved", "clean_environment", "--scope", "bundled dependency is unreachable via $ORIGIN RPATH",
     ])
     factory = require_tokens("scripts/release/build-native-engine-pack.py", [
         "Zero-dependency host contract", 'PATH="$BIN_DIR:$RUNTIME/bin:', "engine-runtime-paths.txt", "MAGICK_CONFIGURE_PATH", "GS_LIB",
+        "vendor_linux_external_dependencies", "vendor_macos_external_dependencies", "vendor_windows_external_dependencies",
+    ])
+    require_tokens("scripts/release/native_dependency_policy.py", [
+        "LINUX_BASE_ABI", "MACOS_SYSTEM_PREFIXES", "WINDOWS_SYSTEM_DLLS",
+        "is_linux_system_dependency", "is_macos_system_dependency", "is_windows_system_dependency",
     ])
     if "${PATH:-}" in factory:
         raise SystemExit("Unix engine wrappers must not inherit arbitrary host PATH")
@@ -149,16 +156,19 @@ def main() -> None:
     linux_native = require_tokens(".github/workflows/native-linux.yml", [
         "pull_request:", "engine-certify:", "package-smoke:", "needs: [native, engine-certify]",
         "needs.native.result == 'success'", "needs.engine-certify.result == 'success'",
-        "stage-local-engine-pack.py", "smoke-packaged-engines.py", "--audit-full",
+        "stage-local-engine-pack.py", "smoke-packaged-engines.py", "--scope full",
     ])
     if "always() && !cancelled()" in linux_native:
         raise SystemExit("Linux package smoke must not run after failed engine certification")
 
     for rel in [".github/workflows/native-macos.yml", ".github/workflows/native-windows.yml"]:
-        require_tokens(rel, [
+        native_text = require_tokens(rel, [
             "pull_request:", "engine-certify:", "package-smoke:", "needs: [native, engine-certify]",
-            "always() && !cancelled()", "stage-local-engine-pack.py", "smoke-packaged-engines.py", "--audit-full",
+            "needs.native.result == 'success'", "needs.engine-certify.result == 'success'",
+            "stage-local-engine-pack.py", "smoke-packaged-engines.py", "--scope full",
         ])
+        if "always() && !cancelled()" in native_text:
+            raise SystemExit(f"{rel} package smoke must not run after failed engine certification")
 
     for rel in [".github/workflows/release-linux.yml", ".github/workflows/release-macos.yml", ".github/workflows/release-windows.yml"]:
         release_text = require_tokens(rel, ["FILEFLOW_ENGINE_MODE: full", "smoke-packaged-engines.py"])

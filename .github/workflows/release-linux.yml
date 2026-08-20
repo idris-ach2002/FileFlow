@@ -112,7 +112,7 @@ jobs:
           python scripts/release/fetch-engine-pack.py --target '${{ matrix.target }}'
           python scripts/release/stage-engines.py --target '${{ matrix.target }}' --mode "$FILEFLOW_ENGINE_MODE"
           python scripts/release/harden-engine-pack.py --target '${{ matrix.target }}'
-          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --require-signature --audit-full
+          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --require-signature --scope full
           python scripts/release/smoke-engines.py --mode "$FILEFLOW_ENGINE_MODE"
           python scripts/release/functional-engine-tests.py --mode "$FILEFLOW_ENGINE_MODE"
 

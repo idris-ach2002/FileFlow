@@ -12,6 +12,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+from native_dependency_policy import (
+    elf_machine,
+    expected_elf_machine,
+    expected_pe_machine,
+    is_linux_system_dependency,
+    is_macos_system_dependency,
+    is_windows_system_dependency,
+    pe_imports,
+    pe_machine,
+)
+
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "release/engines/manifest.json"
 PACK_ROOT = ROOT / "release/engines/packs"
@@ -36,23 +47,6 @@ PYTHON_MODULES = {
     "ocrmypdf": "ocrmypdf",
     "img2pdf": "img2pdf",
 }
-
-# Linux libraries that are part of the baseline glibc/kernel ABI contract.
-# Every other DT_NEEDED dependency of bundled LibreOffice is copied into the
-# FileFlow private runtime so a client machine does not need distro packages.
-LINUX_BASE_ABI = {
-    "libc.so.6",
-    "libm.so.6",
-    "libpthread.so.0",
-    "libdl.so.2",
-    "librt.so.1",
-    "libutil.so.1",
-    "libresolv.so.2",
-    "libanl.so.1",
-    "ld-linux-x86-64.so.2",
-    "ld-linux-aarch64.so.1",
-}
-
 
 def log(message: str) -> None:
     print(f"[engine-factory] {message}", flush=True)
@@ -253,8 +247,20 @@ def linux_host_library_index() -> dict[str, list[Path]]:
     return result
 
 
-def find_linux_host_library(soname: str, index: dict[str, list[Path]]) -> Path | None:
-    candidates = [path for path in index.get(soname, []) if path.is_file()]
+def find_linux_host_library(
+    soname: str,
+    index: dict[str, list[Path]],
+    target: str,
+) -> Path | None:
+    expected_machine = expected_elf_machine(target)
+
+    def usable(path: Path) -> bool:
+        if not path.is_file():
+            return False
+        machine = elf_machine(path.resolve(strict=False))
+        return machine is not None and (expected_machine is None or machine == expected_machine)
+
+    candidates = [path for path in index.get(soname, []) if usable(path)]
     if candidates:
         return sorted(candidates, key=lambda path: (len(path.parts), str(path)))[0]
 
@@ -265,33 +271,69 @@ def find_linux_host_library(soname: str, index: dict[str, list[Path]]) -> Path |
             continue
         matches = sorted(root.rglob(soname), key=lambda path: (len(path.parts), str(path)))
         for path in matches:
-            if path.is_file():
+            if usable(path):
                 return path
     return None
 
 
-def vendor_linux_libreoffice_dependencies(pack: Path) -> None:
-    """Vendor LibreOffice's non-baseline Linux DT_NEEDED closure in isolation.
+def _path_is_below(path: Path, root: Path) -> bool:
+    try:
+        path.resolve(strict=False).relative_to(root.resolve(strict=False))
+        return True
+    except ValueError:
+        return False
 
-    LibreOffice comes from Ubuntu while the other engines come from Conda.  A
-    shared SONAME can exist in both worlds with different build options.  Never
-    satisfy a LibreOffice dependency merely because a Conda library with the same
-    basename exists.  Copy the Ubuntu closure into share/libreoffice/lib and let
-    the relocator bind LibreOffice binaries to that private directory.
+
+def _vendor_record(
+    family: str,
+    dependency: str,
+    source: Path,
+    destination: Path,
+    pack: Path,
+) -> dict[str, object]:
+    return {
+        "family": family,
+        "dependency": dependency,
+        "source": str(source),
+        "destination": destination.relative_to(pack).as_posix(),
+        "sha256": digest(destination),
+        "size": destination.stat().st_size,
+    }
+
+
+def vendor_linux_external_dependencies(pack: Path, target: str) -> list[dict[str, object]]:
+    """Vendor every non-baseline Linux DT_NEEDED dependency missing from pack.
+
+    LibreOffice is kept in an isolated distro namespace because a SONAME can
+    exist in both Ubuntu and Conda with incompatible build options. Other
+    missing host dependencies are copied into share/vendor/linux. Provider
+    selection is architecture checked, preventing accidental i386 libraries on
+    the x86_64 runner (the exact class of failure seen in CI).
     """
     office = pack / "share" / "libreoffice"
     office_lib = office / "lib"
     office_lib.mkdir(parents=True, exist_ok=True)
+    vendor_lib = pack / "share" / "vendor" / "linux"
+    vendor_lib.mkdir(parents=True, exist_ok=True)
 
     index = linux_host_library_index()
-    office_native = [path for path in office.rglob("*") if path.is_file() and linux_elf(path)]
-    office_by_name: dict[str, list[Path]] = {}
-    for path in office_native:
-        office_by_name.setdefault(path.name, []).append(path)
+    expected_machine = expected_elf_machine(target)
 
-    queue = list(office_native)
+    def native(path: Path) -> bool:
+        machine = elf_machine(path)
+        return machine is not None and (expected_machine is None or machine == expected_machine)
+
+    def rebuild_index() -> dict[str, list[Path]]:
+        result: dict[str, list[Path]] = {}
+        for path in pack.rglob("*"):
+            if path.is_file() and native(path):
+                result.setdefault(path.name, []).append(path)
+        return result
+
+    by_name = rebuild_index()
+    queue = [path for paths in by_name.values() for path in paths]
     scanned: set[Path] = set()
-    copied: list[str] = []
+    records: list[dict[str, object]] = []
 
     while queue:
         source = queue.pop()
@@ -300,33 +342,358 @@ def vendor_linux_libreoffice_dependencies(pack: Path) -> None:
             continue
         scanned.add(resolved_source)
         for soname in linux_needed(source):
-            if soname in LINUX_BASE_ABI or soname.startswith("linux-vdso"):
+            if is_linux_system_dependency(soname):
                 continue
 
-            # LibreOffice's own program libraries are already part of the copied
-            # installation.  Distro dependencies must come from the distro too,
-            # even when Conda happens to ship the same SONAME elsewhere in pack.
-            if office_by_name.get(soname):
-                continue
+            in_office = _path_is_below(source, office)
+            candidates = by_name.get(soname, [])
+            if in_office:
+                # LibreOffice may not bind to a Conda duplicate with the same
+                # SONAME. Any same-architecture copy inside its own tree is OK.
+                if any(_path_is_below(candidate, office) for candidate in candidates):
+                    continue
+                destination_root = office_lib
+            else:
+                if any(not _path_is_below(candidate, office) for candidate in candidates):
+                    continue
+                destination_root = vendor_lib
 
-            host = find_linux_host_library(soname, index)
+            host = find_linux_host_library(soname, index, target)
             if host is None:
                 raise SystemExit(
-                    "LibreOffice Linux dependency is unavailable on the build host: "
+                    "Linux dependency is unavailable for the target architecture: "
                     f"{source.relative_to(pack)} -> {soname}. "
-                    "Install the providing package in the engine-certification job."
+                    "Install the providing package in the native engine job."
                 )
-            destination = office_lib / soname
+
+            destination = destination_root / soname
+            if destination.exists():
+                if not native(destination):
+                    destination.unlink()
+                else:
+                    by_name.setdefault(soname, []).append(destination)
+                    continue
             shutil.copy2(host.resolve(), destination)
-            office_by_name.setdefault(soname, []).append(destination)
+            if not native(destination):
+                machine = elf_machine(destination)
+                destination.unlink(missing_ok=True)
+                raise SystemExit(
+                    f"refusing wrong-architecture Linux provider for {soname}: "
+                    f"{host} (ELF machine={machine}, target={target})"
+                )
+            by_name.setdefault(soname, []).append(destination)
             queue.append(destination)
-            copied.append(soname)
-            log(f"vendored LibreOffice host dependency {soname} <- {host}")
+            records.append(
+                _vendor_record("linux", soname, host, destination, pack)
+            )
+            namespace = "libreoffice" if in_office else "vendor"
+            log(f"vendored Linux {namespace} dependency {soname} <- {host}")
 
     log(
-        "LibreOffice Linux host dependency closure: "
-        f"vendored={len(copied)} unique={len(set(copied))} root={office_lib.relative_to(pack)}"
+        "Linux dependency closure complete: "
+        f"vendored={len(records)} office={sum(1 for r in records if str(r['destination']).startswith('share/libreoffice/'))} "
+        f"generic={sum(1 for r in records if str(r['destination']).startswith('share/vendor/'))}"
     )
+    return records
+
+
+def vendor_linux_libreoffice_dependencies(pack: Path, target: str | None = None) -> None:
+    """Backward-compatible test/helper entry point for the Linux closure."""
+    if target is None:
+        machine = next(
+            (elf_machine(path) for path in (pack / "share" / "libreoffice").rglob("*") if path.is_file() and linux_elf(path)),
+            None,
+        )
+        target = "aarch64-unknown-linux-gnu" if machine == 183 else "x86_64-unknown-linux-gnu"
+    vendor_linux_external_dependencies(pack, target)
+
+
+def macos_dependencies(path: Path) -> list[str]:
+    otool = shutil.which("otool")
+    if not otool:
+        raise SystemExit("macOS engine factory requires otool")
+    result = subprocess.run(
+        [otool, "-L", str(path)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if result.returncode != 0:
+        return []
+    return [
+        line.strip().split(" (", 1)[0]
+        for line in result.stdout.splitlines()[1:]
+        if line.strip()
+    ]
+
+
+def macos_rpaths(path: Path) -> list[str]:
+    otool = shutil.which("otool")
+    if not otool:
+        return []
+    result = subprocess.run(
+        [otool, "-l", str(path)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if result.returncode != 0:
+        return []
+    lines = result.stdout.splitlines()
+    values: list[str] = []
+    for index, line in enumerate(lines):
+        if line.strip() != "cmd LC_RPATH":
+            continue
+        for candidate in lines[index + 1 : index + 5]:
+            if " path " not in f" {candidate.strip()} ":
+                continue
+            value = candidate.strip().split("path ", 1)[1].split(" (offset", 1)[0].strip()
+            if value and value not in values:
+                values.append(value)
+            break
+    return values
+
+
+def macos_is_native(path: Path, target: str) -> bool:
+    tool = shutil.which("lipo")
+    if not tool or not path.is_file():
+        return False
+    result = subprocess.run(
+        [tool, "-archs", str(path)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if result.returncode != 0:
+        return False
+    required = "arm64" if target.startswith("aarch64-") else "x86_64"
+    return required in result.stdout.split()
+
+
+def _expand_macos_host_path(source: Path, value: str) -> Path | None:
+    if value == "@loader_path":
+        return source.parent
+    if value.startswith("@loader_path/"):
+        return source.parent / value[len("@loader_path/") :]
+    if value == "@executable_path":
+        return source.parent
+    if value.startswith("@executable_path/"):
+        return source.parent / value[len("@executable_path/") :]
+    if value.startswith("/"):
+        return Path(value)
+    return None
+
+
+def find_macos_host_dependency(source: Path, dependency: str) -> Path | None:
+    if dependency.startswith("/"):
+        candidate = Path(dependency)
+        return candidate if candidate.is_file() else None
+    if dependency.startswith("@rpath/"):
+        suffix = dependency[len("@rpath/") :]
+        for entry in macos_rpaths(source):
+            base = _expand_macos_host_path(source, entry)
+            if base is not None:
+                candidate = (base / suffix).resolve(strict=False)
+                if candidate.is_file():
+                    return candidate
+        return None
+    candidate = _expand_macos_host_path(source, dependency)
+    return candidate.resolve(strict=False) if candidate is not None and candidate.is_file() else None
+
+
+def vendor_macos_external_dependencies(pack: Path, target: str, prefix: Path) -> list[dict[str, object]]:
+    office = pack / "share" / "libreoffice"
+    office_vendor = office / "lib"
+    generic_vendor = pack / "share" / "vendor" / "macos"
+    office_vendor.mkdir(parents=True, exist_ok=True)
+    generic_vendor.mkdir(parents=True, exist_ok=True)
+
+    def native_paths() -> list[Path]:
+        return [path for path in pack.rglob("*") if path.is_file() and macos_is_native(path, target)]
+
+    by_name: dict[str, list[Path]] = {}
+    queue = native_paths()
+    for path in queue:
+        by_name.setdefault(path.name, []).append(path)
+    scanned: set[Path] = set()
+    records: list[dict[str, object]] = []
+
+    while queue:
+        source = queue.pop()
+        resolved_source = source.resolve(strict=False)
+        if resolved_source in scanned:
+            continue
+        scanned.add(resolved_source)
+        for dep in macos_dependencies(source):
+            if is_macos_system_dependency(dep):
+                continue
+            name = Path(dep).name
+            in_office = _path_is_below(source, office)
+
+            # Exact copied trees are preferred over basename heuristics.
+            if dep.startswith("/Applications/LibreOffice.app/Contents/"):
+                exact = office / "Contents" / dep.split("/Applications/LibreOffice.app/Contents/", 1)[1]
+                if exact.is_file() and macos_is_native(exact, target):
+                    continue
+            if dep.startswith(str(prefix) + "/"):
+                exact = pack / "share" / "runtime" / Path(dep).relative_to(prefix)
+                if exact.is_file() and macos_is_native(exact, target):
+                    continue
+            if dep.startswith(("@loader_path", "@executable_path")):
+                exact = _expand_macos_host_path(source, dep)
+                if exact is not None and exact.is_file() and _path_is_below(exact, pack):
+                    continue
+
+            candidates = by_name.get(name, [])
+            if in_office:
+                if any(_path_is_below(candidate, office) for candidate in candidates):
+                    continue
+                destination_root = office_vendor
+            else:
+                if candidates:
+                    continue
+                destination_root = generic_vendor
+
+            host = find_macos_host_dependency(source, dep)
+            if host is None or _path_is_below(host, pack):
+                raise SystemExit(
+                    "macOS dependency is not represented inside FileFlow and cannot be resolved on the build host: "
+                    f"{source.relative_to(pack)} -> {dep}"
+                )
+            if not macos_is_native(host, target):
+                raise SystemExit(f"refusing wrong-architecture macOS provider for {dep}: {host}")
+            destination = destination_root / name
+            if destination.exists() and digest(destination) != digest(host):
+                raise SystemExit(f"conflicting macOS dependency providers for {name}: {host} vs {destination}")
+            if not destination.exists():
+                shutil.copy2(host, destination)
+                by_name.setdefault(name, []).append(destination)
+                queue.append(destination)
+                records.append(_vendor_record("macos", dep, host, destination, pack))
+                log(f"vendored macOS dependency {dep} <- {host}")
+
+    log(f"macOS dependency closure complete: vendored={len(records)}")
+    return records
+
+
+def _windows_host_roots(prefix: Path) -> list[Path]:
+    roots = [prefix]
+    for variable in ("ProgramFiles", "ProgramFiles(x86)"):
+        value = os.environ.get(variable)
+        if value:
+            office = Path(value) / "LibreOffice"
+            if office.is_dir():
+                roots.append(office)
+    system_root = Path(os.environ.get("SystemRoot", r"C:\Windows")).resolve(strict=False)
+    for raw in os.environ.get("PATH", "").split(os.pathsep):
+        if not raw:
+            continue
+        path = Path(raw)
+        try:
+            resolved = path.resolve(strict=False)
+            resolved.relative_to(system_root)
+            continue
+        except (ValueError, OSError):
+            pass
+        if path.is_dir() and path not in roots:
+            roots.append(path)
+    return roots
+
+
+def windows_host_dll_index(prefix: Path, target: str) -> dict[str, list[Path]]:
+    expected = expected_pe_machine(target)
+    result: dict[str, list[Path]] = {}
+    for root in _windows_host_roots(prefix):
+        if not root.is_dir():
+            continue
+        recursive = root == prefix or root.name.lower() == "libreoffice"
+        paths = root.rglob("*.dll") if recursive else root.glob("*.dll")
+        for path in paths:
+            if not path.is_file():
+                continue
+            machine = pe_machine(path)
+            if machine is not None and (expected is None or machine == expected):
+                result.setdefault(path.name.lower(), []).append(path)
+    return result
+
+
+def vendor_windows_external_dependencies(pack: Path, target: str, prefix: Path) -> list[dict[str, object]]:
+    expected = expected_pe_machine(target)
+    vendor = pack / "share" / "vendor" / "windows"
+    vendor.mkdir(parents=True, exist_ok=True)
+    office = pack / "share" / "libreoffice"
+    runtime = pack / "share" / "runtime"
+
+    def native(path: Path) -> bool:
+        machine = pe_machine(path)
+        return machine is not None and (expected is None or machine == expected)
+
+    by_name: dict[str, list[Path]] = {}
+    queue: list[Path] = []
+    for path in pack.rglob("*"):
+        if path.is_file() and native(path):
+            by_name.setdefault(path.name.lower(), []).append(path)
+            queue.append(path)
+
+    host_index = windows_host_dll_index(prefix, target)
+    office_host_roots = [
+        Path(value) / "LibreOffice"
+        for variable in ("ProgramFiles", "ProgramFiles(x86)")
+        if (value := os.environ.get(variable))
+    ]
+    scanned: set[Path] = set()
+    records: list[dict[str, object]] = []
+    while queue:
+        source = queue.pop()
+        resolved_source = source.resolve(strict=False)
+        if resolved_source in scanned:
+            continue
+        scanned.add(resolved_source)
+        for dep in pe_imports(source):
+            if is_windows_system_dependency(dep):
+                continue
+            name = dep.lower()
+            candidates = by_name.get(name, [])
+            if _path_is_below(source, office):
+                if any(_path_is_below(candidate, office) for candidate in candidates):
+                    continue
+            elif _path_is_below(source, runtime):
+                if any(_path_is_below(candidate, runtime) for candidate in candidates):
+                    continue
+            elif candidates:
+                continue
+
+            providers = host_index.get(name, [])
+            if _path_is_below(source, office):
+                providers = [
+                    provider
+                    for provider in providers
+                    if any(_path_is_below(provider, root) for root in office_host_roots if root.is_dir())
+                ]
+            elif _path_is_below(source, runtime):
+                providers = [provider for provider in providers if _path_is_below(provider, prefix)]
+            if not providers:
+                raise SystemExit(
+                    "Windows imported DLL is not bundled and no controlled non-system provider was found: "
+                    f"{source.relative_to(pack)} -> {dep}. "
+                    "Install the providing package in the native engine job or explicitly classify it as a Windows system DLL."
+                )
+            provider = sorted(providers, key=lambda path: (len(path.parts), str(path).lower()))[0]
+            destination = vendor / dep
+            if destination.exists() and digest(destination) != digest(provider):
+                raise SystemExit(f"conflicting Windows dependency providers for {dep}: {provider} vs {destination}")
+            if not destination.exists():
+                shutil.copy2(provider, destination)
+                if not native(destination):
+                    destination.unlink(missing_ok=True)
+                    raise SystemExit(f"refusing wrong-architecture Windows provider for {dep}: {provider}")
+                by_name.setdefault(name, []).append(destination)
+                queue.append(destination)
+                records.append(_vendor_record("windows", dep, provider, destination, pack))
+                log(f"vendored Windows dependency {dep} <- {provider}")
+
+    log(f"Windows dependency closure complete: vendored={len(records)}")
+    return records
 
 
 def install_libreoffice(pack: Path) -> Path:
@@ -391,6 +758,8 @@ set -eu
 BIN_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 PACK_ROOT="$(CDPATH= cd -- "$BIN_DIR/.." && pwd)"
 RUNTIME="$PACK_ROOT/share/runtime"
+VENDOR="$PACK_ROOT/share/vendor"
+OFFICE_LIB="$PACK_ROOT/share/libreoffice/lib"
 
 # Zero-dependency host contract: never inherit Conda/Python/library paths from
 # the machine that happens to launch FileFlow. Engine-to-engine subprocesses
@@ -399,13 +768,24 @@ unset CONDA_PREFIX CONDA_DEFAULT_ENV CONDA_EXE MAMBA_EXE PYTHONPATH LD_PRELOAD
 export PYTHONNOUSERSITE=1
 export PATH="$BIN_DIR:$RUNTIME/bin:$RUNTIME/Library/bin:$RUNTIME/Scripts:/usr/bin:/bin"
 if [ "{office_mode}" = "1" ]; then
-  # LibreOffice is an Ubuntu build with its own vendored distro closure.  Do
-  # not inject Conda's Python or shared-library namespace into it.
+  # LibreOffice has its own vendored namespace. Do not inject Conda's Python
+  # or shared-library namespace into it, but expose its private closure for
+  # dlopen/plugin loads in addition to direct loader-relative references.
   unset PYTHONHOME PYTHONPATH LD_LIBRARY_PATH DYLD_LIBRARY_PATH
+  if [ -d "$OFFICE_LIB" ]; then
+    export LD_LIBRARY_PATH="$OFFICE_LIB"
+    export DYLD_LIBRARY_PATH="$OFFICE_LIB"
+  fi
   export SAL_USE_VCLPLUGIN=svp
 else
-  [ ! -d "$RUNTIME/lib" ] || export LD_LIBRARY_PATH="$RUNTIME/lib"
-  [ ! -d "$RUNTIME/lib" ] || export DYLD_LIBRARY_PATH="$RUNTIME/lib"
+  PRIVATE_LIBS=""
+  for LIBDIR in "$RUNTIME/lib" "$VENDOR/linux" "$VENDOR/macos"; do
+    if [ -d "$LIBDIR" ]; then
+      if [ -z "$PRIVATE_LIBS" ]; then PRIVATE_LIBS="$LIBDIR"; else PRIVATE_LIBS="$PRIVATE_LIBS:$LIBDIR"; fi
+    fi
+  done
+  [ -z "$PRIVATE_LIBS" ] || export LD_LIBRARY_PATH="$PRIVATE_LIBS"
+  [ -z "$PRIVATE_LIBS" ] || export DYLD_LIBRARY_PATH="$PRIVATE_LIBS"
   export PYTHONHOME="$RUNTIME"
 fi
 
@@ -449,17 +829,25 @@ fn replace_pack(value: &str, pack: &Path) -> OsString {
     OsString::from(value)
 }
 
-fn configured_private_paths(pack: &Path, bin: &Path) -> Vec<PathBuf> {
-    let mut values = vec![bin.to_path_buf()];
+fn configured_private_paths(pack: &Path, bin: &Path, office_mode: bool) -> Vec<PathBuf> {
+    let mut configured: Vec<PathBuf> = Vec::new();
     let config = pack.join("engine-runtime-paths.txt");
     if let Ok(text) = fs::read_to_string(config) {
         for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
             let path = pack.join(line.replace('/', "\\"));
-            if path.is_dir() && !values.contains(&path) {
-                values.push(path);
+            if path.is_dir() && !configured.contains(&path) {
+                configured.push(path);
             }
         }
     }
+    if office_mode {
+        configured.sort_by_key(|path| {
+            let rendered = path.to_string_lossy().to_ascii_lowercase();
+            if rendered.contains("share\\libreoffice") { 0 } else { 1 }
+        });
+    }
+    let mut values = vec![bin.to_path_buf()];
+    values.extend(configured);
     values
 }
 
@@ -548,6 +936,12 @@ fn configure_engine_environment(runtime: &Path) {
     }
 }
 
+fn configure_office_environment() {
+    for key in ["CONDA_PREFIX", "CONDA_DEFAULT_ENV", "CONDA_EXE", "MAMBA_EXE", "PYTHONHOME", "PYTHONPATH"] {
+        env::remove_var(key);
+    }
+}
+
 fn main() -> ExitCode {
     let me = match env::current_exe() {
         Ok(v) => v,
@@ -562,6 +956,7 @@ fn main() -> ExitCode {
         None => return ExitCode::from(113),
     };
     let stem = me.file_stem().and_then(OsStr::to_str).unwrap_or("");
+    let office_mode = stem.eq_ignore_ascii_case("soffice");
     let spec = bin.join(format!("{stem}.target"));
     let text = match fs::read_to_string(&spec) {
         Ok(v) => v,
@@ -579,9 +974,13 @@ fn main() -> ExitCode {
     };
 
     let runtime = pack.join("share").join("runtime");
-    let private_paths = configured_private_paths(pack, bin);
+    let private_paths = configured_private_paths(pack, bin, office_mode);
     set_private_path(&private_paths);
-    configure_engine_environment(&runtime);
+    if office_mode {
+        configure_office_environment();
+    } else {
+        configure_engine_environment(&runtime);
+    }
 
     let mut command = Command::new(&target);
     for line in lines {
@@ -686,7 +1085,13 @@ def write_license_declarations(pack: Path, manifest: dict) -> None:
 
 
 
-def capture_provenance(pack: Path, prefix: Path, runtime: Path, target: str) -> Path:
+def capture_provenance(
+    pack: Path,
+    prefix: Path,
+    runtime: Path,
+    target: str,
+    vendored_host_libraries: list[dict[str, object]],
+) -> Path:
     conda_packages = []
     conda_meta = prefix / "conda-meta"
     if conda_meta.is_dir():
@@ -723,6 +1128,7 @@ def capture_provenance(pack: Path, prefix: Path, runtime: Path, target: str) -> 
         "factory": "native-conda-forge+libreoffice",
         "condaPackages": conda_packages,
         "pythonPackages": python_packages,
+        "vendoredHostLibraries": vendored_host_libraries,
     }
     destination = pack / "provenance" / "runtime-packages.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -768,12 +1174,22 @@ def main() -> None:
     log(f"copying private engine runtime from {prefix}")
     copy_runtime(prefix, runtime)
     office_target = install_libreoffice(pack)
-    if sys.platform.startswith("linux"):
-        vendor_linux_libreoffice_dependencies(pack)
-    provenance = capture_provenance(pack, prefix, runtime, args.target)
-    log(f"captured exact runtime provenance -> {provenance.relative_to(pack)}")
 
+    # The Windows command wrappers are native PE binaries themselves. Build the
+    # canonical launcher before dependency closure so its imports are certified
+    # and any non-system CRT/provider DLL is vendored exactly like every engine.
+    # Unix wrappers are shell scripts and therefore introduce no native closure.
     launcher = build_windows_launcher(pack) if os.name == "nt" else None
+
+    vendored_host_libraries: list[dict[str, object]] = []
+    if sys.platform.startswith("linux"):
+        vendored_host_libraries = vendor_linux_external_dependencies(pack, args.target)
+    elif sys.platform == "darwin":
+        vendored_host_libraries = vendor_macos_external_dependencies(pack, args.target, prefix)
+    elif os.name == "nt":
+        vendored_host_libraries = vendor_windows_external_dependencies(pack, args.target, prefix)
+    provenance = capture_provenance(pack, prefix, runtime, args.target, vendored_host_libraries)
+    log(f"captured exact runtime provenance -> {provenance.relative_to(pack)}")
 
     for canonical, aliases in DIRECT.items():
         target = find_runtime_program(runtime, aliases)

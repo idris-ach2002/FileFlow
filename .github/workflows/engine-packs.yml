@@ -111,13 +111,14 @@ jobs:
           python scripts/release/stage-engines.py --target '${{ matrix.target }}' --mode full
           if [[ '${{ runner.os }}' == 'macOS' ]]; then
             python scripts/release/harden-engine-pack.py --target '${{ matrix.target }}' --sign-identity -
-            python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --require-signature --audit-full
+            python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --require-signature --scope full
           else
             python scripts/release/harden-engine-pack.py --target '${{ matrix.target }}'
-            python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --audit-full
+            python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --scope full
           fi
           python scripts/release/smoke-engines.py --mode full
           python scripts/release/functional-engine-tests.py --mode full
+          python scripts/release/report-engine-footprint.py --target '${{ matrix.target }}'
           python scripts/release/make-engine-pack.py \
             --target '${{ matrix.target }}' \
             --source src-tauri/resources/engines \
@@ -132,9 +133,10 @@ jobs:
           python scripts/release/build-native-engine-pack.py --target '${{ matrix.target }}' --prefix "$env:CONDA_PREFIX"
           python scripts/release/stage-engines.py --target '${{ matrix.target }}' --mode full
           python scripts/release/harden-engine-pack.py --target '${{ matrix.target }}'
-          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --audit-full
+          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --scope full
           python scripts/release/smoke-engines.py --mode full
           python scripts/release/functional-engine-tests.py --mode full
+          python scripts/release/report-engine-footprint.py --target '${{ matrix.target }}'
           python scripts/release/make-engine-pack.py --target '${{ matrix.target }}' --source src-tauri/resources/engines --licenses src-tauri/resources/licenses
 
       - name: Re-stage archive and prove it is self-contained (Unix)
@@ -145,9 +147,9 @@ jobs:
           set -euo pipefail
           python scripts/release/stage-local-engine-pack.py --target '${{ matrix.target }}' --directory release/engines/out --mode full
           if [[ '${{ runner.os }}' == 'macOS' ]]; then
-            python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --require-signature --audit-full
+            python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --require-signature --scope full
           else
-            python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --audit-full
+            python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --scope full
           fi
           python scripts/release/smoke-engines.py --mode full
           python scripts/release/functional-engine-tests.py --mode full
@@ -159,7 +161,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           python scripts/release/stage-local-engine-pack.py --target '${{ matrix.target }}' --directory release/engines/out --mode full
-          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --audit-full
+          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --scope full
           python scripts/release/smoke-engines.py --mode full
           python scripts/release/functional-engine-tests.py --mode full
 

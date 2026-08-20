@@ -84,7 +84,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: release/engines/out
-          key: fileflow-engines-${{ matrix.target }}-${{ hashFiles('release/engines/**', 'scripts/release/*engine*.py', 'scripts/release/windows-engine-launcher.rs') }}
+          key: fileflow-engines-${{ matrix.target }}-${{ hashFiles('.github/workflows/native-macos.yml', 'release/engines/**', 'scripts/release/*engine*.py', 'scripts/release/native_dependency_policy.py', 'scripts/release/windows-engine-launcher.rs') }}
       - name: Provision FULL engine runtime
         if: steps.engine-cache.outputs.cache-hit != 'true'
         uses: mamba-org/setup-micromamba@v2
@@ -110,19 +110,17 @@ jobs:
           python scripts/release/build-native-engine-pack.py --target '${{ matrix.target }}' --prefix "$CONDA_PREFIX"
           python scripts/release/stage-engines.py --target '${{ matrix.target }}' --mode full
           python scripts/release/harden-engine-pack.py --target '${{ matrix.target }}' --sign-identity -
-          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --require-signature --audit-full
+          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --require-signature --scope full
           python scripts/release/smoke-engines.py --mode full
           python scripts/release/functional-engine-tests.py --mode full
           python scripts/release/make-engine-pack.py --target '${{ matrix.target }}' --source src-tauri/resources/engines --licenses src-tauri/resources/licenses
       - name: Re-stage immutable artifact and validate closure
         run: |
           python scripts/release/stage-local-engine-pack.py --target '${{ matrix.target }}' --directory release/engines/out --mode full
-          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --require-signature --audit-full
+          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --require-signature --scope full
           python scripts/release/smoke-engines.py --mode full
-      - name: Functional clean-host certification of restored cache
-        if: steps.engine-cache.outputs.cache-hit == 'true'
-        timeout-minutes: 10
-        run: python scripts/release/functional-engine-tests.py --mode full
+          python scripts/release/functional-engine-tests.py --mode full
+          python scripts/release/report-engine-footprint.py --target '${{ matrix.target }}'
       - name: Upload certified immutable engine pack
         uses: actions/upload-artifact@v7
         with:
@@ -136,9 +134,7 @@ jobs:
   package-smoke:
     name: Package smoke macOS / ${{ matrix.name }}
     needs: [native, engine-certify]
-    # A failed sibling architecture must not suppress this target candidate.
-    # Target-local artifact/build checks below decide this matrix leg independently.
-    if: ${{ always() && !cancelled() }}
+    if: ${{ !cancelled() && needs.native.result == 'success' && needs.engine-certify.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
@@ -152,6 +148,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: engines-${{ matrix.target }}
+          path: release/engines/out
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
@@ -171,14 +171,10 @@ jobs:
           cache-on-failure: true
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - uses: actions/download-artifact@v8
-        with:
-          name: engines-${{ matrix.target }}
-          path: release/engines/out
       - name: Stage certified engines without rebuilding them
         run: |
           python scripts/release/stage-local-engine-pack.py --target '${{ matrix.target }}' --directory release/engines/out --mode full
-          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --require-signature --audit-full
+          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --require-signature --scope full
           python scripts/release/smoke-engines.py --mode full
           python scripts/release/generate-release-config.py --target '${{ matrix.target }}'
       - name: Build package smoke

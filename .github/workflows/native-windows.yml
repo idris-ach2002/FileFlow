@@ -73,7 +73,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: release/engines/out
-          key: fileflow-engines-x86_64-pc-windows-msvc-${{ hashFiles('release/engines/**', 'scripts/release/*engine*.py', 'scripts/release/windows-engine-launcher.rs') }}
+          key: fileflow-engines-x86_64-pc-windows-msvc-${{ hashFiles('.github/workflows/native-windows.yml', 'release/engines/**', 'scripts/release/*engine*.py', 'scripts/release/native_dependency_policy.py', 'scripts/release/windows-engine-launcher.rs') }}
       - uses: dtolnay/rust-toolchain@stable
         if: steps.engine-cache.outputs.cache-hit != 'true'
         with:
@@ -107,7 +107,7 @@ jobs:
           python scripts/release/build-native-engine-pack.py --target x86_64-pc-windows-msvc --prefix "$env:CONDA_PREFIX"
           python scripts/release/stage-engines.py --target x86_64-pc-windows-msvc --mode full
           python scripts/release/harden-engine-pack.py --target x86_64-pc-windows-msvc
-          python scripts/release/validate-engine-pack.py --target x86_64-pc-windows-msvc --audit-full
+          python scripts/release/validate-engine-pack.py --target x86_64-pc-windows-msvc --scope full
           python scripts/release/smoke-engines.py --mode full
           python scripts/release/functional-engine-tests.py --mode full
           python scripts/release/make-engine-pack.py --target x86_64-pc-windows-msvc --source src-tauri/resources/engines --licenses src-tauri/resources/licenses
@@ -115,13 +115,10 @@ jobs:
         shell: pwsh
         run: |
           python scripts/release/stage-local-engine-pack.py --target x86_64-pc-windows-msvc --directory release/engines/out --mode full
-          python scripts/release/validate-engine-pack.py --target x86_64-pc-windows-msvc --audit-full
+          python scripts/release/validate-engine-pack.py --target x86_64-pc-windows-msvc --scope full
           python scripts/release/smoke-engines.py --mode full
-      - name: Functional clean-host certification of restored cache
-        if: steps.engine-cache.outputs.cache-hit == 'true'
-        timeout-minutes: 10
-        shell: pwsh
-        run: python scripts/release/functional-engine-tests.py --mode full
+          python scripts/release/functional-engine-tests.py --mode full
+          python scripts/release/report-engine-footprint.py --target x86_64-pc-windows-msvc
       - name: Upload certified immutable engine pack
         uses: actions/upload-artifact@v7
         with:
@@ -135,15 +132,17 @@ jobs:
   package-smoke:
     name: Package smoke Windows / x64
     needs: [native, engine-certify]
-    # A failed sibling architecture must not suppress this target candidate.
-    # Target-local artifact/build checks below decide this matrix leg independently.
-    if: ${{ always() && !cancelled() }}
+    if: ${{ !cancelled() && needs.native.result == 'success' && needs.engine-certify.result == 'success' }}
     runs-on: windows-2025
     env:
       CARGO_INCREMENTAL: '0'
       RUST_BACKTRACE: '1'
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: engines-x86_64-pc-windows-msvc
+          path: release/engines/out
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
@@ -167,15 +166,11 @@ jobs:
       - name: Deterministic Windows gate
         shell: pwsh
         run: ./scripts/ci/windows-preflight.ps1
-      - uses: actions/download-artifact@v8
-        with:
-          name: engines-x86_64-pc-windows-msvc
-          path: release/engines/out
       - name: Stage certified engines without rebuilding them
         shell: pwsh
         run: |
           python scripts/release/stage-local-engine-pack.py --target x86_64-pc-windows-msvc --directory release/engines/out --mode full
-          python scripts/release/validate-engine-pack.py --target x86_64-pc-windows-msvc --audit-full
+          python scripts/release/validate-engine-pack.py --target x86_64-pc-windows-msvc --scope full
           python scripts/release/smoke-engines.py --mode full
           python scripts/release/generate-release-config.py --target x86_64-pc-windows-msvc
       - name: Build package smoke
