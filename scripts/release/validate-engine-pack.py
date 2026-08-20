@@ -18,6 +18,18 @@ BIN = ENGINE_ROOT / "bin"
 META = ROOT / "src-tauri/resources/engine-pack.json"
 WINDOWS_PATHS = ENGINE_ROOT / "engine-runtime-paths.txt"
 SYSTEM_MAC_PREFIXES = ("/System/Library/", "/usr/lib/")
+LINUX_BASE_ABI = {
+    "libc.so.6",
+    "libm.so.6",
+    "libpthread.so.0",
+    "libdl.so.2",
+    "librt.so.1",
+    "libutil.so.1",
+    "libresolv.so.2",
+    "libanl.so.1",
+    "ld-linux-x86-64.so.2",
+    "ld-linux-aarch64.so.1",
+}
 
 
 def is_linux_virtual_dependency(dep: str) -> bool:
@@ -124,7 +136,13 @@ def wrapper_targets(family: str) -> list[Path]:
 
 def certification_seed(paths: list[Path], family: str) -> list[Path]:
     native = [p for p in paths if is_native(p, family)]
-    selected = set(wrapper_targets(family))
+    # Wrapper targets may legitimately be scripts (Linux LibreOffice's
+    # `soffice` is one). Only native targets belong in architecture/loader
+    # closure validation; scripts remain covered by functional smoke tests.
+    selected = {
+        path for path in wrapper_targets(family)
+        if is_native(path, family)
+    }
     # These trees contain runtime-loaded modules not necessarily present in the
     # main executable's static dependency graph but required by declared engines.
     dynamic_hints = (
@@ -515,15 +533,19 @@ def validate_linux(paths: list[Path], target: str) -> list[str]:
             if unresolved:
                 failures.append(f"{path}: unresolved shared libraries: {', '.join(unresolved)}\n{ldd.stdout.strip()}")
             for line in ldd.stdout.splitlines():
-                match = re.search(r"=>\s+(/[^\s]+)", line)
+                match = re.match(r"\s*([^\s]+)\s+=>\s+(/[^\s]+)", line)
                 if not match:
                     continue
-                resolved = Path(match.group(1)).resolve(strict=False)
+                soname, raw_resolved = match.groups()
+                resolved = Path(raw_resolved).resolve(strict=False)
                 if inside_engine_root(resolved):
                     continue
-                rendered = str(resolved)
-                if rendered.startswith(("/home/", "/opt/", "/usr/local/", "/tmp/", "/private/tmp/")):
-                    failures.append(f"{path}: dependency leaked from build host: {rendered}")
+                if soname in LINUX_BASE_ABI:
+                    continue
+                failures.append(
+                    f"{path}: non-baseline host dependency is not vendored: "
+                    f"{soname} -> {resolved}"
+                )
     return failures
 
 

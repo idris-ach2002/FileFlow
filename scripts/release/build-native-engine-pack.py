@@ -37,6 +37,22 @@ PYTHON_MODULES = {
     "img2pdf": "img2pdf",
 }
 
+# Linux libraries that are part of the baseline glibc/kernel ABI contract.
+# Every other DT_NEEDED dependency of bundled LibreOffice is copied into the
+# FileFlow private runtime so a client machine does not need distro packages.
+LINUX_BASE_ABI = {
+    "libc.so.6",
+    "libm.so.6",
+    "libpthread.so.0",
+    "libdl.so.2",
+    "librt.so.1",
+    "libutil.so.1",
+    "libresolv.so.2",
+    "libanl.so.1",
+    "ld-linux-x86-64.so.2",
+    "ld-linux-aarch64.so.1",
+}
+
 
 def log(message: str) -> None:
     print(f"[engine-factory] {message}", flush=True)
@@ -190,6 +206,124 @@ def find_exiftool(runtime: Path, pack: Path) -> tuple[Path, list[str]]:
                 return perl, [f"{{PACK}}/{rel}"]
             return path, []
     raise SystemExit("engine factory could not locate exiftool")
+
+
+def linux_needed(path: Path) -> list[str]:
+    patchelf = shutil.which("patchelf")
+    if not patchelf:
+        raise SystemExit("Linux engine factory requires patchelf")
+    result = subprocess.run(
+        [patchelf, "--print-needed", str(path)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def linux_elf(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            return handle.read(4) == b"\x7fELF"
+    except OSError:
+        return False
+
+
+def linux_host_library_index() -> dict[str, list[Path]]:
+    result: dict[str, list[Path]] = {}
+    ldconfig = shutil.which("ldconfig")
+    if ldconfig:
+        proc = subprocess.run(
+            [ldconfig, "-p"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        if proc.returncode == 0:
+            for line in proc.stdout.splitlines():
+                if "=>" not in line:
+                    continue
+                left, raw_path = line.rsplit("=>", 1)
+                soname = left.strip().split()[0] if left.strip() else ""
+                path = Path(raw_path.strip())
+                if soname and path.is_file():
+                    result.setdefault(soname, []).append(path)
+    return result
+
+
+def find_linux_host_library(soname: str, index: dict[str, list[Path]]) -> Path | None:
+    candidates = [path for path in index.get(soname, []) if path.is_file()]
+    if candidates:
+        return sorted(candidates, key=lambda path: (len(path.parts), str(path)))[0]
+
+    # Some optional Ubuntu libraries (notably lp_solve) are installed in a
+    # subdirectory that is not necessarily present in ldconfig's cache.
+    for root in (Path("/usr/lib"), Path("/lib")):
+        if not root.is_dir():
+            continue
+        matches = sorted(root.rglob(soname), key=lambda path: (len(path.parts), str(path)))
+        for path in matches:
+            if path.is_file():
+                return path
+    return None
+
+
+def vendor_linux_libreoffice_dependencies(pack: Path) -> None:
+    """Vendor LibreOffice's non-baseline Linux DT_NEEDED closure.
+
+    Ubuntu's LibreOffice packages intentionally rely on distro shared libraries.
+    FileFlow's client contract does not: only the baseline glibc/kernel ABI may
+    remain external. Everything else is copied into share/runtime/lib and will
+    subsequently receive dependency-aware $ORIGIN RPATHs from the hardener.
+    """
+    office = pack / "share" / "libreoffice"
+    runtime_lib = pack / "share" / "runtime" / "lib"
+    runtime_lib.mkdir(parents=True, exist_ok=True)
+
+    index = linux_host_library_index()
+    all_native = [path for path in pack.rglob("*") if path.is_file() and linux_elf(path)]
+    by_name: dict[str, list[Path]] = {}
+    for path in all_native:
+        by_name.setdefault(path.name, []).append(path)
+
+    queue = [path for path in office.rglob("*") if path.is_file() and linux_elf(path)]
+    scanned: set[Path] = set()
+    copied: list[str] = []
+
+    while queue:
+        source = queue.pop()
+        resolved_source = source.resolve(strict=False)
+        if resolved_source in scanned:
+            continue
+        scanned.add(resolved_source)
+        for soname in linux_needed(source):
+            if soname in LINUX_BASE_ABI or soname.startswith("linux-vdso"):
+                continue
+            if by_name.get(soname):
+                continue
+            host = find_linux_host_library(soname, index)
+            if host is None:
+                raise SystemExit(
+                    "LibreOffice Linux dependency is unavailable on the build host: "
+                    f"{source.relative_to(pack)} -> {soname}. "
+                    "Install the providing package in the engine-certification job."
+                )
+            destination = runtime_lib / soname
+            shutil.copy2(host.resolve(), destination)
+            by_name.setdefault(soname, []).append(destination)
+            queue.append(destination)
+            copied.append(soname)
+            log(
+                "vendored LibreOffice host dependency "
+                f"{soname} <- {host}"
+            )
+
+    log(
+        "LibreOffice Linux host dependency closure: "
+        f"vendored={len(copied)} unique={len(set(copied))}"
+    )
 
 
 def install_libreoffice(pack: Path) -> Path:
@@ -621,6 +755,8 @@ def main() -> None:
     log(f"copying private engine runtime from {prefix}")
     copy_runtime(prefix, runtime)
     office_target = install_libreoffice(pack)
+    if sys.platform.startswith("linux"):
+        vendor_linux_libreoffice_dependencies(pack)
     provenance = capture_provenance(pack, prefix, runtime, args.target)
     log(f"captured exact runtime provenance -> {provenance.relative_to(pack)}")
 

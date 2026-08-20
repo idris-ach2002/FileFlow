@@ -109,7 +109,7 @@ jobs:
       - name: Provision LibreOffice build input
         if: steps.engine-cache.outputs.cache-hit != 'true'
         run: |
-          sudo apt-get install -y --no-install-recommends libreoffice-core libreoffice-writer libreoffice-calc libreoffice-impress
+          sudo apt-get install -y --no-install-recommends libreoffice-core libreoffice-writer libreoffice-calc libreoffice-impress liblpsolve55-dev
       - name: Build + relocate + certify FULL engines
         if: steps.engine-cache.outputs.cache-hit != 'true'
         timeout-minutes: 60

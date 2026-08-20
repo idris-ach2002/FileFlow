@@ -6,6 +6,7 @@ import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -65,6 +66,47 @@ class NativeEngineToolingTests(unittest.TestCase):
                     self.assertIsNotNone(hardener.expand_origin(source, derived))
             finally:
                 hardener.ENGINE_ROOT = old
+
+    def test_certification_seed_never_arch_checks_script_launcher(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine_root = Path(tmp) / "engines"
+            native = engine_root / "native.so"
+            script = engine_root / "soffice"
+            engine_root.mkdir(parents=True)
+            native.write_bytes(b"\x7fELFfixture")
+            script.write_text("#!/bin/sh\n")
+            old_root = validator.ENGINE_ROOT
+            validator.ENGINE_ROOT = engine_root
+            try:
+                with mock.patch.object(validator, "wrapper_targets", return_value=[native, script]), \
+                     mock.patch.object(validator, "is_native", side_effect=lambda path, family: path == native):
+                    self.assertEqual(validator.certification_seed([native, script], "linux"), [native])
+            finally:
+                validator.ENGINE_ROOT = old_root
+
+    def test_linux_libreoffice_host_dependency_is_vendored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pack = Path(tmp) / "pack"
+            solver = pack / "share/libreoffice/program/libsolverlo.so"
+            solver.parent.mkdir(parents=True)
+            solver.write_bytes(b"\x7fELFsolver")
+            host = Path(tmp) / "host/liblpsolve55.so"
+            host.parent.mkdir(parents=True)
+            host.write_bytes(b"\x7fELFlpsolve")
+
+            def needed(path):
+                if path.name == "libsolverlo.so":
+                    return ["liblpsolve55.so", "libc.so.6"]
+                return ["libc.so.6"]
+
+            with mock.patch.object(factory, "linux_needed", side_effect=needed), \
+                 mock.patch.object(factory, "linux_host_library_index", return_value={}), \
+                 mock.patch.object(factory, "find_linux_host_library", return_value=host):
+                factory.vendor_linux_libreoffice_dependencies(pack)
+
+            copied = pack / "share/runtime/lib/liblpsolve55.so"
+            self.assertTrue(copied.is_file())
+            self.assertEqual(copied.read_bytes(), host.read_bytes())
 
     def test_linux_ambiguous_internal_dependency_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:

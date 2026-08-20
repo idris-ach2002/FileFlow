@@ -68,7 +68,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             file binutils patchelf \
-            libreoffice-core libreoffice-writer libreoffice-calc libreoffice-impress
+            libreoffice-core libreoffice-writer libreoffice-calc libreoffice-impress liblpsolve55-dev
 
       - name: macOS LibreOffice build input
         if: runner.os == 'macOS'
