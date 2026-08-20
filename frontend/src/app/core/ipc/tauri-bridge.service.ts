@@ -1,5 +1,6 @@
 import { Injectable } from '@angular/core';
 import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
 import {
   AccountBootstrap,
   AccountProfile,
@@ -91,7 +92,12 @@ export class TauriBridgeService {
   }
 
   chooseStorageDirectory(): Promise<string | null> {
-    return invoke<string | null>('choose_storage_directory');
+    return open({
+      directory: true,
+      multiple: false,
+      title: 'Choisir le dossier FileFlow',
+      canCreateDirectories: true,
+    });
   }
 
   healthCheck(): Promise<HealthResponse> {

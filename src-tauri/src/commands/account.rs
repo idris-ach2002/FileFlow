@@ -409,22 +409,6 @@ pub fn default_storage_directory(app: AppHandle) -> Result<PathBuf, String> {
     Ok(base.join("FileFlow"))
 }
 
-#[tauri::command]
-pub fn choose_storage_directory(app: AppHandle) -> Result<Option<PathBuf>, String> {
-    let Some(folder) = app
-        .dialog()
-        .file()
-        .set_title("Choisir le dossier FileFlow")
-        .blocking_pick_folder()
-    else {
-        return Ok(None);
-    };
-    folder
-        .into_path()
-        .map(Some)
-        .map_err(|error| error.to_string())
-}
-
 fn start_session(
     state: &AppState,
     profile: AccountProfile,

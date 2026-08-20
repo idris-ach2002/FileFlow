@@ -58,16 +58,17 @@ import { PreferencesService } from '../../core/preferences/preferences.service';
               <h1>Où voulez-vous retrouver vos fichiers ?</h1>
               <p class="lead">FileFlow conservera toujours vos originaux. Ce dossier sert de destination claire pour les nouveaux résultats.</p>
 
-              <button class="folder-choice" type="button" (click)="chooseFolder()">
+              <button class="folder-choice" type="button" [disabled]="folderBusy()" (click)="chooseFolder()">
                 <span class="folder-icon">▰</span>
                 <span><strong>{{ storageDirectory() ? 'Dossier FileFlow' : 'Choisir un dossier' }}</strong><small>{{ storageDirectory() || 'Sélectionnez l’emplacement qui vous convient.' }}</small></span>
-                <b>Modifier</b>
+                <b>{{ folderBusy() ? 'Ouverture…' : 'Modifier' }}</b>
               </button>
-              <button class="secondary-action" type="button" (click)="useRecommendedFolder()">Utiliser le dossier recommandé</button>
+              <button class="secondary-action" type="button" [disabled]="folderBusy()" (click)="useRecommendedFolder()">Utiliser le dossier recommandé</button>
+              @if (folderError()) { <p class="folder-error">{{ folderError() }}</p> }
 
               <div class="simple-rule"><span>✓</span><div><strong>Originaux intacts</strong><p>Une conversion produit un nouveau fichier. FileFlow ne remplace pas vos documents silencieusement.</p></div></div>
 
-              <div class="footer-actions"><button type="button" class="ghost" (click)="step.set(0)">Retour</button><button type="button" class="primary-action inline" [disabled]="!storageDirectory()" (click)="step.set(2)">Continuer</button></div>
+              <div class="footer-actions"><button type="button" class="ghost" (click)="step.set(0)">Retour</button><button type="button" class="primary-action inline" [disabled]="!storageDirectory() || folderBusy()" (click)="step.set(2)">Continuer</button></div>
             </section>
           }
 
@@ -123,7 +124,7 @@ import { PreferencesService } from '../../core/preferences/preferences.service';
     label{display:block;margin:12px 0}label>span{display:block;margin-bottom:6px;color:var(--text-muted);font-size:12px;font-weight:750}input:not([type=checkbox]){box-sizing:border-box;width:100%;height:47px;padding:0 13px;border:1px solid var(--border);border-radius:12px;outline:none;background:var(--surface-2);color:var(--text);font:inherit}input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}.form-grid.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}.form-grid.two label{margin-top:0}
     .primary-action,.secondary-action,.ghost,.help-link{border:0;font:inherit;cursor:pointer}.primary-action{width:100%;min-height:50px;margin-top:18px;border-radius:13px;background:var(--accent);color:white;font-weight:850;box-shadow:0 10px 24px color-mix(in srgb,var(--accent) 22%,transparent)}.primary-action:disabled{opacity:.45;cursor:not-allowed}.primary-action.inline{width:auto;min-width:150px;margin:0}.secondary-action{min-height:40px;padding:0 14px;border-radius:10px;background:var(--surface-2);color:var(--text-muted);font-weight:750}.ghost{min-height:40px;padding:0 14px;background:transparent;color:var(--text-muted);font-weight:750}.help-link{display:block;margin:14px auto 0;background:transparent;color:var(--accent);font-size:12px;font-weight:800}
     .security-note,.simple-rule{display:flex;gap:10px;margin-top:17px;padding:12px 13px;border-radius:12px;background:var(--bg-elevated);color:var(--text-muted)}.security-note>span,.simple-rule>span{color:var(--success);font-weight:900}.security-note p,.simple-rule p{margin:0;font-size:11px;line-height:1.5}.security-note strong,.simple-rule strong{color:var(--text)}
-    .folder-choice{width:100%;display:grid;grid-template-columns:44px minmax(0,1fr) auto;align-items:center;gap:12px;padding:14px;border:1px solid var(--border);border-radius:15px;background:var(--surface-2);color:var(--text);text-align:left}.folder-icon{width:42px;height:42px;display:grid;place-items:center;border-radius:12px;background:var(--accent-soft);color:var(--accent)}.folder-choice strong,.folder-choice small{display:block}.folder-choice small{overflow:hidden;margin-top:4px;color:var(--text-muted);font-size:11px;text-overflow:ellipsis;white-space:nowrap}.folder-choice b{color:var(--accent);font-size:11px}.secondary-action{margin-top:10px}.simple-rule{margin:24px 0}.footer-actions{display:flex;align-items:center;justify-content:space-between;margin-top:28px}
+    .folder-choice{width:100%;display:grid;grid-template-columns:44px minmax(0,1fr) auto;align-items:center;gap:12px;padding:14px;border:1px solid var(--border);border-radius:15px;background:var(--surface-2);color:var(--text);text-align:left}.folder-icon{width:42px;height:42px;display:grid;place-items:center;border-radius:12px;background:var(--accent-soft);color:var(--accent)}.folder-choice strong,.folder-choice small{display:block}.folder-choice small{overflow:hidden;margin-top:4px;color:var(--text-muted);font-size:11px;text-overflow:ellipsis;white-space:nowrap}.folder-choice b{color:var(--accent);font-size:11px}.secondary-action{margin-top:10px}.folder-error{margin:10px 0 0;color:var(--danger,#d14b4b);font-size:12px;line-height:1.45}.simple-rule{margin:24px 0}.footer-actions{display:flex;align-items:center;justify-content:space-between;margin-top:28px}
     .choice-row{display:grid;grid-template-columns:28px minmax(0,1fr);gap:10px;align-items:start;margin:9px 0;padding:13px;border:1px solid var(--border);border-radius:13px;background:var(--surface-2);cursor:pointer}.choice-row input{width:18px;height:18px;margin:2px 0 0;accent-color:var(--accent)}.choice-row span{margin:0}.choice-row strong,.choice-row small{display:block}.choice-row strong{color:var(--text);font-size:13px}.choice-row small{margin-top:4px;color:var(--text-muted);font-size:11px;line-height:1.45}
     .success-orb{width:62px;height:62px;display:grid;place-items:center;margin-bottom:20px;border-radius:20px;background:color-mix(in srgb,var(--success) 15%,var(--surface-1));color:var(--success);font-size:28px;font-weight:900}.tour-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:24px 0}.tour-grid article{padding:14px;border:1px solid var(--border);border-radius:13px;background:var(--surface-2)}.tour-grid article>span{width:25px;height:25px;display:grid;place-items:center;margin-bottom:10px;border-radius:8px;background:var(--accent-soft);color:var(--accent);font-size:10px;font-weight:900}.tour-grid strong{display:block;font-size:12px}.tour-grid p{margin:6px 0 0;color:var(--text-muted);font-size:10px;line-height:1.5}
     .error-banner{position:relative;margin:-17px 0 20px;padding:12px 42px 12px 13px;border:1px solid color-mix(in srgb,var(--danger) 30%,var(--border));border-radius:12px;background:color-mix(in srgb,var(--danger) 8%,var(--surface-1))}.error-banner strong,.error-banner span{display:block}.error-banner strong{font-size:12px}.error-banner span{margin-top:3px;color:var(--text-muted);font-size:11px}.error-banner button{position:absolute;right:8px;top:8px;border:0;background:transparent;color:var(--text-muted)}
@@ -140,6 +141,8 @@ export class WelcomePage {
   protected readonly step = signal(0);
   protected readonly mode = signal<'create' | 'login'>('create');
   protected readonly busy = signal(false);
+  protected readonly folderBusy = signal(false);
+  protected readonly folderError = signal<string | null>(null);
   protected readonly firstName = signal('');
   protected readonly lastName = signal('');
   protected readonly displayName = signal('');
@@ -201,12 +204,48 @@ export class WelcomePage {
   }
 
   protected async chooseFolder(): Promise<void> {
-    const selected = await this.auth.chooseStorageDirectory();
-    if (selected) this.storageDirectory.set(selected);
+    if (this.folderBusy()) return;
+
+    this.folderBusy.set(true);
+    this.folderError.set(null);
+
+    try {
+      const selected = await this.auth.chooseStorageDirectory();
+
+      if (selected) {
+        this.storageDirectory.set(selected);
+      }
+    } catch (error) {
+      this.folderError.set(this.folderMessage(error));
+    } finally {
+      this.folderBusy.set(false);
+    }
   }
 
   protected async useRecommendedFolder(): Promise<void> {
-    this.storageDirectory.set(await this.auth.defaultStorageDirectory());
+    if (this.folderBusy()) return;
+
+    this.folderBusy.set(true);
+    this.folderError.set(null);
+
+    try {
+      this.storageDirectory.set(
+        await this.auth.defaultStorageDirectory()
+      );
+    } catch (error) {
+      this.folderError.set(this.folderMessage(error));
+    } finally {
+      this.folderBusy.set(false);
+    }
+  }
+
+  private folderMessage(error: unknown): string {
+    return error instanceof Error
+      ? error.message
+      : String(
+          error ||
+          'Impossible d’ouvrir le sélecteur de dossier.'
+        );
   }
 
   protected async savePreferencesAndContinue(): Promise<void> {

@@ -1176,8 +1176,6 @@ dependencies = [
 name = "fileflow-desktop"
 version = "0.1.0"
 dependencies = [
- "serde_json",
- "parking_lot",
  "chrono",
  "dashmap",
  "fileflow-adapter-archive",
@@ -1205,7 +1203,9 @@ dependencies = [
  "fileflow-scheduler",
  "fileflow-storage",
  "fileflow-workspace",
+ "parking_lot",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -1313,12 +1313,12 @@ dependencies = [
 name = "fileflow-storage"
 version = "0.1.0"
 dependencies = [
- "sha2",
  "chrono",
  "parking_lot",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.20",
  "tracing",
  "uuid",
