@@ -61,6 +61,7 @@ const snapshot: WorkspaceSnapshot = {
 describe('WorkspaceStore', () => {
   it('streams intake state then loads the paged workspace result', async () => {
     const bridge = {
+      isDesktop: vi.fn().mockReturnValue(false),
       createWorkspace: vi.fn(
         async (_paths: string[], onEvent: (event: WorkspaceIntakeEvent) => void) => {
           onEvent({ event: 'started', data: { workspaceId: snapshot.id, roots: 1 } });
