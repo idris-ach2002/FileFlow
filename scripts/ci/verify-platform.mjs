@@ -80,7 +80,14 @@ if (!rustVersion || rustVersion !== expectedRust) fail(`rustc ${rustVersion ?? '
 if (new Set([pkg.version, frontend.version, tauri.version]).size !== 1) fail('package/frontend/Tauri versions are not synchronized');
 if (!workspaceVersion || workspaceVersion !== pkg.version) fail(`Cargo workspace version ${workspaceVersion ?? '?'}; expected ${pkg.version}`);
 if (!readFileSync(resolve(root, 'pnpm-lock.yaml'), 'utf8').startsWith("lockfileVersion: '9.0'")) fail('unexpected pnpm lockfile version');
-if (!readFileSync(resolve(root, 'Cargo.lock'), 'utf8').includes(`name = "fileflow-desktop"\nversion = "${pkg.version}"`)) fail('Cargo.lock FileFlow version is stale');
+const cargoLock = readFileSync(resolve(root, 'Cargo.lock'), 'utf8')
+  .replace(/\r\n?/g, '\n');
+
+if (!cargoLock.includes(
+  `name = "fileflow-desktop"\nversion = "${pkg.version}"`,
+)) {
+  fail('Cargo.lock FileFlow version is stale');
+}
 
 console.log(`[preflight] FileFlow ${pkg.version}`);
 console.log(`[preflight] ${process.platform}/${process.arch} Node ${process.version} pnpm ${pnpmVersion} Rust ${rustVersion}`);
