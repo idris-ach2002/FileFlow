@@ -72,12 +72,19 @@ foreach ($requiredTarget in @('nsis', 'msi')) {
   }
 }
 
-# Prevent regression to the .cmd spawning bug that caused repeated CI failures.
-$badPnpmCmd = Get-ChildItem -Path scripts -Recurse -File |
-  Select-String -Pattern 'pnpm\.cmd' -ErrorAction SilentlyContinue
-if ($badPnpmCmd) {
-  $badPnpmCmd | ForEach-Object { Write-Error $_.Line }
-  throw 'Forbidden pnpm.cmd reference detected below scripts/'
+# Prevent regression to direct spawning of pnpm's Windows command wrapper.
+# Build the forbidden token dynamically so this validator cannot match itself.
+$forbiddenPnpmWrapper = 'pnpm' + '.cmd'
+
+$badPnpmWrapper = Get-ChildItem -Path scripts -Recurse -File |
+  Select-String -SimpleMatch $forbiddenPnpmWrapper -ErrorAction SilentlyContinue
+
+if ($badPnpmWrapper) {
+  $badPnpmWrapper | ForEach-Object {
+    Write-Error "$($_.Path):$($_.LineNumber): $($_.Line)"
+  }
+
+  throw 'Forbidden direct pnpm Windows wrapper reference detected below scripts/'
 }
 
 $nodePath = Require-Command 'node'
