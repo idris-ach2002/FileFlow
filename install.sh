@@ -75,7 +75,7 @@ case "$OS/$ARCH" in
 esac
 
 installed_ok(){ [ -f "$MARKER" ] || return 1; if [ "$OS" = Linux ]; then [ -x "$HOME/.local/opt/fileflow/FileFlow.AppImage" ]; else [ -d "/Applications/FileFlow.app" ] || [ -d "$HOME/Applications/FileFlow.app" ]; fi; }
-if [ "$FORCE" -eq 0 ] && installed_ok; then printf '\n✓ FileFlow est déjà installé.\nAucune réinstallation nécessaire.\nLe dépôt cloné peut être supprimé.\n'; exit 0; fi
+marker_value(){ [ -f "$MARKER" ] || return 0; sed -n "s/^${1}=//p" "$MARKER" | head -n1; }
 
 STEP="récupération du paquet"; REF="refs/fileflow/install/$TARGET"; git update-ref -d "$REF" >/dev/null 2>&1 || true
 if ! git fetch --quiet --depth=1 "$REMOTE" "refs/heads/$DIST_BRANCH:$REF"; then fail FF-I-003 "Le paquet FileFlow pour $TARGET n’est pas encore publié." "git fetch failed branch=$DIST_BRANCH"; fi
@@ -83,15 +83,29 @@ if ! git fetch --quiet --depth=1 "$REMOTE" "refs/heads/$DIST_BRANCH:$REF"; then 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/fileflow-install.XXXXXX")"; MANIFEST="$TMP/manifest.env"
 git show "$REF:manifest.env" >"$MANIFEST" || fail FF-I-004 "Le manifeste d’installation FileFlow est absent ou invalide."
 manifest(){ sed -n "s/^${1}=//p" "$MANIFEST" | head -n1; }
-VERSION="$(manifest VERSION)"; SOURCE_SHA="$(manifest SOURCE_SHA)"; PACKAGE_NAME="$(manifest PACKAGE_NAME)"; PACKAGE_SHA256="$(manifest PACKAGE_SHA256)"; PACKAGE_SIZE="$(manifest PACKAGE_SIZE)"; CHANNEL="$(manifest CHANNEL)"
-[ -n "$VERSION" ] && [ -n "$PACKAGE_NAME" ] && [ -n "$PACKAGE_SHA256" ] || fail FF-I-004 "Le manifeste FileFlow est incomplet."
+VERSION="$(manifest VERSION)"; SOURCE_SHA="$(manifest SOURCE_SHA)"; PACKAGE_NAME="$(manifest PACKAGE_NAME)"; PACKAGE_SHA256="$(manifest PACKAGE_SHA256)"; PACKAGE_SIZE="$(manifest PACKAGE_SIZE)"; CHANNEL="$(manifest CHANNEL)"; ENGINE_MODE="$(manifest ENGINE_MODE)"; ENGINE_PACK_VERSION="$(manifest ENGINE_PACK_VERSION)"; ENGINE_EXECUTABLE_COUNT="$(manifest ENGINE_EXECUTABLE_COUNT)"; ENGINE_EXPECTED_EXECUTABLE_COUNT="$(manifest ENGINE_EXPECTED_EXECUTABLE_COUNT)"
+[ -n "$VERSION" ] && [ -n "$PACKAGE_NAME" ] && [ -n "$PACKAGE_SHA256" ] && [ -n "$ENGINE_PACK_VERSION" ] && [ -n "$ENGINE_EXECUTABLE_COUNT" ] && [ -n "$ENGINE_EXPECTED_EXECUTABLE_COUNT" ] || fail FF-I-004 "Le manifeste FileFlow est incomplet."
+[ "$ENGINE_MODE" = "full" ] || fail FF-I-013 "Ce paquet FileFlow est incomplet : les moteurs de conversion ne sont pas embarqués." "engine_mode=$ENGINE_MODE"
+[ "$ENGINE_EXECUTABLE_COUNT" = "$ENGINE_EXPECTED_EXECUTABLE_COUNT" ] || fail FF-I-013 "Ce paquet FileFlow est incomplet : inventaire moteurs invalide." "engines=$ENGINE_EXECUTABLE_COUNT expected=$ENGINE_EXPECTED_EXECUTABLE_COUNT"
+
+if [ "$FORCE" -eq 0 ] && installed_ok; then
+  INSTALLED_SHA="$(marker_value PACKAGE_SHA256)"
+  INSTALLED_ENGINE_MODE="$(marker_value ENGINE_MODE)"
+  INSTALLED_ENGINE_PACK="$(marker_value ENGINE_PACK_VERSION)"
+  if [ "$INSTALLED_SHA" = "$PACKAGE_SHA256" ] && [ "$INSTALLED_ENGINE_MODE" = "full" ] && [ "$INSTALLED_ENGINE_PACK" = "$ENGINE_PACK_VERSION" ]; then
+    printf '\n✓ FileFlow %s est déjà installé avec le pack moteurs %s (%s/%s exécutables).\nAucune réinstallation nécessaire.\nLe dépôt cloné peut être supprimé.\n' "$VERSION" "$ENGINE_PACK_VERSION" "$ENGINE_EXECUTABLE_COUNT" "$ENGINE_EXPECTED_EXECUTABLE_COUNT"
+    exit 0
+  fi
+  dev "installation existante différente ou incomplète: remplacement automatique"
+fi
+
 PACKAGE="$TMP/$PACKAGE_NAME"; : >"$PACKAGE"
 CHUNKS="$(git ls-tree -r --name-only "$REF" payload/ | LC_ALL=C sort)"; [ -n "$CHUNKS" ] || fail FF-I-004 "Le paquet FileFlow ne contient aucun fragment binaire."
 while IFS= read -r chunk; do [ -n "$chunk" ] || continue; dev "assemblage $chunk"; git show "$REF:$chunk" >>"$PACKAGE"; done <<<"$CHUNKS"
 ACTUAL_SIZE="$(wc -c <"$PACKAGE" | tr -d ' ')"; [ "$ACTUAL_SIZE" = "$PACKAGE_SIZE" ] || fail FF-I-004 "Le paquet FileFlow est incomplet." "size=$ACTUAL_SIZE expected=$PACKAGE_SIZE"
 sha256(){ if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'; elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'; else fail FF-I-010 "La vérification SHA-256 n’est pas disponible."; fi; }
 ACTUAL_SHA="$(sha256 "$PACKAGE")"; [ "$ACTUAL_SHA" = "$PACKAGE_SHA256" ] || fail FF-I-004 "Le contrôle d’intégrité FileFlow a échoué. Rien n’a été installé." "sha=$ACTUAL_SHA expected=$PACKAGE_SHA256"
-dev "version=$VERSION source=$SOURCE_SHA channel=$CHANNEL sha=$ACTUAL_SHA"
+dev "version=$VERSION source=$SOURCE_SHA channel=$CHANNEL sha=$ACTUAL_SHA engines=$ENGINE_MODE/$ENGINE_PACK_VERSION/$ENGINE_EXECUTABLE_COUNT"
 
 if [ "$OS" = Linux ]; then
   STEP="installation Linux"
@@ -142,6 +156,11 @@ VERSION=$VERSION
 SOURCE_SHA=$SOURCE_SHA
 TARGET=$TARGET
 CHANNEL=$CHANNEL
+PACKAGE_SHA256=$PACKAGE_SHA256
+ENGINE_MODE=$ENGINE_MODE
+ENGINE_PACK_VERSION=$ENGINE_PACK_VERSION
+ENGINE_EXECUTABLE_COUNT=$ENGINE_EXECUTABLE_COUNT
+ENGINE_EXPECTED_EXECUTABLE_COUNT=$ENGINE_EXPECTED_EXECUTABLE_COUNT
 INSTALLED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 APP_LOCATION=$APP_LOCATION
 EOF

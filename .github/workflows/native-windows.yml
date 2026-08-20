@@ -104,11 +104,45 @@ jobs:
       - name: Deterministic Windows gate
         shell: pwsh
         run: ./scripts/ci/windows-preflight.ps1
-      - name: Stage optional engines
+      - name: Provision FULL engine runtime
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: fileflow-engines
+          create-args: >-
+          python=3.12
+          pip
+          ffmpeg
+          imagemagick
+          libvips
+          qpdf
+          7zip
+          zstd
+          lz4
+          exiftool
+          tesseract
+          poppler
+          ghostscript
+          pandoc
+          ocrmypdf
+          img2pdf
+          cache-environment: true
+          cache-downloads: true
+          init-shell: powershell
+      - name: Provision LibreOffice engine
         shell: pwsh
+        run: choco install libreoffice-fresh -y --no-progress
+      - name: Build + certify FULL engines
+        timeout-minutes: 60
+        shell: powershell
         run: |
-          python scripts/release/stage-engines.py --target x86_64-pc-windows-msvc --mode optional
+          $ErrorActionPreference = 'Stop'
+          python scripts/release/build-native-engine-pack.py --target x86_64-pc-windows-msvc --prefix "$env:CONDA_PREFIX"
+          python scripts/release/stage-engines.py --target x86_64-pc-windows-msvc --mode full
           python scripts/release/harden-engine-pack.py --target x86_64-pc-windows-msvc
+          python scripts/release/validate-engine-pack.py --target x86_64-pc-windows-msvc
+          python scripts/release/smoke-engines.py --mode full
+          python scripts/release/functional-engine-tests.py --mode full
+          python scripts/release/make-engine-pack.py --target x86_64-pc-windows-msvc --source src-tauri/resources/engines --licenses src-tauri/resources/licenses
           python scripts/release/generate-release-config.py --target x86_64-pc-windows-msvc
       - name: Build package smoke
         shell: pwsh

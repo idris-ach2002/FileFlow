@@ -21,7 +21,19 @@ def run(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 def files() -> list[Path]:
-    return [p for base in (BIN,LIB) if base.is_dir() for p in base.rglob('*') if p.is_file()]
+    # FULL packs contain a private relocated runtime under share/runtime and a
+    # private LibreOffice tree under share/libreoffice. Validate their native
+    # binaries too; wrappers in bin/ must not hide broken dependencies.
+    result=[]
+    for p in ENGINE_ROOT.rglob('*'):
+        if not p.is_file():
+            continue
+        lower=p.name.lower()
+        executable=bool(p.stat().st_mode & 0o111)
+        native_suffix=lower.endswith(('.exe','.dll','.dylib','.so')) or '.so.' in lower
+        if executable or native_suffix:
+            result.append(p)
+    return result
 
 
 def file_output(path: Path) -> str:
@@ -51,7 +63,7 @@ def validate_macos(paths: list[Path], target: str, require_signature: bool) -> l
         if deps.returncode!=0: failures.append(f'{path}: otool failed: {deps.stdout.strip()}')
         for line in deps.stdout.splitlines()[1:]:
             dep=line.strip().split(' (',1)[0]
-            if dep.startswith(('/opt/homebrew/','/usr/local/','/tmp/','/private/tmp/')):
+            if dep.startswith(('/opt/homebrew/','/usr/local/','/tmp/','/private/tmp/','/Users/','/home/runner/')):
                 failures.append(f'{path}: non-portable dependency {dep}')
         if require_signature:
             result=run('codesign','--verify','--strict','--verbose=2',str(path))

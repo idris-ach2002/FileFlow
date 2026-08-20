@@ -104,10 +104,44 @@ jobs:
           cache-on-failure: true
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Stage optional engines
+      - name: Provision FULL engine runtime
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: fileflow-engines
+          create-args: >-
+          python=3.12
+          pip
+          ffmpeg
+          imagemagick
+          libvips
+          qpdf
+          7zip
+          zstd
+          lz4
+          exiftool
+          tesseract
+          poppler
+          ghostscript
+          pandoc
+          ocrmypdf
+          img2pdf
+          cache-environment: true
+          cache-downloads: true
+      - name: Provision LibreOffice engine
         run: |
-          python scripts/release/stage-engines.py --target '${{ matrix.target }}' --mode optional
-          python scripts/release/harden-engine-pack.py --target '${{ matrix.target }}'
+          brew list --cask libreoffice >/dev/null 2>&1 || brew install --cask libreoffice
+      - name: Build + certify FULL engines
+        timeout-minutes: 60
+        shell: bash -el {0}
+        run: |
+          set -euo pipefail
+          python scripts/release/build-native-engine-pack.py --target '${{ matrix.target }}' --prefix "$CONDA_PREFIX"
+          python scripts/release/stage-engines.py --target '${{ matrix.target }}' --mode full
+          python scripts/release/harden-engine-pack.py --target '${{ matrix.target }}' --sign-identity -
+          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}'
+          python scripts/release/smoke-engines.py --mode full
+          python scripts/release/functional-engine-tests.py --mode full
+          python scripts/release/make-engine-pack.py --target '${{ matrix.target }}' --source src-tauri/resources/engines --licenses src-tauri/resources/licenses
           python scripts/release/generate-release-config.py --target '${{ matrix.target }}'
       - name: Build package smoke
         run: pnpm exec tauri build --target '${{ matrix.target }}' --bundles app,dmg --config src-tauri/tauri.release.conf.json
