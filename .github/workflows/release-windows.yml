@@ -222,8 +222,10 @@ jobs:
           name: native-x86_64-pc-windows-msvc
           path: dist/release/x86_64-pc-windows-msvc
 
-      - name: Checksum Windows assets
-        run: node scripts/release/generate-checksums.mjs --root dist/release --output SHA256SUMS-windows
+      - name: Canonicalize + checksum Windows installers
+        run: |
+          node scripts/release/canonicalize-installers.mjs --platform windows --root dist/release
+          node scripts/release/generate-checksums.mjs --root dist/release --output SHA256SUMS-windows
 
       - name: Publish immutable Windows release
         shell: bash

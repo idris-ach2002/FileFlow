@@ -169,6 +169,7 @@ jobs:
       - name: Normalize and checksum Linux assets
         run: |
           node scripts/release/normalize-artifacts.mjs --root dist/release
+          node scripts/release/canonicalize-installers.mjs --platform linux --root dist/release
           node scripts/release/generate-checksums.mjs --root dist/release --output SHA256SUMS-linux
 
       - name: Publish immutable Linux release

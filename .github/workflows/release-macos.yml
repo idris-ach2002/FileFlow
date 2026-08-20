@@ -200,6 +200,7 @@ jobs:
       - name: Normalize and checksum macOS assets
         run: |
           node scripts/release/normalize-artifacts.mjs --root dist/release
+          node scripts/release/canonicalize-installers.mjs --platform macos --root dist/release
           node scripts/release/generate-checksums.mjs --root dist/release --output SHA256SUMS-macos
 
       - name: Publish immutable macOS release
