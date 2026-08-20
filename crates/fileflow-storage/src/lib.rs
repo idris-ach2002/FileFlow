@@ -474,7 +474,18 @@ impl Storage {
             },
         )?;
         rows.map(|row| {
-            let (id, recipe_id, status, current_step, total_steps, inputs_json, outputs_json, error, created_at, updated_at) = row?;
+            let (
+                id,
+                recipe_id,
+                status,
+                current_step,
+                total_steps,
+                inputs_json,
+                outputs_json,
+                error,
+                created_at,
+                updated_at,
+            ) = row?;
             Ok(AutomationJobRecord {
                 id: Uuid::parse_str(&id).unwrap_or_else(|_| Uuid::nil()),
                 recipe_id: recipe_id.and_then(|value| Uuid::parse_str(&value).ok()),
@@ -558,7 +569,18 @@ impl Storage {
             ))
         })?;
         rows.map(|row| {
-            let (id, path, recipe_id, enabled, recursive, extensions_json, stability_seconds, last_scan_at, created_at, updated_at) = row?;
+            let (
+                id,
+                path,
+                recipe_id,
+                enabled,
+                recursive,
+                extensions_json,
+                stability_seconds,
+                last_scan_at,
+                created_at,
+                updated_at,
+            ) = row?;
             Ok(WatchedFolderRecord {
                 id: Uuid::parse_str(&id).unwrap_or_else(|_| Uuid::nil()),
                 path,
@@ -1116,11 +1138,13 @@ mod tests {
             created_at: now,
             updated_at: now,
         };
-        storage.create_account(
-            &profile,
-            &auth::hash_password("a sufficiently long password").unwrap(),
-            &OnboardingPreferences::new(account_id),
-        ).unwrap();
+        storage
+            .create_account(
+                &profile,
+                &auth::hash_password("a sufficiently long password").unwrap(),
+                &OnboardingPreferences::new(account_id),
+            )
+            .unwrap();
 
         let job = AutomationJobRecord {
             id: Uuid::new_v4(),
@@ -1138,11 +1162,17 @@ mod tests {
             updated_at: now,
         };
         storage.save_automation_job_for(account_id, &job).unwrap();
-        let loaded = storage.automation_job_for(account_id, job.id).unwrap().unwrap();
+        let loaded = storage
+            .automation_job_for(account_id, job.id)
+            .unwrap()
+            .unwrap();
         assert_eq!(loaded.current_step, 2);
         assert_eq!(loaded.outputs_by_step["step-1"], vec!["/tmp/output.jpg"]);
         assert_eq!(storage.mark_running_jobs_interrupted().unwrap(), 1);
-        let interrupted = storage.automation_job_for(account_id, job.id).unwrap().unwrap();
+        let interrupted = storage
+            .automation_job_for(account_id, job.id)
+            .unwrap()
+            .unwrap();
         assert_eq!(interrupted.status, "interrupted");
     }
 
@@ -1161,11 +1191,13 @@ mod tests {
             created_at: now,
             updated_at: now,
         };
-        storage.create_account(
-            &profile,
-            &auth::hash_password("a sufficiently long password").unwrap(),
-            &OnboardingPreferences::new(account_id),
-        ).unwrap();
+        storage
+            .create_account(
+                &profile,
+                &auth::hash_password("a sufficiently long password").unwrap(),
+                &OnboardingPreferences::new(account_id),
+            )
+            .unwrap();
         let watch = WatchedFolderRecord {
             id: Uuid::new_v4(),
             path: "/tmp/inbox".into(),
@@ -1182,12 +1214,31 @@ mod tests {
         let loaded = storage.watched_folders_for(account_id).unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].extensions, vec!["jpg", "png"]);
-        assert!(storage.watch_seen_signature(account_id, watch.id, "/tmp/inbox/a.jpg").unwrap().is_none());
-        storage.mark_watch_seen(account_id, watch.id, "/tmp/inbox/a.jpg", "12:34").unwrap();
-        assert_eq!(storage.watch_seen_signature(account_id, watch.id, "/tmp/inbox/a.jpg").unwrap().as_deref(), Some("12:34"));
-        storage.delete_watched_folder_for(account_id, watch.id).unwrap();
+        assert!(
+            storage
+                .watch_seen_signature(account_id, watch.id, "/tmp/inbox/a.jpg")
+                .unwrap()
+                .is_none()
+        );
+        storage
+            .mark_watch_seen(account_id, watch.id, "/tmp/inbox/a.jpg", "12:34")
+            .unwrap();
+        assert_eq!(
+            storage
+                .watch_seen_signature(account_id, watch.id, "/tmp/inbox/a.jpg")
+                .unwrap()
+                .as_deref(),
+            Some("12:34")
+        );
+        storage
+            .delete_watched_folder_for(account_id, watch.id)
+            .unwrap();
         assert!(storage.watched_folders_for(account_id).unwrap().is_empty());
-        assert!(storage.watch_seen_signature(account_id, watch.id, "/tmp/inbox/a.jpg").unwrap().is_none());
+        assert!(
+            storage
+                .watch_seen_signature(account_id, watch.id, "/tmp/inbox/a.jpg")
+                .unwrap()
+                .is_none()
+        );
     }
-
 }

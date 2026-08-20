@@ -98,10 +98,13 @@ pub trait EngineAdapter: Send + Sync {
 pub fn find_executable(executable: &str) -> Option<PathBuf> {
     let variants = executable_variants(executable);
     let candidate = Path::new(executable);
-    if candidate.components().count() > 1 {
-        if let Some(found) = variants.iter().map(PathBuf::from).find(|path| is_executable_file(path)) {
-            return Some(found);
-        }
+    if candidate.components().count() > 1
+        && let Some(found) = variants
+            .iter()
+            .map(PathBuf::from)
+            .find(|path| is_executable_file(path))
+    {
+        return Some(found);
     }
 
     // Packaged engines always win so a release behaves identically regardless

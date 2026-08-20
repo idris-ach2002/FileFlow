@@ -78,15 +78,7 @@ pub async fn run_recipe(
     };
     let input_paths = sanitize_inputs(source_paths)?;
     let recipe = recipe_for(&state, account_id, request.recipe_id)?;
-    execute_recipe_job(
-        &app,
-        account_id,
-        recipe,
-        input_paths,
-        None,
-        Some(on_event),
-    )
-    .await
+    execute_recipe_job(&app, account_id, recipe, input_paths, None, Some(on_event)).await
 }
 
 #[tauri::command]
@@ -102,7 +94,10 @@ pub async fn resume_automation_job(
         .automation_job_for(account_id, job_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "Job d’automatisation introuvable.".to_owned())?;
-    if !matches!(previous.status.as_str(), "interrupted" | "failed" | "cancelled") {
+    if !matches!(
+        previous.status.as_str(),
+        "interrupted" | "failed" | "cancelled"
+    ) {
         return Err("Ce job n’est pas dans un état reprenable.".into());
     }
     let recipe_id = previous
@@ -204,10 +199,7 @@ pub fn save_watched_folder(
 }
 
 #[tauri::command]
-pub fn delete_watched_folder(
-    state: State<'_, AppState>,
-    watch_id: Uuid,
-) -> Result<(), String> {
+pub fn delete_watched_folder(state: State<'_, AppState>, watch_id: Uuid) -> Result<(), String> {
     let account_id = require_active_session(&state)?;
     state
         .storage
@@ -433,7 +425,10 @@ async fn execute_recipe_job(
         let inputs = workflow_step_inputs(step, &input_paths, &outputs_by_step);
         if inputs.is_empty() {
             job.status = "failed".into();
-            job.error = Some(format!("L’étape « {} » n’a aucune entrée exploitable.", step.id));
+            job.error = Some(format!(
+                "L’étape « {} » n’a aucune entrée exploitable.",
+                step.id
+            ));
             break;
         }
         let execution_inputs = inputs
@@ -633,8 +628,8 @@ fn scan_watch(watch: &WatchedFolderRecord) -> Result<Vec<WatchCandidate>, String
     let max_depth = if watch.recursive { 64 } else { 1 };
     let minimum_age = Duration::from_secs(watch.stability_seconds.max(1));
     let now = SystemTime::now();
-    let created_cutoff = SystemTime::UNIX_EPOCH
-        + Duration::from_secs(watch.created_at.timestamp().max(0) as u64);
+    let created_cutoff =
+        SystemTime::UNIX_EPOCH + Duration::from_secs(watch.created_at.timestamp().max(0) as u64);
     let allowed = watch
         .extensions
         .iter()

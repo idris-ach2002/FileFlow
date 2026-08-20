@@ -970,14 +970,37 @@ async fn execute_archive_package(
 ) -> Result<Option<PathBuf>, ExecutionError> {
     let target = request.target_format.as_deref().unwrap_or("zip");
     if target == "tar.zst" {
-        return execute_tar_compressed_archive(request, "zstd", "tar.zst", engines, scheduler, cancellation, resolver).await;
+        return execute_tar_compressed_archive(
+            request,
+            "zstd",
+            "tar.zst",
+            engines,
+            scheduler,
+            cancellation,
+            resolver,
+        )
+        .await;
     }
     if target == "tar.lz4" {
-        return execute_tar_compressed_archive(request, "lz4", "tar.lz4", engines, scheduler, cancellation, resolver).await;
+        return execute_tar_compressed_archive(
+            request,
+            "lz4",
+            "tar.lz4",
+            engines,
+            scheduler,
+            cancellation,
+            resolver,
+        )
+        .await;
     }
     let archive_engine = engines.get("archive")?;
-    let _lease = scheduler.acquire("archive", ResourceProfile::ARCHIVE, &cancellation).await?;
-    let first = request.inputs.first().ok_or_else(|| ExecutionError::InvalidInput("Aucun élément à compresser.".into()))?;
+    let _lease = scheduler
+        .acquire("archive", ResourceProfile::ARCHIVE, &cancellation)
+        .await?;
+    let first = request
+        .inputs
+        .first()
+        .ok_or_else(|| ExecutionError::InvalidInput("Aucun élément à compresser.".into()))?;
     let plan = resolver.plan(&OutputRequest {
         source: first.path.clone(),
         source_root: None,
@@ -988,24 +1011,49 @@ async fn execute_archive_package(
             ..request.output_policy.clone()
         },
     })?;
-    if plan.skipped { return Ok(Some(plan.final_path)); }
+    if plan.skipped {
+        return Ok(Some(plan.final_path));
+    }
     resolver.prepare(&plan).await?;
 
     let result = if matches!(target, "zip" | "7z" | "tar") {
-        let archive_type = match target { "zip" => "-tzip", "7z" => "-t7z", _ => "-ttar" };
-        let mut args = vec![OsString::from("a"), OsString::from(archive_type), plan.temporary_path.as_os_str().into()];
-        for input in &request.inputs { args.push(input.path.as_os_str().into()); }
+        let archive_type = match target {
+            "zip" => "-tzip",
+            "7z" => "-t7z",
+            _ => "-ttar",
+        };
+        let mut args = vec![
+            OsString::from("a"),
+            OsString::from(archive_type),
+            plan.temporary_path.as_os_str().into(),
+        ];
+        for input in &request.inputs {
+            args.push(input.path.as_os_str().into());
+        }
         run_process(archive_engine, &args, &cancellation).await
     } else {
         let compression_type = match target {
             "tar.gz" => "-tgzip",
             "tar.xz" => "-txz",
             "tar.bz2" => "-tbzip2",
-            _ => return Err(ExecutionError::InvalidTargetFormat { action: request.action_id.clone(), format: target.into() }),
+            _ => {
+                return Err(ExecutionError::InvalidTargetFormat {
+                    action: request.action_id.clone(),
+                    format: target.into(),
+                });
+            }
         };
-        let staging_tar = plan.destination_directory.join(format!(".fileflow-package-{}.tar", Uuid::new_v4().simple()));
-        let mut tar_args = vec![OsString::from("a"), OsString::from("-ttar"), staging_tar.as_os_str().into()];
-        for input in &request.inputs { tar_args.push(input.path.as_os_str().into()); }
+        let staging_tar = plan
+            .destination_directory
+            .join(format!(".fileflow-package-{}.tar", Uuid::new_v4().simple()));
+        let mut tar_args = vec![
+            OsString::from("a"),
+            OsString::from("-ttar"),
+            staging_tar.as_os_str().into(),
+        ];
+        for input in &request.inputs {
+            tar_args.push(input.path.as_os_str().into());
+        }
         run_process(archive_engine, &tar_args, &cancellation).await?;
         let compression = run_process(
             archive_engine,
@@ -1016,7 +1064,8 @@ async fn execute_archive_package(
                 staging_tar.as_os_str().into(),
             ],
             &cancellation,
-        ).await;
+        )
+        .await;
         let _ = tokio::fs::remove_file(&staging_tar).await;
         compression
     };
@@ -1517,7 +1566,8 @@ async fn run_imagemagick_action(
         }
         "image-crop-custom" => {
             let width = parameter_number(parameters, "width", 1200.0, 1.0, 20000.0).round() as u32;
-            let height = parameter_number(parameters, "height", 1200.0, 1.0, 20000.0).round() as u32;
+            let height =
+                parameter_number(parameters, "height", 1200.0, 1.0, 20000.0).round() as u32;
             let x = parameter_number(parameters, "x", 0.0, 0.0, 20000.0).round() as u32;
             let y = parameter_number(parameters, "y", 0.0, 0.0, 20000.0).round() as u32;
             args.extend([
@@ -1528,12 +1578,16 @@ async fn run_imagemagick_action(
         }
         "image-canvas" => {
             let width = parameter_number(parameters, "width", 1920.0, 1.0, 20000.0).round() as u32;
-            let height = parameter_number(parameters, "height", 1080.0, 1.0, 20000.0).round() as u32;
+            let height =
+                parameter_number(parameters, "height", 1080.0, 1.0, 20000.0).round() as u32;
             let color = parameter_string(parameters, "background", "white", 32);
             args.extend([
-                OsString::from("-background"), OsString::from(color),
-                OsString::from("-gravity"), OsString::from("center"),
-                OsString::from("-extent"), OsString::from(format!("{width}x{height}")),
+                OsString::from("-background"),
+                OsString::from(color),
+                OsString::from("-gravity"),
+                OsString::from("center"),
+                OsString::from("-extent"),
+                OsString::from(format!("{width}x{height}")),
             ]);
         }
         "image-auto-gamma" => args.push(OsString::from("-auto-gamma")),
@@ -1545,15 +1599,16 @@ async fn run_imagemagick_action(
                 OsString::from(format!("{black:.2}%x{white:.2}%")),
             ]);
         }
-        "image-colorspace-srgb" => args.extend([
-            OsString::from("-colorspace"),
-            OsString::from("sRGB"),
-        ]),
+        "image-colorspace-srgb" => {
+            args.extend([OsString::from("-colorspace"), OsString::from("sRGB")])
+        }
         "image-set-dpi" => {
             let dpi = parameter_number(parameters, "dpi", 300.0, 36.0, 2400.0).round() as u32;
             args.extend([
-                OsString::from("-units"), OsString::from("PixelsPerInch"),
-                OsString::from("-density"), OsString::from(dpi.to_string()),
+                OsString::from("-units"),
+                OsString::from("PixelsPerInch"),
+                OsString::from("-density"),
+                OsString::from(dpi.to_string()),
             ]);
         }
         "image-perspective" => {
@@ -1571,8 +1626,11 @@ async fn run_imagemagick_action(
                 "{x0},{y0} 0,0 {x1},{y1} {width},0 {x2},{y2} {width},{height} {x3},{y3} 0,{height}"
             );
             args.extend([
-                OsString::from("-virtual-pixel"), OsString::from("background"),
-                OsString::from("-distort"), OsString::from("Perspective"), OsString::from(mapping),
+                OsString::from("-virtual-pixel"),
+                OsString::from("background"),
+                OsString::from("-distort"),
+                OsString::from("Perspective"),
+                OsString::from(mapping),
                 OsString::from("+repage"),
             ]);
         }
@@ -3085,7 +3143,9 @@ fn normalize_target_format(
         "text-convert" => &["html", "md", "docx", "epub", "txt"],
         "ebook-convert" => &["html", "md", "docx", "txt", "epub"],
         "archive-create" => &["zip", "7z", "tar"],
-        "archive-package" => &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4"],
+        "archive-package" => &[
+            "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4",
+        ],
         _ => &[],
     };
     if !allowed.is_empty() && !allowed.contains(&normalized.as_str()) {
@@ -3206,7 +3266,12 @@ pub fn is_supported(action_id: &str) -> bool {
 fn is_collective(action_id: &str) -> bool {
     matches!(
         action_id,
-        "images-to-pdf" | "pdf-merge" | "archive-create" | "archive-package" | "tar-zstd-create" | "tar-lz4-create"
+        "images-to-pdf"
+            | "pdf-merge"
+            | "archive-create"
+            | "archive-package"
+            | "tar-zstd-create"
+            | "tar-lz4-create"
     )
 }
 

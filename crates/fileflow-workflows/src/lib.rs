@@ -83,9 +83,9 @@ impl WorkflowDefinition {
         for step in &self.steps {
             let id = step.id.trim();
             if id.is_empty()
-                || !id
-                    .chars()
-                    .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+                || !id.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+                })
             {
                 return Err(WorkflowError::InvalidId(step.id.clone()));
             }

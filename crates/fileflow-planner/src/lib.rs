@@ -1535,7 +1535,10 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
             true,
             &image_actions,
             &["png", "webp", "avif", "heic", "jxl", "tiff", "gif", "pdf"],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "png",
@@ -1545,7 +1548,10 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
             true,
             &image_actions,
             &["jpg", "webp", "avif", "heic", "jxl", "tiff", "gif", "pdf"],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "webp",
@@ -1555,7 +1561,10 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
             true,
             &image_actions,
             &["jpg", "png", "avif", "tiff", "gif", "pdf"],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "heic",
@@ -1565,7 +1574,10 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
             true,
             &image_actions,
             &["jpg", "png", "webp", "avif", "tiff", "pdf"],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "avif",
@@ -1575,7 +1587,10 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
             true,
             &image_actions,
             &["jpg", "png", "webp", "tiff", "pdf"],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "tiff",
@@ -1585,7 +1600,10 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
             true,
             &image_actions,
             &["jpg", "png", "webp", "avif", "pdf"],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "gif",
@@ -1595,7 +1613,10 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
             true,
             &image_actions,
             &["jpg", "png", "webp", "avif", "mp4", "pdf"],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "jxl",
@@ -1605,7 +1626,10 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
             true,
             &image_actions,
             &["jpg", "png", "webp", "avif", "tiff", "pdf"],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "bitmap",
@@ -1615,7 +1639,10 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
             true,
             &image_actions,
             &["jpg", "png", "webp", "avif", "tiff", "pdf"],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "vector",
@@ -1623,9 +1650,20 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
             Image,
             &["svg", "eps"],
             true,
-            &["image-convert", "image-batch-convert", "extract-metadata", "strip-metadata", "zstd-compress", "lz4-compress", "archive-package"],
+            &[
+                "image-convert",
+                "image-batch-convert",
+                "extract-metadata",
+                "strip-metadata",
+                "zstd-compress",
+                "lz4-compress",
+                "archive-package",
+            ],
             &["png", "jpg", "webp", "avif", "tiff", "pdf"],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "photoshop",
@@ -1633,9 +1671,22 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
             Image,
             &["psd", "psb"],
             true,
-            &["image-convert", "image-batch-convert", "image-flatten", "image-resize-exact", "extract-metadata", "strip-metadata", "zstd-compress", "lz4-compress", "archive-package"],
+            &[
+                "image-convert",
+                "image-batch-convert",
+                "image-flatten",
+                "image-resize-exact",
+                "extract-metadata",
+                "strip-metadata",
+                "zstd-compress",
+                "lz4-compress",
+                "archive-package",
+            ],
             &["png", "jpg", "webp", "tiff", "pdf"],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "raw",
@@ -1657,7 +1708,10 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
                 "archive-package",
             ],
             &["jpg", "png", "tiff", "webp", "avif"],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "pdf",
@@ -1667,7 +1721,10 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
             true,
             &pdf_actions,
             &["png", "txt"],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "docx",
@@ -1683,7 +1740,10 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
                 "archive-package",
             ],
             &["pdf"],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "xlsx",
@@ -1699,7 +1759,10 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
                 "archive-package",
             ],
             &["pdf"],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "pptx",
@@ -1715,7 +1778,10 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
                 "archive-package",
             ],
             &["pdf"],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "markup",
@@ -1731,17 +1797,37 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
                 "archive-package",
             ],
             &["pdf", "html", "md", "docx", "epub", "txt"],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "structured-data",
             "JSON / XML / YAML / TOML / données",
             Text,
-            &["json", "xml", "yaml", "yml", "toml", "jsonl", "ndjson", "sql", "ini", "cfg", "conf", "properties", "log"],
+            &[
+                "json",
+                "xml",
+                "yaml",
+                "yml",
+                "toml",
+                "jsonl",
+                "ndjson",
+                "sql",
+                "ini",
+                "cfg",
+                "conf",
+                "properties",
+                "log",
+            ],
             true,
             &["zstd-compress", "lz4-compress", "archive-package"],
             &[],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "epub",
@@ -1749,9 +1835,17 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
             Ebook,
             &["epub", "fb2"],
             false,
-            &["ebook-convert", "zstd-compress", "lz4-compress", "archive-package"],
+            &[
+                "ebook-convert",
+                "zstd-compress",
+                "lz4-compress",
+                "archive-package",
+            ],
             &["html", "md", "docx", "txt", "epub"],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "amazon-ebook",
@@ -1761,7 +1855,10 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
             false,
             &["zstd-compress", "lz4-compress", "archive-package"],
             &[],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "comic-book",
@@ -1771,7 +1868,10 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
             false,
             &["zstd-compress", "lz4-compress", "archive-package"],
             &[],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "djvu",
@@ -1781,7 +1881,10 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
             false,
             &["zstd-compress", "lz4-compress", "archive-package"],
             &[],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "audio",
@@ -1791,7 +1894,10 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
             false,
             &audio_actions,
             &["mp3", "m4a", "wav", "flac", "ogg", "opus"],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "video",
@@ -1803,7 +1909,10 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
             false,
             &video_actions,
             &["mp4", "webm", "mkv", "mov", "gif", "m4a", "mp3"],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst", "lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4", "zst",
+                "lz4",
+            ],
         ),
         format_profile(
             "zstd",
@@ -1829,10 +1938,15 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
             "archive",
             "Archives et conteneurs",
             Archive,
-            &["zip", "7z", "rar", "tar", "gz", "tgz", "bz2", "tbz", "tbz2", "xz", "txz", "cab", "arj", "cpio", "iso"],
+            &[
+                "zip", "7z", "rar", "tar", "gz", "tgz", "bz2", "tbz", "tbz2", "xz", "txz", "cab",
+                "arj", "cpio", "iso",
+            ],
             false,
             &["archive-extract", "archive-package"],
-            &["zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4"],
+            &[
+                "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4",
+            ],
             &[],
         ),
     ]
@@ -1850,22 +1964,55 @@ fn format_profile(
     convert_to: &[&str],
     compress_to: &[&str],
 ) -> FormatCapabilityProfile {
-    let metadata = actions.iter().any(|action| matches!(*action, "extract-metadata" | "strip-metadata"));
+    let metadata = actions
+        .iter()
+        .any(|action| matches!(*action, "extract-metadata" | "strip-metadata"));
     let thumbnail = preview || matches!(family, FormatFamily::Pdf | FormatFamily::Video);
-    let extractable = actions.iter().any(|action| matches!(*action, "archive-extract" | "pdf-extract-text"));
+    let extractable = actions
+        .iter()
+        .any(|action| matches!(*action, "archive-extract" | "pdf-extract-text"));
     let streamable = matches!(family, FormatFamily::Audio | FormatFamily::Video);
     let mut capabilities = vec!["inspect".to_owned()];
-    if preview { capabilities.push("preview".into()); }
-    if !convert_to.is_empty() { capabilities.push("convert".into()); }
-    if !compress_to.is_empty() { capabilities.push("compress".into()); }
-    if metadata { capabilities.push("metadata".into()); }
-    if thumbnail { capabilities.push("thumbnail".into()); }
-    if extractable { capabilities.push("extract".into()); }
-    if streamable { capabilities.push("stream".into()); }
-    if matches!(family, FormatFamily::Image) { capabilities.extend(["editPixels".into(), "batch".into(), "privacy".into()]); }
-    if matches!(family, FormatFamily::Pdf) { capabilities.extend(["pages".into(), "ocr".into(), "repair".into()]); }
-    if matches!(family, FormatFamily::Audio | FormatFamily::Video) { capabilities.push("transcode".into()); }
-    if matches!(family, FormatFamily::Document | FormatFamily::Spreadsheet | FormatFamily::Presentation | FormatFamily::Text | FormatFamily::Ebook) { capabilities.push("documentTransform".into()); }
+    if preview {
+        capabilities.push("preview".into());
+    }
+    if !convert_to.is_empty() {
+        capabilities.push("convert".into());
+    }
+    if !compress_to.is_empty() {
+        capabilities.push("compress".into());
+    }
+    if metadata {
+        capabilities.push("metadata".into());
+    }
+    if thumbnail {
+        capabilities.push("thumbnail".into());
+    }
+    if extractable {
+        capabilities.push("extract".into());
+    }
+    if streamable {
+        capabilities.push("stream".into());
+    }
+    if matches!(family, FormatFamily::Image) {
+        capabilities.extend(["editPixels".into(), "batch".into(), "privacy".into()]);
+    }
+    if matches!(family, FormatFamily::Pdf) {
+        capabilities.extend(["pages".into(), "ocr".into(), "repair".into()]);
+    }
+    if matches!(family, FormatFamily::Audio | FormatFamily::Video) {
+        capabilities.push("transcode".into());
+    }
+    if matches!(
+        family,
+        FormatFamily::Document
+            | FormatFamily::Spreadsheet
+            | FormatFamily::Presentation
+            | FormatFamily::Text
+            | FormatFamily::Ebook
+    ) {
+        capabilities.push("documentTransform".into());
+    }
     FormatCapabilityProfile {
         id: id.into(),
         label: label.into(),
@@ -1873,7 +2020,10 @@ fn format_profile(
         extensions: extensions.iter().map(|value| (*value).into()).collect(),
         preview,
         readable: true,
-        writable: !matches!(id, "raw" | "amazon-ebook" | "comic-book" | "djvu" | "structured-data"),
+        writable: !matches!(
+            id,
+            "raw" | "amazon-ebook" | "comic-book" | "djvu" | "structured-data"
+        ),
         metadata,
         thumbnail,
         extractable,
