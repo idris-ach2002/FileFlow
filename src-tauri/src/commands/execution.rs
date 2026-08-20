@@ -1,4 +1,4 @@
-use crate::{AppState, RecentOutputs};
+use crate::{AppState, RecentOutputs, commands::account::require_active_session};
 use chrono::Utc;
 use fileflow_domain::{AssetId, JobId, OutputPolicy, WorkspaceId};
 use fileflow_executor::{
@@ -37,6 +37,7 @@ pub async fn execute_action(
     request: ExecuteWorkspaceAction,
     on_event: Channel<ExecutionEvent>,
 ) -> Result<ExecutionSummary, String> {
+    let account_id = require_active_session(&state)?;
     if !fileflow_executor::is_supported(&request.action_id) {
         return Err(format!(
             "L’action « {} » n’est pas encore reliée à un exécuteur local.",
@@ -113,8 +114,8 @@ pub async fn execute_action(
         }
     });
 
-    let execution = state
-        .executor
+    let executor = { state.runtime.read().executor.clone() };
+    let execution = executor
         .execute(
             job_id,
             ExecutionRequest {
@@ -134,12 +135,15 @@ pub async fn execute_action(
 
     let summary = execution.map_err(|error| error.to_string())?;
     remember_outputs(&state, &summary);
-    record_history(state.storage.clone(), &summary, input_bytes).await;
+    record_history(state.storage.clone(), account_id, &summary, input_bytes).await;
     Ok(summary)
 }
 
 #[tauri::command]
 pub fn cancel_job(state: State<'_, AppState>, job_id: JobId) -> bool {
+    if require_active_session(&state).is_err() {
+        return false;
+    }
     state.jobs.get(&job_id).is_some_and(|entry| {
         entry.value().cancel();
         true
@@ -197,6 +201,7 @@ pub fn open_job_output(
     job_id: JobId,
     index: usize,
 ) -> Result<(), String> {
+    require_active_session(&state)?;
     let path = registered_output(&state, job_id, index)?;
     app.opener()
         .open_path(path.to_string_lossy().into_owned(), None::<&str>)
@@ -210,6 +215,7 @@ pub fn reveal_job_output(
     job_id: JobId,
     index: usize,
 ) -> Result<(), String> {
+    require_active_session(&state)?;
     let path = registered_output(&state, job_id, index)?;
     app.opener()
         .reveal_item_in_dir(&path)
@@ -223,6 +229,7 @@ pub async fn save_job_output_copy(
     job_id: JobId,
     index: usize,
 ) -> Result<Option<PathBuf>, String> {
+    require_active_session(&state)?;
     let source = registered_output(&state, job_id, index)?;
     let metadata = std::fs::metadata(&source).map_err(|error| error.to_string())?;
     let destination = if metadata.is_dir() {
@@ -330,6 +337,7 @@ fn copy_output(source: &Path, destination: &Path) -> Result<(), String> {
 
 async fn record_history(
     storage: Arc<fileflow_storage::Storage>,
+    account_id: Uuid,
     summary: &ExecutionSummary,
     input_bytes: u64,
 ) {
@@ -353,7 +361,7 @@ async fn record_history(
         created_at: Utc::now(),
     };
     let _ = tokio::task::spawn_blocking(move || {
-        if let Err(error) = storage.record_history(&entry) {
+        if let Err(error) = storage.record_history_for(account_id, &entry) {
             tracing::warn!(%error, "could not persist operation history");
         }
     })

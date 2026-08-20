@@ -16,9 +16,9 @@ The repository already contains a working native desktop foundation, not only UI
 - resource-aware scheduler with CPU/RAM/I/O and per-engine quotas;
 - cancellable external processes invoked directly without a shell;
 - safe temporary outputs, conflict handling and atomic finalisation;
-- local SQLite history, favourites and recipes;
+- local SQLite accounts/profiles, onboarding, preferences, history, favourites and recipes;
 - exact duplicate confirmation using staged SHA-256 hashing;
-- responsive Angular desktop UI, command palette, dark/light themes and native tray navigation;
+- human-first guided onboarding, searchable help, responsive Angular desktop UI, command palette, dark/light themes, zoom/accessibility preferences and native tray navigation;
 - secure post-conversion actions: open, reveal in Finder/file manager, save a copy and re-analyse extracted folders.
 
 ### Locally executable actions
@@ -35,9 +35,17 @@ The current runtime wires these actions to real local engines:
 - archive inspection by file family, archive creation and guarded extraction;
 - media compatibility conversion and compression;
 - audio conversion and audio extraction;
-- video -> GIF.
+- video -> GIF;
+- Zstandard and LZ4 lossless compression/decompression, including one-click TAR.ZST/TAR.LZ4 packaging for lots/folders;
+- additional video format conversion and light document/text conversion via Pandoc.
 
 Additional actions are already represented by the capability planner and can be connected without changing the UI/domain architecture.
+
+## Human-first first launch
+
+The first launch intentionally avoids technical vocabulary. FileFlow guides the user through local account creation/login, a default FileFlow result folder, a few safety/comfort preferences and a short interactive explanation. Guided mode then presents goals such as **PDF & documents**, **Photos & images**, **Compress**, **Open & extract**, **Audio & video** and **Organize & clean** instead of asking the user to choose codecs or engines.
+
+The local account is device-local in the current architecture: passwords are derived locally, sessions are opaque and held in memory, and credentials are not persisted in browser storage. See [`docs/IDENTITY_SECURITY.md`](docs/IDENTITY_SECURITY.md) for the security boundary and future connected-account design. See [`docs/FORMAT_SUPPORT.md`](docs/FORMAT_SUPPORT.md) for the recognized-vs-executable format matrix.
 
 ## Architecture
 
@@ -47,7 +55,7 @@ Additional actions are already represented by the capability planner and can be 
 - **Tokio**: async I/O, child-process orchestration, bounded queues and cancellation.
 - **Bounded CPU workers**: hashing/analysis work is deliberately isolated from the async runtime.
 - **SQLite / rusqlite**: settings, favourites, recipes and history.
-- **External engines**: FFmpeg, libvips, ImageMagick, img2pdf, qpdf, Poppler, Ghostscript, LibreOffice, OCRmyPDF/Tesseract, Pandoc, 7-Zip and ExifTool.
+- **External engines**: FFmpeg, libvips, ImageMagick, img2pdf, qpdf, Poppler, Ghostscript, LibreOffice, OCRmyPDF/Tesseract, Pandoc, 7-Zip, Zstandard, LZ4 and ExifTool.
 
 External engines are discovered at runtime. Missing engines disable only their related capabilities; they do not prevent FileFlow from starting.
 

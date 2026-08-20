@@ -148,6 +148,8 @@ pub enum ExecutionError {
     Destination(String),
     #[error("invalid output format for {action}: {format}")]
     InvalidTargetFormat { action: String, format: String },
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
     #[error("archive rejected by safety checks: {0}")]
     UnsafeArchive(String),
 }
@@ -618,6 +620,32 @@ async fn execute_item_inner(
         .await
         .map(|(path, skipped)| (Some(path), skipped));
     }
+    if action_id == "zstd-decompress" {
+        return execute_zstd_decompress(
+            input,
+            source_root,
+            output_policy,
+            engines,
+            scheduler,
+            cancellation,
+            resolver,
+        )
+        .await
+        .map(|(path, skipped)| (Some(path), skipped));
+    }
+    if action_id == "lz4-decompress" {
+        return execute_lz4_decompress(
+            input,
+            source_root,
+            output_policy,
+            engines,
+            scheduler,
+            cancellation,
+            resolver,
+        )
+        .await
+        .map(|(path, skipped)| (Some(path), skipped));
+    }
     if action_id == "pdf-split" {
         return execute_pdf_split(
             input,
@@ -641,6 +669,9 @@ async fn execute_item_inner(
         )
         .await
         .map(|(path, skipped)| (Some(path), skipped));
+    }
+    if action_id == "ebook-convert" {
+        validate_pandoc_ebook_input(input)?;
     }
 
     let (engine_id, extension, suffix) = item_output(action_id, input, target_format)?;
@@ -709,8 +740,8 @@ async fn execute_item_inner(
         }
         "pdf-ocr" => run_pdf_ocr(engine, input, &plan.temporary_path, &cancellation).await,
         "ocr-image" => run_tesseract(engine, input, &plan.temporary_path, &cancellation).await,
-        "media-compatible" | "media-compress" | "audio-convert" | "extract-audio"
-        | "video-to-gif" => {
+        "media-compatible" | "media-compress" | "video-convert" | "audio-convert"
+        | "extract-audio" | "video-to-gif" => {
             run_ffmpeg(
                 engine,
                 action_id,
@@ -721,6 +752,23 @@ async fn execute_item_inner(
                 &cancellation,
             )
             .await
+        }
+        "zstd-compress" => {
+            run_zstd_compress(
+                engine,
+                input,
+                &plan.temporary_path,
+                quality,
+                engine_threads,
+                &cancellation,
+            )
+            .await
+        }
+        "lz4-compress" => {
+            run_lz4_compress(engine, input, &plan.temporary_path, quality, &cancellation).await
+        }
+        "text-convert" | "ebook-convert" => {
+            run_pandoc(engine, input, &plan.temporary_path, &cancellation).await
         }
         _ => Err(ExecutionError::UnsupportedAction(action_id.into())),
     };
@@ -811,6 +859,30 @@ async fn execute_collective_action(
             resolver.finalize(&plan).await?;
             Ok(Some(plan.final_path))
         }
+        "tar-zstd-create" => {
+            execute_tar_compressed_archive(
+                request,
+                "zstd",
+                "tar.zst",
+                engines,
+                scheduler,
+                cancellation,
+                resolver,
+            )
+            .await
+        }
+        "tar-lz4-create" => {
+            execute_tar_compressed_archive(
+                request,
+                "lz4",
+                "tar.lz4",
+                engines,
+                scheduler,
+                cancellation,
+                resolver,
+            )
+            .await
+        }
         "archive-create" => {
             let engine = engines.get("archive")?;
             let _lease = scheduler
@@ -842,6 +914,105 @@ async fn execute_collective_action(
         }
         _ => Err(ExecutionError::UnsupportedAction(request.action_id.clone())),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_tar_compressed_archive(
+    request: &ExecutionRequest,
+    compressor_id: &str,
+    output_extension: &str,
+    engines: &EnginePaths,
+    scheduler: Arc<ResourceScheduler>,
+    cancellation: CancellationToken,
+    resolver: OutputResolver,
+) -> Result<Option<PathBuf>, ExecutionError> {
+    let archive_engine = engines.get("archive")?;
+    let compressor = engines.get(compressor_id)?;
+    let first = request
+        .inputs
+        .first()
+        .ok_or_else(|| ExecutionError::InvalidInput("Aucun élément à compresser.".into()))?;
+    let plan = resolver.plan(&OutputRequest {
+        source: first.path.clone(),
+        source_root: None,
+        desired_extension: Some(output_extension.into()),
+        operation_suffix: Some("archive".into()),
+        policy: fileflow_domain::OutputPolicy {
+            naming: fileflow_domain::NamingStrategy::OperationSuffix,
+            ..request.output_policy.clone()
+        },
+    })?;
+    if plan.skipped {
+        return Ok(Some(plan.final_path));
+    }
+    resolver.prepare(&plan).await?;
+
+    let staging_tar = plan
+        .destination_directory
+        .join(format!(".fileflow-stage-{}.tar", Uuid::new_v4().simple()));
+
+    {
+        let _archive_lease = scheduler
+            .acquire("archive", ResourceProfile::ARCHIVE, &cancellation)
+            .await?;
+        let mut args = vec![
+            OsString::from("a"),
+            OsString::from("-ttar"),
+            staging_tar.as_os_str().into(),
+        ];
+        for input in &request.inputs {
+            args.push(input.path.as_os_str().into());
+        }
+        if let Err(error) = run_process(archive_engine, &args, &cancellation).await {
+            let _ = tokio::fs::remove_file(&staging_tar).await;
+            resolver.cleanup(&plan).await;
+            return Err(error);
+        }
+    }
+
+    let compression_lease = match scheduler
+        .acquire(compressor_id, ResourceProfile::ARCHIVE, &cancellation)
+        .await
+    {
+        Ok(lease) => lease,
+        Err(error) => {
+            let _ = tokio::fs::remove_file(&staging_tar).await;
+            resolver.cleanup(&plan).await;
+            return Err(error.into());
+        }
+    };
+    let compression_result = {
+        let _compression_lease = compression_lease;
+        let threads = scheduler.budget().cpu_tokens.max(1);
+        if compressor_id == "zstd" {
+            run_zstd_compress(
+                compressor,
+                &staging_tar,
+                &plan.temporary_path,
+                request.quality.as_deref(),
+                threads,
+                &cancellation,
+            )
+            .await
+        } else {
+            run_lz4_compress(
+                compressor,
+                &staging_tar,
+                &plan.temporary_path,
+                request.quality.as_deref(),
+                &cancellation,
+            )
+            .await
+        }
+    };
+
+    let _ = tokio::fs::remove_file(&staging_tar).await;
+    if let Err(error) = compression_result {
+        resolver.cleanup(&plan).await;
+        return Err(error);
+    }
+    resolver.finalize(&plan).await?;
+    Ok(Some(plan.final_path))
 }
 
 fn item_output<'a>(
@@ -894,6 +1065,18 @@ fn item_output<'a>(
             Some("audio"),
         ),
         "video-to-gif" => ("ffmpeg", Some("gif"), Some("animation")),
+        "video-convert" => (
+            "ffmpeg",
+            Some(target_format.unwrap_or("mp4")),
+            Some("converti"),
+        ),
+        "zstd-compress" => ("zstd", Some("zst"), Some("compresse")),
+        "lz4-compress" => ("lz4", Some("lz4"), Some("compresse")),
+        "text-convert" | "ebook-convert" => (
+            "pandoc",
+            Some(target_format.unwrap_or("html")),
+            Some("converti"),
+        ),
         _ => return Err(ExecutionError::UnsupportedAction(action_id.into())),
     })
 }
@@ -1174,6 +1357,50 @@ async fn run_ffmpeg(
                 ]);
             }
         }
+        "video-convert" => {
+            let extension = output
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("mp4")
+                .to_ascii_lowercase();
+            let crf = if quality == Some("small") {
+                "30"
+            } else if quality == Some("high") {
+                "20"
+            } else {
+                "24"
+            };
+            if extension == "webm" {
+                args.extend([
+                    OsString::from("-c:v"),
+                    OsString::from("libvpx-vp9"),
+                    OsString::from("-crf"),
+                    OsString::from(crf),
+                    OsString::from("-b:v"),
+                    OsString::from("0"),
+                    OsString::from("-c:a"),
+                    OsString::from("libopus"),
+                    OsString::from("-b:a"),
+                    OsString::from("128k"),
+                ]);
+            } else {
+                args.extend([
+                    OsString::from("-c:v"),
+                    OsString::from("libx264"),
+                    OsString::from("-preset"),
+                    OsString::from("medium"),
+                    OsString::from("-crf"),
+                    OsString::from(crf),
+                    OsString::from("-c:a"),
+                    OsString::from("aac"),
+                    OsString::from("-b:a"),
+                    OsString::from("160k"),
+                ]);
+                if matches!(extension.as_str(), "mp4" | "mov") {
+                    args.extend([OsString::from("-movflags"), OsString::from("+faststart")]);
+                }
+            }
+        }
         "media-compress" if source_audio => {
             args.extend([OsString::from("-vn"), OsString::from("-b:a")]);
             args.push(OsString::from(if quality == Some("small") {
@@ -1255,6 +1482,254 @@ fn push_audio_codec(args: &mut Vec<OsString>, output: &Path) {
             OsString::from("192k"),
         ]),
     }
+}
+
+async fn run_zstd_compress(
+    engine: &Path,
+    input: &Path,
+    output: &Path,
+    quality: Option<&str>,
+    thread_count: usize,
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    if !input.is_file() {
+        return Err(ExecutionError::InvalidInput(
+            "Zstandard compresse un fichier à la fois. Pour un dossier, créez d’abord une archive."
+                .into(),
+        ));
+    }
+    let level = match quality {
+        Some("small") => "-15",
+        Some("high") => "-1",
+        _ => "-3",
+    };
+    run_process(
+        engine,
+        &[
+            OsString::from("-q"),
+            OsString::from("-f"),
+            OsString::from(format!("-T{}", thread_count.max(1))),
+            OsString::from(level),
+            input.as_os_str().into(),
+            OsString::from("-o"),
+            output.as_os_str().into(),
+        ],
+        cancellation,
+    )
+    .await
+}
+
+fn validate_pandoc_ebook_input(input: &Path) -> Result<(), ExecutionError> {
+    let extension = input
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if matches!(extension.as_str(), "epub" | "fb2") {
+        return Ok(());
+    }
+
+    Err(ExecutionError::InvalidInput(format!(
+        "Le format .{} est reconnu comme livre numérique, mais la conversion directe est actuellement limitée aux fichiers EPUB et FB2.",
+        if extension.is_empty() {
+            "?"
+        } else {
+            &extension
+        }
+    )))
+}
+
+async fn run_pandoc(
+    engine: &Path,
+    input: &Path,
+    output: &Path,
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    run_process(
+        engine,
+        &[
+            input.as_os_str().into(),
+            OsString::from("--sandbox"),
+            OsString::from("--standalone"),
+            OsString::from("--output"),
+            output.as_os_str().into(),
+        ],
+        cancellation,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_zstd_decompress(
+    input: &Path,
+    source_root: Option<&Path>,
+    policy: &OutputPolicy,
+    engines: &EnginePaths,
+    scheduler: Arc<ResourceScheduler>,
+    cancellation: CancellationToken,
+    resolver: OutputResolver,
+) -> Result<(PathBuf, bool), ExecutionError> {
+    let extension = input
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if !matches!(extension.as_str(), "zst" | "zstd" | "tzst") {
+        return Err(ExecutionError::InvalidInput(
+            "Cette action attend un fichier .zst, .zstd ou .tzst.".into(),
+        ));
+    }
+    let engine = engines.get("zstd")?;
+    let profile = ResourceProfile::ARCHIVE;
+    let _lease = scheduler.acquire("zstd", profile, &cancellation).await?;
+    let preferred_name = zstd_decompressed_name(input);
+    let request = OutputRequest {
+        source: input.to_path_buf(),
+        source_root: source_root.map(Path::to_path_buf),
+        desired_extension: None,
+        operation_suffix: Some("decompresse".into()),
+        policy: policy.clone(),
+    };
+    let plan = resolver.plan_named(&request, &preferred_name)?;
+    if plan.skipped {
+        return Ok((plan.final_path, true));
+    }
+    resolver.prepare(&plan).await?;
+    let result = run_process(
+        engine,
+        &[
+            OsString::from("-q"),
+            OsString::from("-f"),
+            OsString::from("-d"),
+            input.as_os_str().into(),
+            OsString::from("-o"),
+            plan.temporary_path.as_os_str().into(),
+        ],
+        &cancellation,
+    )
+    .await;
+    if let Err(error) = result {
+        resolver.cleanup(&plan).await;
+        return Err(error);
+    }
+    resolver.finalize(&plan).await?;
+    Ok((plan.final_path, false))
+}
+
+fn zstd_decompressed_name(input: &Path) -> String {
+    let extension = input
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let stem = input
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("decompresse");
+    if extension == "tzst" {
+        format!("{stem}.tar")
+    } else {
+        stem.to_owned()
+    }
+}
+
+async fn run_lz4_compress(
+    engine: &Path,
+    input: &Path,
+    output: &Path,
+    quality: Option<&str>,
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    if !input.is_file() {
+        return Err(ExecutionError::InvalidInput(
+            "LZ4 compresse un fichier à la fois. Pour un dossier, créez d’abord une archive."
+                .into(),
+        ));
+    }
+    let level = match quality {
+        Some("small") => "-9",
+        _ => "-1",
+    };
+    run_process(
+        engine,
+        &[
+            OsString::from("-q"),
+            OsString::from("-f"),
+            OsString::from("-z"),
+            OsString::from(level),
+            input.as_os_str().into(),
+            output.as_os_str().into(),
+        ],
+        cancellation,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_lz4_decompress(
+    input: &Path,
+    source_root: Option<&Path>,
+    policy: &OutputPolicy,
+    engines: &EnginePaths,
+    scheduler: Arc<ResourceScheduler>,
+    cancellation: CancellationToken,
+    resolver: OutputResolver,
+) -> Result<(PathBuf, bool), ExecutionError> {
+    let extension = input
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if extension != "lz4" {
+        return Err(ExecutionError::InvalidInput(
+            "Cette action attend un fichier .lz4.".into(),
+        ));
+    }
+    let engine = engines.get("lz4")?;
+    let _lease = scheduler
+        .acquire("lz4", ResourceProfile::ARCHIVE, &cancellation)
+        .await?;
+    let preferred_name = lz4_decompressed_name(input);
+    let request = OutputRequest {
+        source: input.to_path_buf(),
+        source_root: source_root.map(Path::to_path_buf),
+        desired_extension: None,
+        operation_suffix: Some("decompresse".into()),
+        policy: policy.clone(),
+    };
+    let plan = resolver.plan_named(&request, &preferred_name)?;
+    if plan.skipped {
+        return Ok((plan.final_path, true));
+    }
+    resolver.prepare(&plan).await?;
+    let result = run_process(
+        engine,
+        &[
+            OsString::from("-q"),
+            OsString::from("-f"),
+            OsString::from("-d"),
+            input.as_os_str().into(),
+            plan.temporary_path.as_os_str().into(),
+        ],
+        &cancellation,
+    )
+    .await;
+    if let Err(error) = result {
+        resolver.cleanup(&plan).await;
+        return Err(error);
+    }
+    resolver.finalize(&plan).await?;
+    Ok((plan.final_path, false))
+}
+
+fn lz4_decompressed_name(input: &Path) -> String {
+    input
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("decompresse")
+        .to_owned()
 }
 
 async fn execute_archive_extract(
@@ -1884,8 +2359,9 @@ fn profile_for(engine: &str) -> ResourceProfile {
         "vips" => ResourceProfile::IMAGE,
         "office" => ResourceProfile::OFFICE,
         "ocr" | "tesseract" => ResourceProfile::OCR,
-        "archive" => ResourceProfile::ARCHIVE,
+        "archive" | "zstd" | "lz4" => ResourceProfile::ARCHIVE,
         "qpdf" | "ghostscript" | "poppler" => ResourceProfile::PDF,
+        "pandoc" => ResourceProfile::LIGHT,
         _ => ResourceProfile::LIGHT,
     }
 }
@@ -1894,7 +2370,23 @@ fn is_audio_extension(extension: Option<&str>) -> bool {
     extension.is_some_and(|extension| {
         matches!(
             extension.to_ascii_lowercase().as_str(),
-            "mp3" | "wav" | "aac" | "m4a" | "flac" | "ogg" | "opus" | "wma" | "aiff" | "aif"
+            "mp3"
+                | "wav"
+                | "aac"
+                | "m4a"
+                | "flac"
+                | "ogg"
+                | "opus"
+                | "wma"
+                | "aiff"
+                | "aif"
+                | "alac"
+                | "ape"
+                | "ac3"
+                | "eac3"
+                | "ec3"
+                | "dts"
+                | "amr"
         )
     })
 }
@@ -1909,9 +2401,13 @@ fn normalize_target_format(
     let normalized = format.trim().trim_start_matches('.').to_ascii_lowercase();
     let allowed: &[&str] = match action_id {
         "image-convert" | "image-batch-convert" | "image-optimize" | "image-resize" => &[
-            "jpg", "jpeg", "png", "webp", "avif", "heic", "heif", "tif", "tiff", "bmp", "gif",
+            "jpg", "jpeg", "png", "webp", "avif", "heic", "heif", "jxl", "tif", "tiff", "bmp",
+            "gif",
         ],
         "audio-convert" | "extract-audio" => &["mp3", "m4a", "aac", "wav", "flac", "ogg", "opus"],
+        "video-convert" => &["mp4", "webm", "mkv", "mov"],
+        "text-convert" => &["html", "md", "docx", "epub", "txt"],
+        "ebook-convert" => &["html", "md", "docx", "txt", "epub"],
         "archive-create" => &["zip", "7z", "tar"],
         _ => &[],
     };
@@ -1958,11 +2454,20 @@ pub const EXECUTABLE_ACTIONS: &[&str] = &[
     "ocr-image",
     "archive-extract",
     "archive-create",
+    "tar-zstd-create",
+    "tar-lz4-create",
+    "zstd-compress",
+    "zstd-decompress",
+    "lz4-compress",
+    "lz4-decompress",
     "media-compatible",
+    "video-convert",
     "media-compress",
     "audio-convert",
     "extract-audio",
     "video-to-gif",
+    "text-convert",
+    "ebook-convert",
 ];
 
 pub fn executable_action_ids() -> Vec<&'static str> {
@@ -1974,7 +2479,10 @@ pub fn is_supported(action_id: &str) -> bool {
 }
 
 fn is_collective(action_id: &str) -> bool {
-    matches!(action_id, "images-to-pdf" | "pdf-merge" | "archive-create")
+    matches!(
+        action_id,
+        "images-to-pdf" | "pdf-merge" | "archive-create" | "tar-zstd-create" | "tar-lz4-create"
+    )
 }
 
 async fn send(
@@ -2028,6 +2536,10 @@ mod tests {
     fn executor_capability_list_matches_runtime_guard() {
         assert!(is_supported("pdf-merge"));
         assert!(is_supported("video-to-gif"));
+        assert!(is_supported("zstd-compress"));
+        assert!(is_supported("lz4-decompress"));
+        assert!(is_supported("tar-zstd-create"));
+        assert!(is_supported("tar-lz4-create"));
         assert!(!is_supported("duplicate-scan"));
         assert!(
             executable_action_ids()
@@ -2054,6 +2566,36 @@ mod tests {
                 .iter()
                 .any(|entry| entry.family == FormatFamily::Pdf && entry.count == 1)
         );
+    }
+
+    #[test]
+    fn zstd_output_name_strips_compression_suffix() {
+        assert_eq!(
+            zstd_decompressed_name(Path::new("backup.tar.zst")),
+            "backup.tar"
+        );
+        assert_eq!(
+            zstd_decompressed_name(Path::new("backup.tzst")),
+            "backup.tar"
+        );
+        assert_eq!(zstd_decompressed_name(Path::new("data.zstd")), "data");
+    }
+
+    #[test]
+    fn lz4_output_name_strips_compression_suffix() {
+        assert_eq!(
+            lz4_decompressed_name(Path::new("dataset.csv.lz4")),
+            "dataset.csv"
+        );
+        assert_eq!(lz4_decompressed_name(Path::new("backup.lz4")), "backup");
+    }
+
+    #[test]
+    fn ebook_conversion_accepts_only_pandoc_readable_inputs() {
+        assert!(validate_pandoc_ebook_input(Path::new("book.epub")).is_ok());
+        assert!(validate_pandoc_ebook_input(Path::new("book.fb2")).is_ok());
+        assert!(validate_pandoc_ebook_input(Path::new("book.mobi")).is_err());
+        assert!(validate_pandoc_ebook_input(Path::new("comic.cbr")).is_err());
     }
 
     #[test]

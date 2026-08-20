@@ -577,11 +577,119 @@ fn default_actions() -> Vec<ActionDescriptor> {
             false,
         ),
         action(
+            "tar-zstd-create",
+            "Dossier ou lot → TAR.ZST",
+            "Regrouper plusieurs éléments puis les compresser avec Zstandard en une seule action.",
+            OperationCategory::Archive,
+            &[],
+            &["archive", "zstd"],
+            Some("tar.zst"),
+            true,
+            false,
+            true,
+        ),
+        action(
+            "tar-lz4-create",
+            "Dossier ou lot → TAR.LZ4",
+            "Regrouper plusieurs éléments puis privilégier une compression/décompression extrêmement rapide avec LZ4.",
+            OperationCategory::Archive,
+            &[],
+            &["archive", "lz4"],
+            Some("tar.lz4"),
+            true,
+            false,
+            true,
+        ),
+        action(
+            "zstd-compress",
+            "Compresser avec Zstandard",
+            "Créer un fichier .zst très rapidement, idéal pour les gros fichiers et les sauvegardes.",
+            OperationCategory::Optimize,
+            &[
+                Image,
+                Pdf,
+                Document,
+                Spreadsheet,
+                Presentation,
+                Audio,
+                Video,
+                Archive,
+                Ebook,
+                Text,
+                Unknown,
+            ],
+            &["zstd"],
+            Some("zst"),
+            true,
+            false,
+            true,
+        ),
+        action(
+            "zstd-decompress",
+            "Décompresser Zstandard",
+            "Décompresser un fichier .zst ou .zstd en conservant l’original.",
+            OperationCategory::Archive,
+            &[Archive],
+            &["zstd"],
+            None,
+            true,
+            false,
+            true,
+        ),
+        action(
+            "lz4-compress",
+            "Compresser très vite avec LZ4",
+            "Créer un fichier .lz4 avec un algorithme lossless conçu pour la vitesse maximale.",
+            OperationCategory::Optimize,
+            &[
+                Image,
+                Pdf,
+                Document,
+                Spreadsheet,
+                Presentation,
+                Audio,
+                Video,
+                Archive,
+                Ebook,
+                Text,
+                Unknown,
+            ],
+            &["lz4"],
+            Some("lz4"),
+            true,
+            false,
+            true,
+        ),
+        action(
+            "lz4-decompress",
+            "Décompresser LZ4",
+            "Restaurer un fichier .lz4 très rapidement sans supprimer l’archive d’origine.",
+            OperationCategory::Archive,
+            &[Archive],
+            &["lz4"],
+            None,
+            true,
+            false,
+            true,
+        ),
+        action(
             "media-compatible",
             "Rendre compatible",
             "Transcoder vers des formats faciles à lire sur téléphone, TV et web.",
             OperationCategory::Media,
             &[Audio, Video],
+            &["ffmpeg"],
+            None,
+            true,
+            false,
+            true,
+        ),
+        action(
+            "video-convert",
+            "Convertir une vidéo",
+            "Convertir vers MP4, WebM, MKV ou MOV avec un profil compatible.",
+            OperationCategory::Convert,
+            &[Video],
             &["ffmpeg"],
             None,
             true,
@@ -637,9 +745,21 @@ fn default_actions() -> Vec<ActionDescriptor> {
             false,
         ),
         action(
+            "text-convert",
+            "Convertir un texte ou document léger",
+            "Convertir Markdown, HTML, RST et texte vers HTML, Markdown, DOCX ou EPUB.",
+            OperationCategory::Convert,
+            &[Text],
+            &["pandoc"],
+            None,
+            true,
+            false,
+            false,
+        ),
+        action(
             "ebook-convert",
             "Convertir un livre",
-            "Préparer EPUB et autres formats de lecture.",
+            "Convertir EPUB ou FB2 vers un format de lecture ou de document courant.",
             OperationCategory::Convert,
             &[Ebook],
             &["pandoc"],
@@ -713,9 +833,9 @@ fn default_conversion_edges() -> Vec<ConversionEdge> {
     let mut edges = Vec::new();
 
     for from in [
-        "jpeg", "png", "webp", "heic", "heif", "avif", "tiff", "bmp", "gif",
+        "jpeg", "png", "webp", "heic", "heif", "avif", "jxl", "tiff", "bmp", "gif", "raw",
     ] {
-        for to in ["jpeg", "png", "webp", "avif", "tiff"] {
+        for to in ["jpeg", "png", "webp", "avif", "jxl", "tiff"] {
             if from != to {
                 edges.push(edge(
                     from,
@@ -730,14 +850,17 @@ fn default_conversion_edges() -> Vec<ConversionEdge> {
     }
 
     for from in [
-        "doc", "docx", "odt", "rtf", "xls", "xlsx", "ods", "ppt", "pptx", "odp",
+        "doc", "docx", "odt", "rtf", "pages", "wpd", "xls", "xlsx", "ods", "numbers", "ppt",
+        "pptx", "odp", "keynote",
     ] {
         edges.push(edge(from, "pdf", "office", 1, false));
     }
 
-    for from in ["txt", "text", "md", "html", "rst"] {
-        edges.push(edge(from, "pdf", "pandoc", 2, false));
+    for from in ["txt", "text", "md", "html", "rst", "markdown"] {
         edges.push(edge(from, "html", "pandoc", 1, false));
+        edges.push(edge(from, "md", "pandoc", 1, false));
+        edges.push(edge(from, "docx", "pandoc", 2, false));
+        edges.push(edge(from, "epub", "pandoc", 2, false));
     }
 
     edges.extend([
@@ -747,13 +870,23 @@ fn default_conversion_edges() -> Vec<ConversionEdge> {
         edge("mkv", "mp4", "ffmpeg", 2, true),
         edge("avi", "mp4", "ffmpeg", 3, true),
         edge("webm", "mp4", "ffmpeg", 3, true),
+        edge("mpeg", "mp4", "ffmpeg", 3, true),
+        edge("wmv", "mp4", "ffmpeg", 3, true),
+        edge("flv", "mp4", "ffmpeg", 3, true),
+        edge("mpeg-ts", "mp4", "ffmpeg", 3, true),
         edge("mp4", "webm", "ffmpeg", 3, true),
+        edge("mp4", "mkv", "ffmpeg", 2, false),
+        edge("mov", "mkv", "ffmpeg", 2, false),
         edge("wav", "mp3", "ffmpeg", 2, true),
         edge("flac", "mp3", "ffmpeg", 2, true),
         edge("m4a", "mp3", "ffmpeg", 2, true),
         edge("ogg", "mp3", "ffmpeg", 2, true),
         edge("mp3", "wav", "ffmpeg", 2, false),
         edge("flac", "wav", "ffmpeg", 1, false),
+        edge("aac", "mp3", "ffmpeg", 2, true),
+        edge("aiff", "flac", "ffmpeg", 1, false),
+        edge("wav", "flac", "ffmpeg", 1, false),
+        edge("ape", "flac", "ffmpeg", 2, false),
     ]);
 
     edges
@@ -778,6 +911,23 @@ mod tests {
         assert_eq!(plan.steps.len(), 2);
         assert_eq!(plan.steps[0].engine_id, "office");
         assert_eq!(plan.steps[1].engine_id, "poppler");
+    }
+
+    #[test]
+    fn exposes_fast_lossless_archive_workflows() {
+        let catalog = CapabilityCatalog::default();
+        let zstd = catalog.action("tar-zstd-create").expect("TAR.ZST action");
+        let lz4 = catalog.action("tar-lz4-create").expect("TAR.LZ4 action");
+        assert_eq!(zstd.output_format.as_deref(), Some("tar.zst"));
+        assert_eq!(lz4.output_format.as_deref(), Some("tar.lz4"));
+        assert_eq!(
+            zstd.required_engines,
+            vec!["archive".to_string(), "zstd".to_string()]
+        );
+        assert_eq!(
+            lz4.required_engines,
+            vec!["archive".to_string(), "lz4".to_string()]
+        );
     }
 
     #[test]

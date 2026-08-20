@@ -12,7 +12,7 @@ export type RuntimePhase = 'loading' | 'ready' | 'browser' | 'error';
 @Injectable({ providedIn: 'root' })
 export class CapabilityStore {
   private readonly bridge = inject(TauriBridgeService);
-  private initialized = false;
+  private initialization: Promise<void> | null = null;
 
   readonly phase = signal<RuntimePhase>('loading');
   readonly health = signal<HealthResponse | null>(null);
@@ -39,35 +39,44 @@ export class CapabilityStore {
   readonly engineReadyCount = computed(() => this.engines().filter((engine) => engine.available).length);
   readonly ready = computed(() => this.phase() === 'ready');
 
-  initialize(): void {
-    if (this.initialized) return;
-    this.initialized = true;
+  initialize(): Promise<void> {
+    this.initialization ??= this.initializeOnce();
+    return this.initialization;
+  }
 
+  private async initializeOnce(): Promise<void> {
     if (!this.bridge.isDesktop()) {
       this.phase.set('browser');
       return;
     }
+    try {
+      const [health, engines, catalog, executableActions, favorites] = await Promise.all([
+        this.bridge.healthCheck(),
+        this.bridge.probeEngines(),
+        this.bridge.capabilityCatalog(),
+        this.bridge.executableActions(),
+        this.bridge.favorites(),
+      ]);
+      this.health.set(health);
+      this.engines.set(engines);
+      this.catalog.set(catalog);
+      this.executableActionIds.set(new Set(executableActions));
+      this.favoriteActionIds.set(new Set(favorites));
+      this.phase.set('ready');
+      this.error.set(null);
+    } catch (error) {
+      this.error.set(errorMessage(error));
+      this.phase.set('error');
+    }
+  }
 
-    void Promise.all([
-      this.bridge.healthCheck(),
-      this.bridge.probeEngines(),
-      this.bridge.capabilityCatalog(),
-      this.bridge.executableActions(),
-      this.bridge.favorites(),
-    ]).then(
-      ([health, engines, catalog, executableActions, favorites]) => {
-        this.health.set(health);
-        this.engines.set(engines);
-        this.catalog.set(catalog);
-        this.executableActionIds.set(new Set(executableActions));
-        this.favoriteActionIds.set(new Set(favorites));
-        this.phase.set('ready');
-      },
-      (error: unknown) => {
-        this.error.set(errorMessage(error));
-        this.phase.set('error');
-      },
-    );
+  async refreshUserData(): Promise<void> {
+    if (!this.bridge.isDesktop()) return;
+    try {
+      this.favoriteActionIds.set(new Set(await this.bridge.favorites()));
+    } catch (error) {
+      this.error.set(errorMessage(error));
+    }
   }
 
   action(id: string | null | undefined): ActionDescriptor | null {

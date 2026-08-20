@@ -46,7 +46,8 @@ for package in \
   ocrmypdf \
   libreoffice \
   pandoc \
-  libimage-exiftool-perl
+  libimage-exiftool-perl \
+  zstd lz4
 do
   install_optional "$package"
 done

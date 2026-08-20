@@ -1058,6 +1058,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fileflow-adapter-lz4"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "fileflow-domain",
+ "fileflow-engine",
+]
+
+[[package]]
 name = "fileflow-adapter-metadata"
 version = "0.1.0"
 dependencies = [
@@ -1130,6 +1139,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fileflow-adapter-zstd"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "fileflow-domain",
+ "fileflow-engine",
+]
+
+[[package]]
 name = "fileflow-analysis"
 version = "0.1.0"
 dependencies = [
@@ -1165,6 +1183,7 @@ dependencies = [
  "fileflow-adapter-ghostscript",
  "fileflow-adapter-imagemagick",
  "fileflow-adapter-img2pdf",
+ "fileflow-adapter-lz4",
  "fileflow-adapter-metadata",
  "fileflow-adapter-ocr",
  "fileflow-adapter-office",
@@ -1173,6 +1192,7 @@ dependencies = [
  "fileflow-adapter-qpdf",
  "fileflow-adapter-tesseract",
  "fileflow-adapter-vips",
+ "fileflow-adapter-zstd",
  "fileflow-analysis",
  "fileflow-core",
  "fileflow-domain",
@@ -1183,7 +1203,9 @@ dependencies = [
  "fileflow-scheduler",
  "fileflow-storage",
  "fileflow-workspace",
+ "parking_lot",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -1296,6 +1318,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.20",
  "tracing",
  "uuid",

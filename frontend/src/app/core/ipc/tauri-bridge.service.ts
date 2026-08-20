@@ -1,6 +1,16 @@
 import { Injectable } from '@angular/core';
 import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
 import {
+  AccountBootstrap,
+  AccountProfile,
+  AuthSessionResponse,
+  AvatarPayload,
+  CreateAccountRequest,
+  ChangePasswordRequest,
+  LoginRequest,
+  OnboardingPreferences,
+  ProfileUpdate,
   ActionRecommendation,
   ArchiveInspection,
   AssetPage,
@@ -28,6 +38,68 @@ export class TauriBridgeService {
     return isTauri();
   }
 
+
+  loadPreferences(): Promise<Record<string, unknown> | null> {
+    return invoke<Record<string, unknown> | null>('load_app_preferences');
+  }
+
+  savePreferences(preferences: Record<string, unknown>): Promise<void> {
+    return invoke<void>('save_app_preferences', { preferences });
+  }
+
+  accountBootstrap(): Promise<AccountBootstrap> {
+    return invoke<AccountBootstrap>('account_bootstrap');
+  }
+
+  createAccount(request: CreateAccountRequest): Promise<AuthSessionResponse> {
+    return invoke<AuthSessionResponse>('create_account', { request });
+  }
+
+  login(request: LoginRequest): Promise<AuthSessionResponse> {
+    return invoke<AuthSessionResponse>('login', { request });
+  }
+
+  changePassword(token: string, request: ChangePasswordRequest): Promise<AuthSessionResponse> {
+    return invoke<AuthSessionResponse>('change_password', { token, request });
+  }
+
+  logout(token: string): Promise<boolean> {
+    return invoke<boolean>('logout', { token });
+  }
+
+  currentSession(token: string): Promise<AuthSessionResponse> {
+    return invoke<AuthSessionResponse>('current_session', { token });
+  }
+
+  saveOnboarding(token: string, onboarding: OnboardingPreferences): Promise<OnboardingPreferences> {
+    return invoke<OnboardingPreferences>('save_onboarding', { token, onboarding });
+  }
+
+  updateProfile(token: string, request: ProfileUpdate): Promise<AccountProfile> {
+    return invoke<AccountProfile>('update_profile', { token, request });
+  }
+
+  chooseProfileAvatar(token: string): Promise<AccountProfile | null> {
+    return invoke<AccountProfile | null>('choose_profile_avatar', { token });
+  }
+
+  profileAvatar(token: string): Promise<AvatarPayload | null> {
+    return invoke<AvatarPayload | null>('profile_avatar', { token });
+  }
+
+  defaultStorageDirectory(): Promise<string> {
+    return invoke<string>('default_storage_directory');
+  }
+
+  chooseStorageDirectory(): Promise<string | null> {
+    return open({
+      directory: true,
+      multiple: false,
+      title: 'Choisir le dossier FileFlow',
+      canCreateDirectories: true,
+    });
+  }
+
   healthCheck(): Promise<HealthResponse> {
     return invoke<HealthResponse>('health_check');
   }
@@ -46,6 +118,10 @@ export class TauriBridgeService {
 
   schedulerStatus(): Promise<SchedulerSnapshot> {
     return invoke<SchedulerSnapshot>('scheduler_status');
+  }
+
+  setPerformanceMode(mode: 'eco' | 'balanced' | 'fast'): Promise<SchedulerSnapshot> {
+    return invoke<SchedulerSnapshot>('set_performance_mode', { mode });
   }
 
   executableActions(): Promise<string[]> {

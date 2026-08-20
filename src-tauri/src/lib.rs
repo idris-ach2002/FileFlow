@@ -1,11 +1,13 @@
 mod commands;
 
+use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use fileflow_core::FileFlowCore;
-use fileflow_domain::JobId;
+use fileflow_domain::{JobId, PerformanceMode};
 use fileflow_executor::ActionExecutor;
-use fileflow_scheduler::ResourceScheduler;
+use fileflow_scheduler::{ResourceScheduler, SchedulerSettings};
 use fileflow_storage::Storage;
+use parking_lot::RwLock;
 use std::{
     path::PathBuf,
     sync::{Arc, atomic::AtomicU64},
@@ -16,6 +18,20 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
 };
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+
+#[derive(Debug, Clone)]
+pub(crate) struct LoginAttempt {
+    pub(crate) failures: u32,
+    pub(crate) blocked_until: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SessionRecord {
+    pub(crate) token: String,
+    pub(crate) account_id: Uuid,
+    pub(crate) expires_at: DateTime<Utc>,
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct RecentOutputs {
@@ -23,12 +39,34 @@ pub(crate) struct RecentOutputs {
     pub(crate) paths: Vec<PathBuf>,
 }
 
-pub(crate) struct AppState {
-    pub(crate) core: Arc<FileFlowCore>,
+#[derive(Clone)]
+pub(crate) struct ExecutionRuntime {
     pub(crate) scheduler: Arc<ResourceScheduler>,
     pub(crate) executor: Arc<ActionExecutor>,
+}
+
+impl ExecutionRuntime {
+    pub(crate) fn new(mode: PerformanceMode) -> Self {
+        let scheduler = Arc::new(ResourceScheduler::new(SchedulerSettings {
+            mode,
+            custom_budget: None,
+        }));
+        let executor = Arc::new(ActionExecutor::new(scheduler.clone()));
+        Self {
+            scheduler,
+            executor,
+        }
+    }
+}
+
+pub(crate) struct AppState {
+    pub(crate) core: Arc<FileFlowCore>,
+    pub(crate) runtime: RwLock<ExecutionRuntime>,
     pub(crate) jobs: DashMap<JobId, CancellationToken>,
     pub(crate) storage: Arc<Storage>,
+    pub(crate) session: RwLock<Option<SessionRecord>>,
+    pub(crate) login_attempts: DashMap<String, LoginAttempt>,
+    pub(crate) data_dir: PathBuf,
     pub(crate) recent_outputs: DashMap<JobId, RecentOutputs>,
     pub(crate) output_sequence: AtomicU64,
     pub(crate) _tray: TrayIcon,
@@ -137,7 +175,30 @@ fn build_core() -> Arc<FileFlowCore> {
         .register(Arc::new(fileflow_adapter_tesseract::Adapter));
     core.engines
         .register(Arc::new(fileflow_adapter_pandoc::Adapter));
+    core.engines
+        .register(Arc::new(fileflow_adapter_zstd::Adapter));
+    core.engines
+        .register(Arc::new(fileflow_adapter_lz4::Adapter));
     core
+}
+
+fn stored_performance_mode(storage: &Storage) -> PerformanceMode {
+    storage
+        .get_json::<serde_json::Value>("app.preferences.v2")
+        .ok()
+        .flatten()
+        .and_then(|value| {
+            value
+                .get("performanceMode")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+        })
+        .map(|mode| match mode.as_str() {
+            "eco" => PerformanceMode::Eco,
+            "fast" => PerformanceMode::Fast,
+            _ => PerformanceMode::Balanced,
+        })
+        .unwrap_or(PerformanceMode::Balanced)
 }
 
 pub fn run() {
@@ -153,17 +214,20 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let scheduler = Arc::new(ResourceScheduler::default());
             let tray = build_tray(app)?;
             let data_dir = app.path().app_data_dir()?;
             let storage = Arc::new(Storage::open(&data_dir.join("fileflow.sqlite3"))?);
-            tracing::info!(budget = ?scheduler.budget(), database = %data_dir.display(), "FileFlow runtime initialized");
+            let performance_mode = stored_performance_mode(&storage);
+            let runtime = ExecutionRuntime::new(performance_mode);
+            tracing::info!(budget = ?runtime.scheduler.budget(), database = %data_dir.display(), "FileFlow runtime initialized");
             app.manage(AppState {
                 core: build_core(),
-                executor: Arc::new(ActionExecutor::new(scheduler.clone())),
-                scheduler,
+                runtime: RwLock::new(runtime),
                 jobs: DashMap::new(),
                 storage,
+                session: RwLock::new(None),
+                login_attempts: DashMap::new(),
+                data_dir: data_dir.clone(),
                 recent_outputs: DashMap::new(),
                 output_sequence: AtomicU64::new(0),
                 _tray: tray,
@@ -171,12 +235,24 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::account::account_bootstrap,
+            commands::account::create_account,
+            commands::account::login,
+            commands::account::change_password,
+            commands::account::logout,
+            commands::account::current_session,
+            commands::account::save_onboarding,
+            commands::account::update_profile,
+            commands::account::choose_profile_avatar,
+            commands::account::profile_avatar,
+            commands::account::default_storage_directory,
             commands::system::health_check,
             commands::system::probe_engines,
             commands::system::capability_catalog,
             commands::system::executable_actions,
             commands::system::plan_conversion,
             commands::system::scheduler_status,
+            commands::system::set_performance_mode,
             commands::workspace::create_workspace,
             commands::workspace::get_workspace,
             commands::workspace::list_workspace_assets,
@@ -189,6 +265,8 @@ pub fn run() {
             commands::execution::open_job_output,
             commands::execution::reveal_job_output,
             commands::execution::save_job_output_copy,
+            commands::storage::load_app_preferences,
+            commands::storage::save_app_preferences,
             commands::storage::history,
             commands::storage::favorites,
             commands::storage::set_favorite,

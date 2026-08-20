@@ -120,6 +120,9 @@ fn is_archive_mime(mime: &str) -> bool {
             | "application/x-tar"
             | "application/x-bzip2"
             | "application/x-xz"
+            | "application/zstd"
+            | "application/x-zstd"
+            | "application/x-lz4"
     )
 }
 
@@ -137,9 +140,10 @@ fn extension_descriptor(extension: &str) -> Option<ExtensionDescriptor> {
         "svg" => image("svg", "image/svg+xml"),
         "ico" => image("ico", "image/x-icon"),
         "jxl" => image("jxl", "image/jxl"),
-        "dng" | "cr2" | "cr3" | "nef" | "arw" | "orf" | "raf" | "rw2" => {
-            image("raw", "image/x-raw")
-        }
+        "psd" | "psb" => image("photoshop", "image/vnd.adobe.photoshop"),
+        "eps" => image("eps", "application/postscript"),
+        "dng" | "cr2" | "cr3" | "nef" | "nrw" | "arw" | "srf" | "sr2" | "orf" | "raf" | "rw2"
+        | "pef" | "x3f" | "erf" | "kdc" | "dcr" | "mos" | "mef" => image("raw", "image/x-raw"),
 
         "pdf" => simple("pdf", Some("application/pdf"), FormatFamily::Pdf),
 
@@ -152,6 +156,8 @@ fn extension_descriptor(extension: &str) -> Option<ExtensionDescriptor> {
         "odt" => document("odt", "application/vnd.oasis.opendocument.text", true),
         "rtf" => document("rtf", "application/rtf", false),
         "pages" => document("pages", "application/x-iwork-pages-sffpages", true),
+        "wpd" => document("wpd", "application/vnd.wordperfect", false),
+        "tex" => document("tex", "application/x-tex", false),
 
         "xls" => spreadsheet("xls", "application/vnd.ms-excel", false),
         "xlsx" | "xlsm" => spreadsheet(
@@ -188,14 +194,25 @@ fn extension_descriptor(extension: &str) -> Option<ExtensionDescriptor> {
         "json" => simple("json", Some("application/json"), FormatFamily::Text),
         "xml" => simple("xml", Some("application/xml"), FormatFamily::Text),
         "yaml" | "yml" => simple("yaml", Some("application/yaml"), FormatFamily::Text),
+        "toml" => simple("toml", Some("application/toml"), FormatFamily::Text),
+        "jsonl" | "ndjson" => simple("jsonl", Some("application/x-ndjson"), FormatFamily::Text),
+        "sql" => simple("sql", Some("application/sql"), FormatFamily::Text),
+        "ini" | "cfg" | "conf" | "properties" => {
+            simple("config", Some("text/plain"), FormatFamily::Text)
+        }
 
         "zip" => archive("zip", "application/zip"),
         "7z" => archive("7z", "application/x-7z-compressed"),
         "rar" => archive("rar", "application/vnd.rar"),
         "tar" => archive("tar", "application/x-tar"),
         "gz" | "tgz" => archive("gzip", "application/gzip"),
-        "bz2" => archive("bzip2", "application/x-bzip2"),
-        "xz" => archive("xz", "application/x-xz"),
+        "bz2" | "tbz" | "tbz2" => archive("bzip2", "application/x-bzip2"),
+        "xz" | "txz" => archive("xz", "application/x-xz"),
+        "zst" | "zstd" | "tzst" => archive("zstd", "application/zstd"),
+        "lz4" => archive("lz4", "application/x-lz4"),
+        "cab" => archive("cab", "application/vnd.ms-cab-compressed"),
+        "arj" => archive("arj", "application/x-arj"),
+        "cpio" => archive("cpio", "application/x-cpio"),
         "iso" => archive("iso", "application/x-iso9660-image"),
 
         "mp3" => audio("mp3", "audio/mpeg"),
@@ -207,6 +224,13 @@ fn extension_descriptor(extension: &str) -> Option<ExtensionDescriptor> {
         "opus" => audio("opus", "audio/opus"),
         "wma" => audio("wma", "audio/x-ms-wma"),
         "aiff" | "aif" => audio("aiff", "audio/aiff"),
+        "alac" => audio("alac", "audio/mp4"),
+        "ape" => audio("ape", "audio/x-monkeys-audio"),
+        "ac3" => audio("ac3", "audio/ac3"),
+        "eac3" | "ec3" => audio("eac3", "audio/eac3"),
+        "dts" => audio("dts", "audio/vnd.dts"),
+        "amr" => audio("amr", "audio/amr"),
+        "mid" | "midi" => audio("midi", "audio/midi"),
 
         "mp4" | "m4v" => video("mp4", "video/mp4"),
         "mov" => video("mov", "video/quicktime"),
@@ -218,11 +242,20 @@ fn extension_descriptor(extension: &str) -> Option<ExtensionDescriptor> {
         "flv" => video("flv", "video/x-flv"),
         "3gp" => video("3gp", "video/3gpp"),
         "mts" | "m2ts" | "ts" => video("mpeg-ts", "video/mp2t"),
+        "ogv" => video("ogv", "video/ogg"),
+        "vob" => video("vob", "video/mpeg"),
+        "asf" => video("asf", "video/x-ms-asf"),
+        "rm" | "rmvb" => video("realmedia", "application/vnd.rn-realmedia"),
+        "dv" => video("dv", "video/dv"),
 
         "epub" => ebook("epub", "application/epub+zip", true),
         "mobi" => ebook("mobi", "application/x-mobipocket-ebook", false),
         "azw" | "azw3" => ebook("amazon-ebook", "application/vnd.amazon.ebook", false),
         "fb2" => ebook("fb2", "application/x-fictionbook+xml", false),
+        "cbz" => ebook("cbz", "application/vnd.comicbook+zip", true),
+        "cbr" => ebook("cbr", "application/vnd.comicbook-rar", false),
+        "cb7" => ebook("cb7", "application/x-cb7", false),
+        "djvu" | "djv" => ebook("djvu", "image/vnd.djvu", false),
         _ => return None,
     };
 
@@ -343,5 +376,33 @@ mod tests {
 
         assert_eq!(detected.family, FormatFamily::Text);
         assert_eq!(detected.id, "text");
+    }
+
+    #[test]
+    fn recognizes_modern_compression_and_raw_formats() {
+        let registry = FormatRegistry;
+        let compressed = registry.detect(Path::new("backup.tar.zst"), b"");
+        let raw = registry.detect(Path::new("photo.CR3"), b"");
+        let comic = registry.detect(Path::new("album.cbz"), b"");
+
+        assert_eq!(compressed.family, FormatFamily::Archive);
+        assert_eq!(compressed.id, "zstd");
+        assert_eq!(raw.family, FormatFamily::Image);
+        assert_eq!(raw.id, "raw");
+        assert_eq!(comic.family, FormatFamily::Ebook);
+        assert_eq!(comic.id, "cbz");
+    }
+
+    #[test]
+    fn recognizes_extended_media_and_data_formats() {
+        let registry = FormatRegistry;
+        let audio = registry.detect(Path::new("track.eac3"), b"");
+        let video = registry.detect(Path::new("capture.m2ts"), b"");
+        let data = registry.detect(Path::new("events.ndjson"), b"{\"id\":1}\n");
+
+        assert_eq!(audio.family, FormatFamily::Audio);
+        assert_eq!(video.family, FormatFamily::Video);
+        assert_eq!(data.family, FormatFamily::Text);
+        assert_eq!(data.id, "jsonl");
     }
 }
