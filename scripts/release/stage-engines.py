@@ -36,8 +36,6 @@ def executable_variants(name: str, target: str) -> list[str]:
 def copy_tree(source: Path, destination: Path) -> None:
     if not source.is_dir():
         return
-    if destination.exists():
-        shutil.rmtree(destination)
     shutil.copytree(source, destination)
 
 
@@ -58,15 +56,25 @@ def main() -> None:
 
     source = args.source / args.target if (args.source / args.target).is_dir() else args.source
     manifest = json.loads(MANIFEST.read_text())
+    pack_version = str(manifest.get("packVersion", "")).strip()
 
-    for directory in (BIN_DEST, LIB_DEST, SHARE_DEST):
+    for directory in (BIN_DEST, LIB_DEST, SHARE_DEST, LICENSE_DEST):
         if directory.exists():
             shutil.rmtree(directory)
     BIN_DEST.mkdir(parents=True)
-    LICENSE_DEST.mkdir(parents=True, exist_ok=True)
+    LICENSE_DEST.mkdir(parents=True)
 
-    # Pack builders may include DLL/dylib/so helpers and data files in addition
-    # to the executables explicitly validated by the manifest.
+    pack_meta_path = source / "pack-manifest.json"
+    source_pack_meta = None
+    if pack_meta_path.is_file():
+        source_pack_meta = json.loads(pack_meta_path.read_text())
+        if source_pack_meta.get("packVersion") != pack_version:
+            raise SystemExit("staged engine pack version does not match release manifest")
+        if source_pack_meta.get("target") != args.target:
+            raise SystemExit("staged engine pack target does not match requested target")
+    elif args.mode != "optional":
+        raise SystemExit("core/full release requires an immutable pack-manifest.json")
+
     source_bin = source / "bin"
     if source_bin.is_dir():
         for item in source_bin.iterdir():
@@ -84,46 +92,33 @@ def main() -> None:
     missing: list[str] = []
     for engine in manifest["engines"]:
         for executable in engine["executables"]:
-            found = next(
-                (
-                    BIN_DEST / candidate
-                    for candidate in executable_variants(executable, args.target)
-                    if (BIN_DEST / candidate).is_file()
-                ),
-                None,
-            )
+            found = next((BIN_DEST / candidate for candidate in executable_variants(executable, args.target) if (BIN_DEST / candidate).is_file()), None)
             required = args.mode == "full" or (args.mode == "core" and engine["tier"] == "core")
             if found is None:
                 if required:
                     missing.append(f"{engine['id']}:{executable}")
                 continue
-            staged.append(
-                {
-                    "engine": engine["id"],
-                    "name": found.name,
-                    "sha256": sha256(found),
-                    "license": engine["license"],
-                    "tier": engine["tier"],
-                }
-            )
+            staged.append({
+                "engine": engine["id"],
+                "name": found.name,
+                "sha256": sha256(found),
+                "license": engine["license"],
+                "tier": engine["tier"],
+            })
 
         license_file = source / "licenses" / f"{engine['id']}.txt"
         if license_file.is_file():
             shutil.copy2(license_file, LICENSE_DEST / license_file.name)
 
-    META.write_text(
-        json.dumps(
-            {
-                "schemaVersion": 1,
-                "target": args.target,
-                "flavor": args.mode,
-                "engines": staged,
-            },
-            indent=2,
-        )
-        + "\n"
-    )
-    print(f"staged {len(staged)} validated engine executables for {args.target} ({args.mode})")
+    META.write_text(json.dumps({
+        "schemaVersion": 2,
+        "packVersion": pack_version,
+        "target": args.target,
+        "flavor": args.mode,
+        "sourceManifest": source_pack_meta,
+        "engines": staged,
+    }, indent=2) + "\n")
+    print(f"staged {len(staged)} engine executable(s) from pack {pack_version} for {args.target} ({args.mode})")
     if missing:
         print("missing required engines: " + ", ".join(missing))
         raise SystemExit(2)

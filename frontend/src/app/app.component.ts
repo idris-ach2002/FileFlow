@@ -19,6 +19,7 @@ import { CapabilityStore } from './core/catalog/capability.store';
 import { PreferencesService } from './core/preferences/preferences.service';
 import { WorkspaceStore } from './features/workspace/data-access/workspace.store';
 import { UpdateService } from './core/update/update.service';
+import { TauriBridgeService } from './core/ipc/tauri-bridge.service';
 
 @Component({
   selector: 'ff-root',
@@ -30,6 +31,7 @@ import { UpdateService } from './core/update/update.service';
 export class AppComponent {
   private readonly destroyRef = inject(DestroyRef);
   private readonly router = inject(Router);
+  private readonly bridge = inject(TauriBridgeService);
   protected readonly workspaceStore = inject(WorkspaceStore);
   protected readonly auth = inject(AuthStore);
   protected readonly capabilities = inject(CapabilityStore);
@@ -72,6 +74,11 @@ export class AppComponent {
       const profileId = this.auth.profile()?.id;
       if (profileId) await this.initializeAuthenticatedContext(profileId);
     } finally {
+      if (isTauri()) {
+        // No-op outside CI smoke runs. In packaged tests this is the end-to-end
+        // proof that Angular loaded and successfully reached the Rust backend.
+        await this.bridge.smokeFrontendReady().catch(() => undefined);
+      }
       await this.revealDesktopWindow();
       // Update checks are deliberately non-blocking: startup/authentication must
       // remain instant even when GitHub or the update endpoint is unavailable.

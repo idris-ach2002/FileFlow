@@ -1,34 +1,23 @@
 # FileFlow native engine packs
 
-A release pack is target-specific and lives outside Git at:
+Les moteurs natifs sont versionnés indépendamment de FileFlow. `release/engines/manifest.json` fixe `packVersion` et le contrat des exécutables.
 
+## Format immuable
+
+Un pack cible contient :
+
+```text
+fileflow-engines-<packVersion>-<target>/
+├── bin/
+├── lib/
+├── share/
+├── licenses/
+└── pack-manifest.json
 ```
-release/engines/packs/<target-triple>/
-├── bin/       # executables + DLL/helper binaries
-├── lib/       # dylib/so dependencies when needed
-├── share/     # runtime data (for example tessdata)
-└── licenses/  # one `<engine-id>.txt` notice per redistributed engine
-```
 
-`python scripts/release/stage-engines.py --target <triple> --mode <mode>` copies the pack into the Tauri resources directory and validates the executable contract in `manifest.json`.
+`pack-manifest.json` contient la version, le target et l'inventaire exact (`path`, `size`, `sha256`). L'archive possède aussi un fichier `<archive>.sha256` externe.
 
-## Modes
-
-- `optional`: no bundled engine is mandatory. Useful for development and packaging smoke tests; FileFlow falls back to system executables.
-- `core`: all `tier=core` engines must be present. This is the intended minimum self-contained public edition.
-- `full`: every manifest engine must be present. Do not publish this flavor until redistribution licenses and dynamic dependencies have been audited for every target.
-
-## Runtime lookup order
-
-1. FileFlow bundled pack (`resources/engines/bin`)
-2. process `PATH`
-3. known platform package-manager locations
-
-Bundled engines therefore make a release deterministic while preserving a development fallback.
-
-## Target triples
-
-Current CI targets:
+Les targets certifiés sont :
 
 - `aarch64-apple-darwin`
 - `x86_64-apple-darwin`
@@ -36,20 +25,48 @@ Current CI targets:
 - `x86_64-unknown-linux-gnu`
 - `aarch64-unknown-linux-gnu`
 
-Do not copy a Homebrew/Linux package tree wholesale into these directories. Packs must be self-contained for the target and each redistributed component must have a license notice.
+## Flavors
 
-## CI retrieval
+- `optional` : aucun moteur embarqué obligatoire, utilisé pour développement/package-smoke ;
+- `core` : FFmpeg/FFprobe, ImageMagick, libvips, qpdf, 7-Zip, zstd et lz4 obligatoires ;
+- `full` : tous les moteurs du manifeste obligatoires.
 
-For `core` and `full` releases, set GitHub variable `FILEFLOW_ENGINE_PACK_URL_TEMPLATE` to an HTTPS template containing `{target}`, for example:
+Ne promouvoir `full` qu'après audit des licences de redistribution de chaque build exact.
 
-```text
-https://downloads.example.com/fileflow/v1/engines/fileflow-engines-{target}.tar.gz
-```
+## Construction locale
 
-The CI downloads both the archive and `<archive>.sha256`, verifies SHA-256, rejects path traversal/symlink entries, then stages the pack. `optional` builds do not require a remote pack.
-
-A prepared local pack can be archived with:
+À partir d'un dossier avec `bin/lib/share` :
 
 ```bash
-pnpm run release:pack-engines -- --target aarch64-apple-darwin
+python scripts/release/make-engine-pack.py \
+  --target aarch64-apple-darwin \
+  --source /path/to/engines \
+  --licenses /path/to/licenses
 ```
+
+Le résultat est :
+
+```text
+release/engines/out/fileflow-engines-1.0.0-aarch64-apple-darwin.tar.gz
+release/engines/out/fileflow-engines-1.0.0-aarch64-apple-darwin.tar.gz.sha256
+```
+
+## Téléchargement CI
+
+`FILEFLOW_ENGINE_PACK_URL_TEMPLATE` doit contenir `{packVersion}` et `{target}` :
+
+```text
+https://github.com/ORG/REPO/releases/download/engines-v{packVersion}/fileflow-engines-{packVersion}-{target}.tar.gz
+```
+
+`fetch-engine-pack.py` refuse : checksum incorrect, version/target incorrect, traversal, symlink/hardlink, fichier absent, fichier supplémentaire ou hash/taille interne différent.
+
+## Promotion
+
+`.github/workflows/engine-packs.yml` prend une URL de candidats, certifie les cinq targets et crée seulement ensuite un draft atomique `engines-v<packVersion>`. Le draft doit être publié avant qu'une release FileFlow `core/full` puisse utiliser son URL publique.
+
+Le durcissement/signature finale est target-native : `install_name_tool`/codesign sur macOS, RPATH `$ORIGIN` sur Linux, PE/DLL + Authenticode sur Windows.
+
+### Dépôts privés
+
+Le téléchargeur accepte `FILEFLOW_ENGINE_PACK_TOKEN` (prioritaire) ou `GITHUB_TOKEN` pour authentifier les téléchargements HTTPS. Les releases applicatives utilisent automatiquement le token GitHub en lecture ; un token dédié reste possible pour une source de packs située dans un autre dépôt privé.

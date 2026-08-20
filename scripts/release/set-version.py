@@ -27,4 +27,12 @@ text, count = re.subn(
 if count != 1:
     raise SystemExit("unable to update src-tauri/Cargo.toml version")
 cargo.write_text(text)
+
+lock = ROOT / "Cargo.lock"
+lock_text = lock.read_text()
+pattern = r'(name = "fileflow-desktop"\nversion = ")[^"]+("\n)'
+lock_text, count = re.subn(pattern, rf'\g<1>{version}\g<2>', lock_text, count=1)
+if count != 1:
+    raise SystemExit("unable to update Cargo.lock FileFlow version")
+lock.write_text(lock_text)
 print(f"FileFlow version -> {version}")

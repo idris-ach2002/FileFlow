@@ -16,7 +16,8 @@
           "French",
           "English"
         ]
-      }
+      },
+      "bundleVCRuntime": true
     }
   }
 }

@@ -25,9 +25,7 @@ def deep_merge(base: dict, overlay: dict) -> dict:
 
 def host_target() -> str:
     try:
-        return subprocess.check_output(
-            ["rustc", "--print", "host-tuple"], text=True
-        ).strip()
+        return subprocess.check_output(["rustc", "--print", "host-tuple"], text=True).strip()
     except Exception:
         verbose = subprocess.check_output(["rustc", "-vV"], text=True)
         for line in verbose.splitlines():
@@ -37,17 +35,21 @@ def host_target() -> str:
 
 
 def platform_config(target: str) -> Path:
-    if "windows" in target:
-        return TAURI / "tauri.windows.conf.json"
-    if "apple-darwin" in target:
-        return TAURI / "tauri.macos.conf.json"
-    if "linux" in target:
-        return TAURI / "tauri.linux.conf.json"
+    if "windows" in target: return TAURI / "tauri.windows.conf.json"
+    if "apple-darwin" in target: return TAURI / "tauri.macos.conf.json"
+    if "linux" in target: return TAURI / "tauri.linux.conf.json"
     raise SystemExit(f"unsupported release target: {target}")
+
+
+def require(name: str) -> str:
+    value=os.environ.get(name,"").strip()
+    if not value: raise SystemExit(f"strict release requires {name}")
+    return value
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--target", default=None)
+parser.add_argument("--strict", action="store_true", help="require production signing/updater configuration")
 args = parser.parse_args()
 target = args.target or host_target()
 
@@ -58,58 +60,51 @@ bundle = deep_merge(base.get("bundle", {}), platform.get("bundle", {}))
 pubkey = os.environ.get("TAURI_UPDATER_PUBKEY", "").strip()
 endpoint = os.environ.get("FILEFLOW_UPDATE_ENDPOINT", "").strip()
 private_key = os.environ.get("TAURI_SIGNING_PRIVATE_KEY", "").strip()
+if args.strict:
+    pubkey=require("TAURI_UPDATER_PUBKEY")
+    endpoint=require("FILEFLOW_UPDATE_ENDPOINT")
+    private_key=require("TAURI_SIGNING_PRIVATE_KEY")
+    require("TAURI_SIGNING_PRIVATE_KEY_PASSWORD")
 updater_enabled = bool(pubkey and endpoint and private_key)
 bundle["createUpdaterArtifacts"] = updater_enabled
 
-# macOS must always carry a real bundle signature.
-# In CI, APPLE_SIGNING_IDENTITY contains the Developer ID identity.
-# For local/test builds without a certificate, explicitly use ad-hoc signing.
 if "apple-darwin" in target:
     macos = bundle.setdefault("macOS", {})
     assert isinstance(macos, dict)
     signing_identity = os.environ.get("APPLE_SIGNING_IDENTITY", "").strip()
+    if args.strict:
+        if not signing_identity or signing_identity == "-":
+            raise SystemExit("strict macOS release requires a Developer ID Application identity")
+        require("APPLE_ID"); require("APPLE_PASSWORD"); require("APPLE_TEAM_ID")
     macos["signingIdentity"] = signing_identity or "-"
 
 config: dict[str, object] = {"bundle": bundle}
-
-# tauri-plugin-updater 2.x expects plugins.updater to deserialize to
-# an object whenever the plugin is registered. Leaving the key absent in
-# an overlay release configuration can materialize as JSON null in the
-# generated runtime configuration and abort application startup.
-#
-# Keep a valid but disabled configuration when updater credentials are
-# unavailable. An empty endpoint list makes update checks fail safely
-# without preventing FileFlow from starting.
-if updater_enabled:
-    updater_config = {
-        "pubkey": pubkey,
-        "endpoints": [endpoint],
-        "windows": {"installMode": "passive"},
-    }
-else:
-    updater_config = {
-        "pubkey": "",
-        "endpoints": [],
-    }
-
-config["plugins"] = {"updater": updater_config}
+config["plugins"] = {"updater": ({
+    "pubkey": pubkey,
+    "endpoints": [endpoint],
+    "windows": {"installMode": "passive"},
+} if updater_enabled else {"pubkey": "", "endpoints": []})}
 
 thumbprint = os.environ.get("WINDOWS_CERTIFICATE_THUMBPRINT", "").strip()
-if thumbprint and "windows" in target:
-    windows = bundle.setdefault("windows", {})
-    assert isinstance(windows, dict)
-    windows["certificateThumbprint"] = thumbprint
-    windows["digestAlgorithm"] = "sha256"
-    timestamp = os.environ.get("WINDOWS_TIMESTAMP_URL", "").strip()
-    if timestamp:
-        windows["timestampUrl"] = timestamp
+if "windows" in target:
+    if args.strict and not thumbprint:
+        raise SystemExit("strict Windows release requires WINDOWS_CERTIFICATE_THUMBPRINT")
+    if thumbprint:
+        windows = bundle.setdefault("windows", {})
+        assert isinstance(windows, dict)
+        windows["certificateThumbprint"] = thumbprint
+        windows["digestAlgorithm"] = "sha256"
+        timestamp = os.environ.get("WINDOWS_TIMESTAMP_URL", "").strip()
+        if args.strict and not timestamp:
+            raise SystemExit("strict Windows release requires WINDOWS_TIMESTAMP_URL")
+        if timestamp: windows["timestampUrl"] = timestamp
 
 out.write_text(json.dumps(config, indent=2) + "\n")
 print(f"target: {target}")
+print(f"mode: {'strict-production' if args.strict else 'development/package-smoke'}")
 print(f"updater artifacts: {'enabled' if updater_enabled else 'disabled'}")
 if "apple-darwin" in target:
-    macos_config = bundle.get("macOS", {})
-    identity = macos_config.get("signingIdentity", "?") if isinstance(macos_config, dict) else "?"
+    identity = bundle.get("macOS", {}).get("signingIdentity", "?")
     print(f"macOS signing: {identity}")
 print(f"windows signing: {'configured' if thumbprint and 'windows' in target else 'not configured'}")
 print(out)

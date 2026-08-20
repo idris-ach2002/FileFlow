@@ -113,6 +113,10 @@ export class TauriBridgeService {
     return invoke<HealthResponse>('health_check');
   }
 
+  smokeFrontendReady(): Promise<void> {
+    return invoke<void>('smoke_frontend_ready');
+  }
+
   probeEngines(): Promise<EngineProbe[]> {
     return invoke<EngineProbe[]>('probe_engines');
   }

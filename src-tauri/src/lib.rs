@@ -257,6 +257,7 @@ pub fn run() {
             commands::account::profile_avatar,
             commands::account::default_storage_directory,
             commands::system::health_check,
+            commands::system::smoke_frontend_ready,
             commands::system::probe_engines,
             commands::system::capability_catalog,
             commands::system::executable_actions,

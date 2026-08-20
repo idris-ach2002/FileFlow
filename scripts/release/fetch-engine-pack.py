@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import shutil
 import tarfile
@@ -13,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DEST_ROOT = ROOT / "release/engines/packs"
+MANIFEST = ROOT / "release/engines/manifest.json"
 
 
 def digest(path: Path) -> str:
@@ -21,6 +23,16 @@ def digest(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def download(url: str, destination: Path) -> None:
+    token = os.environ.get("FILEFLOW_ENGINE_PACK_TOKEN", "").strip() or os.environ.get("GITHUB_TOKEN", "").strip()
+    headers = {"Accept": "application/octet-stream", "User-Agent": "FileFlow-engine-pack-fetcher/1"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(request) as response, destination.open("wb") as output:
+        shutil.copyfileobj(response, output)
 
 
 def safe_destination(root: Path, member: str) -> Path:
@@ -52,37 +64,76 @@ def extract(archive: Path, destination: Path) -> None:
     raise SystemExit(f"unsupported engine pack archive: {archive.name}")
 
 
+def verify_pack(source: Path, target: str, pack_version: str) -> None:
+    manifest_path = source / "pack-manifest.json"
+    if not manifest_path.is_file():
+        raise SystemExit("engine pack is missing pack-manifest.json")
+    meta = json.loads(manifest_path.read_text())
+    if meta.get("packVersion") != pack_version:
+        raise SystemExit(f"engine pack version mismatch: {meta.get('packVersion')} != {pack_version}")
+    if meta.get("target") != target:
+        raise SystemExit(f"engine pack target mismatch: {meta.get('target')} != {target}")
+
+    declared: set[str] = set()
+    for item in meta.get("files", []):
+        rel = str(item.get("path", ""))
+        path = safe_destination(source, rel)
+        declared.add(rel)
+        if not path.is_file():
+            raise SystemExit(f"engine pack manifest references missing file: {rel}")
+        actual = digest(path)
+        if actual != str(item.get("sha256", "")).lower():
+            raise SystemExit(f"engine pack file checksum mismatch: {rel}")
+        if path.stat().st_size != int(item.get("size", -1)):
+            raise SystemExit(f"engine pack file size mismatch: {rel}")
+
+    actual_files = {
+        path.relative_to(source).as_posix()
+        for path in source.rglob("*")
+        if path.is_file() and path.name != "pack-manifest.json"
+    }
+    if actual_files != declared:
+        extra = sorted(actual_files - declared)
+        missing = sorted(declared - actual_files)
+        raise SystemExit(f"engine pack inventory mismatch; extra={extra}, missing={missing}")
+    if not (source / "bin").is_dir():
+        raise SystemExit("engine pack has no bin/ directory")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", required=True)
     parser.add_argument(
         "--url-template",
         default=os.environ.get("FILEFLOW_ENGINE_PACK_URL_TEMPLATE", ""),
-        help="URL containing {target}, e.g. https://host/fileflow-engines-{target}.tar.gz",
+        help="Immutable URL containing {packVersion} and {target}",
     )
     args = parser.parse_args()
-    template = args.url_template.strip()
-    if not template or "{target}" not in template:
-        raise SystemExit("FILEFLOW_ENGINE_PACK_URL_TEMPLATE must contain {target}")
 
-    url = template.replace("{target}", args.target)
+    release_manifest = json.loads(MANIFEST.read_text())
+    pack_version = str(release_manifest.get("packVersion", "")).strip()
+    template = args.url_template.strip()
+    if "{target}" not in template or "{packVersion}" not in template:
+        raise SystemExit("FILEFLOW_ENGINE_PACK_URL_TEMPLATE must contain {packVersion} and {target}")
+
+    url = template.replace("{target}", args.target).replace("{packVersion}", pack_version)
     checksum_url = f"{url}.sha256"
-    if url.endswith('.tar.gz'):
-        suffix = '.tar.gz'
-    elif url.endswith('.tgz'):
-        suffix = '.tgz'
-    elif url.endswith('.zip'):
-        suffix = '.zip'
+    if url.endswith(".tar.gz"):
+        suffix = ".tar.gz"
+    elif url.endswith(".tgz"):
+        suffix = ".tgz"
+    elif url.endswith(".zip"):
+        suffix = ".zip"
     else:
-        raise SystemExit('engine pack URL must end with .tar.gz, .tgz or .zip')
+        raise SystemExit("engine pack URL must end with .tar.gz, .tgz or .zip")
 
     with tempfile.TemporaryDirectory(prefix="fileflow-engine-pack-") as temp:
         temp_root = Path(temp)
         archive = temp_root / f"pack{suffix}"
         checksum_file = temp_root / "pack.sha256"
-        print(f"downloading {url}")
-        urllib.request.urlretrieve(url, archive)
-        urllib.request.urlretrieve(checksum_url, checksum_file)
+        print(f"downloading immutable engine pack {url}")
+        download(url, archive)
+        download(checksum_url, checksum_file)
         expected = checksum_file.read_text().strip().split()[0].lower()
         actual = digest(archive)
         if len(expected) != 64 or expected != actual:
@@ -91,20 +142,17 @@ def main() -> None:
         extracted = temp_root / "extracted"
         extracted.mkdir()
         extract(archive, extracted)
-
-        # Accept an archive rooted directly at bin/lib/share, or one wrapper directory.
         children = [child for child in extracted.iterdir() if child.name != "__MACOSX"]
         source = extracted
         if not (source / "bin").is_dir() and len(children) == 1 and children[0].is_dir():
             source = children[0]
-        if not (source / "bin").is_dir():
-            raise SystemExit("engine pack has no bin/ directory")
+        verify_pack(source, args.target, pack_version)
 
         destination = DEST_ROOT / args.target
         if destination.exists():
             shutil.rmtree(destination)
         shutil.copytree(source, destination)
-        print(f"engine pack verified -> {destination}")
+        print(f"engine pack {pack_version} verified -> {destination}")
         print(f"sha256 {actual}")
 
 

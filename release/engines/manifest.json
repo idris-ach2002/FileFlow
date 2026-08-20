@@ -1,6 +1,6 @@
 {
-  "schemaVersion": 1,
-  "description": "FileFlow native engine release manifest",
+  "schemaVersion": 2,
+  "description": "FileFlow immutable native engine pack manifest",
   "engines": [
     {
       "id": "ffmpeg",
@@ -169,5 +169,6 @@
         "--version"
       ]
     }
-  ]
+  ],
+  "packVersion": "1.0.0"
 }

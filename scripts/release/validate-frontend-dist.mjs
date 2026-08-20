@@ -100,3 +100,13 @@ const lazyChunks = files.filter(
 
 console.log(`[OK] lazy chunks : ${lazyChunks.length}`);
 console.log('[OK] frontend desktop assets valides');
+
+// Desktop CSP regression guard. Angular component styles require inline style
+// support in the WebView, while scripts remain self-only.
+const tauriConfig = JSON.parse(fs.readFileSync(path.join(root, 'src-tauri', 'tauri.conf.json'), 'utf8'));
+const csp = tauriConfig?.app?.security?.csp ?? '';
+if (!/style-src[^;]*'unsafe-inline'/.test(csp)) fail('CSP desktop doit autoriser les styles Angular inline');
+if (!/script-src\s+'self'/.test(csp)) fail('CSP desktop doit conserver script-src self uniquement');
+const disabled = tauriConfig?.app?.security?.dangerousDisableAssetCspModification ?? [];
+if (!Array.isArray(disabled) || !disabled.includes('style-src')) fail('Tauri doit préserver explicitement style-src pour les composants Angular');
+console.log('[OK] CSP Angular/Tauri compatible');

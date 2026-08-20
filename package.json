@@ -1,6 +1,6 @@
 {
   "name": "fileflow-workspace",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "scripts": {
     "frontend:dev": "pnpm --filter @fileflow/frontend start",
@@ -30,13 +30,27 @@
     "release:fetch-engines": "node scripts/release/run-python.mjs scripts/release/fetch-engine-pack.py",
     "release:pack-engines": "node scripts/release/run-python.mjs scripts/release/make-engine-pack.py",
     "release:smoke-engines": "node scripts/release/run-python.mjs scripts/release/smoke-engines.py",
-    "release:validate-frontend": "node scripts/release/validate-frontend-dist.mjs"
+    "release:validate-frontend": "node scripts/release/validate-frontend-dist.mjs",
+    "ci:preflight": "node scripts/ci/verify-platform.mjs",
+    "ci:platform-info": "node scripts/ci/platform-info.mjs",
+    "ci:stress": "node scripts/ci/run-stress.mjs",
+    "release:harden-engines": "node scripts/release/run-python.mjs scripts/release/harden-engine-pack.py",
+    "release:validate-engines": "node scripts/release/run-python.mjs scripts/release/validate-engine-pack.py",
+    "release:functional-engines": "node scripts/release/run-python.mjs scripts/release/functional-engine-tests.py",
+    "release:smoke-app": "node scripts/release/smoke-packaged-app.mjs",
+    "release:collect": "node scripts/release/collect-artifacts.mjs",
+    "release:checksums": "node scripts/release/generate-checksums.mjs",
+    "release:verify": "node scripts/release/verify-release.mjs",
+    "release:updater-manifest": "node scripts/release/generate-updater-manifest.mjs",
+    "release:test-updater": "node scripts/release/verify-updater-transition.mjs",
+    "release:normalize": "node scripts/release/normalize-artifacts.mjs",
+    "release:self-test": "node scripts/release/test-release-tooling.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.4"
   },
   "engines": {
-    "node": ">=22.22.3 <23 || >=24.15.0 <25 || >=26"
+    "node": ">=22.22.3 <23 || >=24.15.0 <25 || >=26 <27"
   },
   "packageManager": "pnpm@11.20.0"
 }

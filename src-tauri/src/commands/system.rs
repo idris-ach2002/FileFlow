@@ -17,16 +17,67 @@ pub struct HealthResponse {
     scheduler: SchedulerSnapshot,
 }
 
-#[tauri::command]
-pub async fn health_check(state: State<'_, AppState>) -> Result<HealthResponse, String> {
-    Ok(HealthResponse {
+pub(crate) fn runtime_health(state: &AppState) -> HealthResponse {
+    HealthResponse {
         app: "FileFlow",
         version: env!("CARGO_PKG_VERSION"),
         cpu_threads: std::thread::available_parallelism().map_or(1, usize::from),
         os: std::env::consts::OS,
         architecture: std::env::consts::ARCH,
         scheduler: state.runtime.read().scheduler.snapshot(),
-    })
+    }
+}
+
+#[tauri::command]
+pub async fn health_check(state: State<'_, AppState>) -> Result<HealthResponse, String> {
+    Ok(runtime_health(&state))
+}
+
+/// CI-only packaged-runtime handshake. The command is a no-op for normal users.
+/// A packaged smoke test sets FILEFLOW_SMOKE_HEALTH_FILE, launches the real app,
+/// and waits for Angular to invoke this command after authentication bootstrap.
+/// That proves the native runtime, WebView, frontend bundle and Tauri IPC are all
+/// alive instead of merely checking that a process stayed resident.
+#[tauri::command]
+pub fn smoke_frontend_ready(state: State<'_, AppState>) -> Result<(), String> {
+    if std::env::var("FILEFLOW_SMOKE_TEST").as_deref() != Ok("1") {
+        return Ok(());
+    }
+    let Some(path) = std::env::var_os("FILEFLOW_SMOKE_HEALTH_FILE") else {
+        return Ok(());
+    };
+    let path = std::path::PathBuf::from(path);
+    if path.file_name().and_then(|name| name.to_str()) != Some("health.json") {
+        return Err("Nom de fichier de health-check invalide.".to_owned());
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Chemin de health-check invalide.".to_owned())?
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let temp_root = std::env::temp_dir()
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    if !parent.starts_with(&temp_root) {
+        return Err("Le health-check CI doit rester dans le répertoire temporaire.".to_owned());
+    }
+    let payload = serde_json::json!({
+        "schemaVersion": 1,
+        "backend": true,
+        "frontend": true,
+        "pid": std::process::id(),
+        "health": runtime_health(&state),
+    });
+    let temporary = path.with_extension("tmp");
+    std::fs::write(
+        &temporary,
+        serde_json::to_vec_pretty(&payload).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|error| error.to_string())?;
+    }
+    std::fs::rename(&temporary, &path).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
