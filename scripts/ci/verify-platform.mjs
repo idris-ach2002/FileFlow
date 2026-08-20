@@ -27,6 +27,43 @@ function output(command, args = ['--version']) {
   if (result.error || result.status !== 0) fail(`${command} is unavailable`);
   return (result.stdout || result.stderr || '').trim();
 }
+
+function pnpmOutput(args = ['--version']) {
+  // When this script is executed through `pnpm run`, npm_execpath points
+  // directly to pnpm's JavaScript CLI. Invoking it through the current
+  // Node executable avoids Windows .cmd/.ps1 resolution differences.
+  const pnpmCli = process.env.npm_execpath;
+
+  if (pnpmCli) {
+    const result = spawnSync(
+      process.execPath,
+      [pnpmCli, ...args],
+      { cwd: root, encoding: 'utf8' },
+    );
+
+    if (!result.error && result.status === 0) {
+      return (result.stdout || result.stderr || '').trim();
+    }
+  }
+
+  // Fallback for direct invocation with:
+  // node scripts/ci/verify-platform.mjs
+  const result = spawnSync(
+    'pnpm',
+    args,
+    {
+      cwd: root,
+      encoding: 'utf8',
+      shell: process.platform === 'win32',
+    },
+  );
+
+  if (result.error || result.status !== 0) {
+    fail('pnpm is unavailable');
+  }
+
+  return (result.stdout || result.stderr || '').trim();
+}
 function tuple(version) { return version.split('.').map((v) => Number.parseInt(v, 10) || 0); }
 function cmp(a,b) { for (let i=0;i<3;i++) { if ((a[i]??0)!==(b[i]??0)) return (a[i]??0)-(b[i]??0); } return 0; }
 function nodeAllowed(version) {
@@ -35,9 +72,8 @@ function nodeAllowed(version) {
 }
 
 if (!nodeAllowed(process.version)) fail(`unsupported Node ${process.version}; expected ${pkg.engines.node}`);
-const pnpmCmd = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 const rustcCmd = process.platform === 'win32' ? 'rustc.exe' : 'rustc';
-const pnpmVersion = output(pnpmCmd).split(/\s+/)[0];
+const pnpmVersion = pnpmOutput().split(/\s+/)[0];
 if (pnpmVersion !== '11.20.0') fail(`pnpm ${pnpmVersion}; expected 11.20.0`);
 const rustVersion = output(rustcCmd).match(/rustc\s+(\d+\.\d+\.\d+)/)?.[1];
 if (!rustVersion || rustVersion !== expectedRust) fail(`rustc ${rustVersion ?? '?'}; expected ${expectedRust}`);
