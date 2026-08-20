@@ -2,13 +2,13 @@
 
 FileFlow is a local-first desktop application for file conversion, organisation and automation. It is designed to expose powerful file tooling through a simple interface that remains usable by non-technical users.
 
-Initial desktop targets: **macOS** and **Linux**.
+Certified desktop targets: **macOS (Apple Silicon + Intel), Windows x64, Linux x64 and Linux ARM64**.
 
 ## Current capabilities
 
 The repository already contains a working native desktop foundation, not only UI mockups:
 
-- native file/folder pickers and Finder/Linux drag & drop;
+- native file/folder pickers and desktop drag & drop;
 - recursive intake with bounded batches, backpressure, hidden/symlink safeguards and paginated workspaces;
 - magic/extension format detection and grouping by file family;
 - server-side workspace search, filters, sorting, insights and recommendations;
@@ -85,7 +85,7 @@ scripts/                     Portable setup, verification and diagnostics
 The repository pins Node `22.22.3` in `.nvmrc` and pnpm `11.20.0` in `package.json`.
 Rust is pinned by `rust-toolchain.toml`.
 
-## First setup: macOS or Linux
+## First setup
 
 ```bash
 sh scripts/setup.sh
@@ -129,6 +129,19 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin
 pnpm run build:mac:universal
 ```
 
+
+## Windows
+
+Install the pinned Node/pnpm and Rust toolchains, then:
+
+```powershell
+pnpm install --frozen-lockfile
+pnpm run verify
+pnpm run build:windows
+```
+
+Public installers are signed in the release workflow; local/package-smoke builds may remain unsigned.
+
 ## Linux
 
 ```bash
@@ -136,14 +149,15 @@ sh scripts/setup-linux.sh
 pnpm run build:linux
 ```
 
-The Linux configuration currently targets `.deb` and AppImage.
+The Linux configuration targets `.deb`, AppImage and `.rpm` packages.
 
 ## Tauri platform configuration
 
 ```text
 src-tauri/tauri.conf.json          shared configuration
 src-tauri/tauri.macos.conf.json   macOS app/DMG settings
-src-tauri/tauri.linux.conf.json   Linux deb/AppImage settings
+src-tauri/tauri.windows.conf.json Windows NSIS/MSI settings
+src-tauri/tauri.linux.conf.json   Linux DEB/AppImage/RPM settings
 ```
 
 Docker is intentionally not part of the runtime or the normal development workflow.

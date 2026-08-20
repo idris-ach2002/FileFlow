@@ -1,142 +1,235 @@
-# FileFlow — distribution multi-plateforme
+# FileFlow — distribution native multi-plateforme
 
-## Cibles officielles
+## Cibles certifiées
 
-| OS | Architecture | Livrables |
-| --- | --- | --- |
-| macOS 11+ | Apple Silicon | APP + DMG |
-| macOS 11+ | Intel | APP + DMG |
-| Windows | x86_64 | NSIS EXE + MSI |
-| Linux | x86_64 | AppImage + DEB + RPM |
-| Linux | ARM64 | AppImage + DEB + RPM |
+| OS | Architecture | Runner GitHub | Livrables |
+| --- | --- | --- | --- |
+| macOS 11+ | Apple Silicon | `macos-15` | APP + DMG + updater |
+| macOS 11+ | Intel | `macos-15-intel` | APP + DMG + updater |
+| Windows | x86_64 | `windows-2025` | NSIS EXE + MSI + updater |
+| Linux | x86_64 | `ubuntu-22.04` | AppImage + DEB + RPM + updater |
+| Linux | ARM64 | `ubuntu-22.04-arm` | AppImage + DEB + RPM + updater |
 
-Linux est construit sur Ubuntu 22.04 afin de conserver une baseline glibc relativement ancienne. Les releases sont construites sur des runners natifs pour éviter de masquer les problèmes spécifiques à un OS/CPU.
+Linux est construit sur Ubuntu 22.04 pour conserver une baseline glibc raisonnablement ancienne. Les cinq bundles de release sont construits nativement ; aucune release certifiée ne repose sur un cross-build pour masquer les différences WebView, filesystem, signature ou dépendances dynamiques.
 
-## Préparer un checkout de release
+## Toolchain figée
 
-Après un changement de dépendances ou l'ajout d'un nouveau crate :
+- Node `22.22.3` dans la CI (le projet accepte aussi les lignes Angular supportées 24.15.x et 26.x) ;
+- pnpm `11.20.0` ;
+- Rust `1.97.1` dans `rust-toolchain.toml` et GitHub Actions ;
+- lockfiles `pnpm-lock.yaml` et `Cargo.lock` obligatoires.
 
-```bash
-pnpm run release:bootstrap
+`pnpm run ci:preflight` refuse une toolchain incompatible ou des versions FileFlow désynchronisées.
+
+## Les quatre workflows
+
+### `ci.yml`
+
+Pull requests et pushes `main/develop` : matrice macOS/Windows/Linux, build Angular, tests Angular, rustfmt, cargo check/test et Clippy strict. Aucun bundle n'est publié.
+
+### `package-smoke.yml`
+
+Push sur `main` ou lancement manuel : cinq cibles natives, bundle complet non-production, lancement réel de l'application packagée et handshake Angular -> Tauri. Linux utilise Xvfb. Le workflow exécute aussi les tests de stress/recovery/cancellation.
+
+### `engine-packs.yml`
+
+Promotion manuelle des packs moteurs. Chaque candidat doit déjà être immuable (`packVersion`, target, inventaire SHA-256). Le workflow :
+
+1. télécharge et vérifie le candidat ;
+2. stage les moteurs ;
+3. durcit les dépendances natives (`@loader_path`/RPATH) ;
+4. lance les probes ;
+5. exécute les fixtures fonctionnelles ;
+6. inspecte architecture et dépendances ;
+7. reconstruit un pack immuable ;
+8. ne crée le draft `engines-vX.Y.Z` que si les cinq targets réussissent.
+
+### `release.yml`
+
+Déclenché uniquement par un tag `vX.Y.Z`. Les jobs de build ont `contents: read` et uploadent des artefacts Actions privés. Le job `publish-release`, seul détenteur de `contents: write`, ne s'exécute qu'après succès de toute la matrice.
+
+```text
+5 builds natifs
+      |
+      +-- engines / tests / bundle / smoke / signatures
+      |
+      v
+artifacts Actions privés
+      |
+      v
+normalize -> latest.json -> SHA256SUMS -> verify
+      |
+      v
+GitHub Release DRAFT unique
 ```
 
-Cette commande :
+Une cible rouge => aucun GitHub Release n'est créé.
 
-1. synchronise `pnpm-lock.yaml` ;
-2. synchronise `Cargo.lock` ;
-3. contrôle la cohérence des versions ;
-4. exécute le gate cross-platform `pnpm run verify`.
+## Gate source
 
-Les deux lockfiles modifiés doivent être revus et commités avant de pousser un tag.
-
-## Gate cross-platform
-
-`pnpm run verify` est implémenté en Node et ne dépend pas de `/bin/sh`. Il exécute les mêmes six contrôles sous macOS, Linux et Windows :
+`pnpm run verify` exécute :
 
 1. Angular production build ;
 2. Angular tests ;
-3. rustfmt ;
-4. cargo check `--locked` ;
-5. cargo test `--locked` ;
-6. Clippy strict `-D warnings`.
+3. `cargo fmt --check` ;
+4. `cargo check --workspace --locked` ;
+5. `cargo test --workspace --locked` ;
+6. Clippy `--all-targets --all-features -- -D warnings`.
 
-`.github/workflows/ci-platforms.yml` exécute ce gate sur Ubuntu, macOS et Windows à chaque PR/push vers les branches principales.
+`python scripts/release/check-release.py` ajoute les invariants distribution : versions synchronisées, plateformes/bundles attendus, updater, workflows atomiques et manifeste moteurs.
 
-## Modèle moteurs
+## Smoke test du vrai bundle
 
-FileFlow recherche d'abord `resources/engines/bin` dans son bundle, puis le PATH système et enfin quelques emplacements natifs connus. Les sous-processus issus d'un pack reçoivent également les chemins `lib` et `share/tessdata` adaptés.
+`scripts/release/smoke-packaged-app.mjs` ne se contente pas de voir un PID vivant. Il lance :
 
-Les packs vivent hors Git sous :
+- l'exécutable dans le `.app` sur macOS ;
+- l'AppImage sur Linux (Xvfb en CI) ;
+- le NSIS installé silencieusement dans un dossier temporaire sur Windows.
+
+Le test positionne `FILEFLOW_SMOKE_HEALTH_FILE`. Une fois Angular initialisé, le frontend invoque `smoke_frontend_ready`; Rust écrit alors un fichier de santé atomique contenant `backend=true`, `frontend=true`, version, OS, architecture et état scheduler. Le test échoue si l'application quitte, si Angular n'atteint pas Tauri ou si le handshake dépasse le timeout.
+
+## Packs moteurs immuables
+
+> Pour une source privée, `fetch-engine-pack.py` accepte `FILEFLOW_ENGINE_PACK_TOKEN` ou `GITHUB_TOKEN`. Un pack moteur draft doit être publié (ou exposé via une URL authentifiée compatible) avant qu’une release applicative puisse le consommer.
+
+
+Le manifeste `release/engines/manifest.json` possède un `packVersion` indépendant de la version FileFlow. Les archives ont la forme :
 
 ```text
-release/engines/packs/<target-triple>/
+fileflow-engines-1.0.0-aarch64-apple-darwin.tar.gz
+fileflow-engines-1.0.0-x86_64-apple-darwin.tar.gz
+fileflow-engines-1.0.0-x86_64-pc-windows-msvc.tar.gz
+fileflow-engines-1.0.0-x86_64-unknown-linux-gnu.tar.gz
+fileflow-engines-1.0.0-aarch64-unknown-linux-gnu.tar.gz
 ```
 
-Le contrat complet est documenté dans `release/engines/README.md` et décrit par `release/engines/manifest.json`.
+Chaque archive est accompagnée de `.sha256` et contient `pack-manifest.json` avec target, version, taille et SHA-256 de chaque fichier. `fetch-engine-pack.py` vérifie le checksum externe, refuse traversal/symlinks, puis exige une correspondance exacte entre inventaire déclaré et fichiers extraits.
 
-Trois modes existent :
+La variable `FILEFLOW_ENGINE_PACK_URL_TEMPLATE` doit contenir **les deux placeholders** :
 
-- `optional`: aucun moteur embarqué obligatoire, fallback système autorisé ;
-- `core`: FFmpeg/FFprobe, ImageMagick, libvips, qpdf, 7-Zip, zstd et lz4 obligatoires ;
-- `full`: tous les moteurs déclarés obligatoires.
-
-Ne publiez pas un pack `full` avant audit des licences et bibliothèques dynamiques de chaque binaire. En particulier, la licence effective de FFmpeg dépend des options de compilation et Ghostscript/Poppler/LZ4 CLI demandent une décision explicite de redistribution.
-
-## Build local
-
-macOS/Linux :
-
-```bash
-FILEFLOW_ENGINE_MODE=optional sh scripts/release/build-local.sh
+```text
+https://github.com/ORG/REPO/releases/download/engines-v{packVersion}/fileflow-engines-{packVersion}-{target}.tar.gz
 ```
 
-Windows PowerShell :
-
-```powershell
-$env:FILEFLOW_ENGINE_MODE = "optional"
-./scripts/release/build-local.ps1
-```
-
-Pour une release publique autonome, utilisez `core` ou `full` uniquement une fois les packs correspondants préparés et audités.
-
-## Auto-update
-
-L'updater est opt-in et non bloquant au démarrage. `generate-release-config.py` n'active les artifacts updater que lorsque les trois éléments suivants existent :
-
-- `TAURI_UPDATER_PUBKEY` ;
-- `TAURI_SIGNING_PRIVATE_KEY` ;
-- `FILEFLOW_UPDATE_ENDPOINT`.
-
-L'application vérifie les mises à jour après le bootstrap et demande explicitement à l'utilisateur avant téléchargement/installation.
-
-## GitHub secrets / variables
-
-### Updater
-
-- secret `TAURI_UPDATER_PUBKEY`
-- secret `TAURI_SIGNING_PRIVATE_KEY`
-- secret `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
-- variable `FILEFLOW_UPDATE_ENDPOINT` — par exemple l'URL de `latest.json`
+## Validation native des moteurs
 
 ### macOS
 
-- secret `APPLE_CERTIFICATE` — certificat Developer ID Application encodé en base64
-- secret `APPLE_CERTIFICATE_PASSWORD`
-- secret `APPLE_ID`
-- secret `APPLE_PASSWORD` — mot de passe spécifique à l'app
-- secret `APPLE_TEAM_ID`
+- `file` pour l'architecture Mach-O ;
+- réécriture des dépendances internes absolues avec `install_name_tool` ;
+- IDs dylib en `@rpath/...` ;
+- dépendances exécutables en `@loader_path/../lib/...` ;
+- rejet de `/opt/homebrew`, `/usr/local`, `/tmp` résiduels ;
+- signature Developer ID des Mach-O en release ;
+- `codesign --verify` sur chaque composant signé.
 
-Sans certificat, la CI peut produire un build de test signé ad-hoc ; ce build n'est pas une release publique notarée.
+### Linux
+
+- `file` / `readelf` / `ldd` ;
+- RPATH `$ORIGIN` pour les ELF dynamiques ;
+- rejet des bibliothèques `not found` et des dépendances provenant de `/home`, `/opt` ou `/usr/local` ;
+- les ELF entièrement statiques ne sont pas forcés à recevoir un RPATH.
 
 ### Windows
 
-- secret `WINDOWS_CERTIFICATE` — PFX encodé en base64
-- secret `WINDOWS_CERTIFICATE_PASSWORD`
-- variable `WINDOWS_TIMESTAMP_URL`
+- parser PE intégré pour vérifier `Machine` x64/ARM64 ;
+- lecture de l'import table DLL sans dépendre de `dumpbin` ;
+- toute DLL non-système importée doit être embarquée ;
+- les `.exe/.dll` du pack sont signés Authenticode au moment de la release ;
+- validation Authenticode après signature.
 
-Sans certificat, les installateurs peuvent être construits pour smoke-test mais ne doivent pas être présentés comme release publique signée.
+Le runtime ajoute `engines/bin` **et** `engines/lib` au PATH des processus enfants afin que Windows résolve les DLL embarquées sans modifier le PATH global de FileFlow.
 
-### Engine packs
+## Tests fonctionnels moteurs
 
-- variable `FILEFLOW_ENGINE_MODE=optional|core|full`
-- variable `FILEFLOW_ENGINE_PACK_URL_TEMPLATE` — obligatoire pour `core/full`, contient `{target}` et pointe vers un `.tar.gz`/`.zip` accompagné de `<archive>.sha256`
+`functional-engine-tests.py` exécute de vraies opérations sur des fixtures temporaires : conversion image FFmpeg/ImageMagick/libvips, contrôle qpdf, création/extraction 7-Zip, round-trip zstd/lz4, metadata, OCR, Poppler, Ghostscript, Pandoc, LibreOffice, OCRmyPDF et img2pdf lorsqu'ils sont présents dans le flavor staged.
+
+Une commande `--version` verte n'est donc plus considérée comme preuve suffisante.
+
+## Signature et notarisation production
+
+`generate-release-config.py --strict` refuse la release si une configuration production est absente.
+
+### Updater
+
+Secrets :
+
+- `TAURI_UPDATER_PUBKEY`
+- `TAURI_SIGNING_PRIVATE_KEY`
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+
+Variable :
+
+- `FILEFLOW_UPDATE_ENDPOINT` (typiquement `https://github.com/ORG/REPO/releases/latest/download/latest.json`)
+
+### macOS
+
+Secrets :
+
+- `APPLE_CERTIFICATE` (P12 Developer ID Application en base64)
+- `APPLE_CERTIFICATE_PASSWORD`
+- `APPLE_ID`
+- `APPLE_PASSWORD` (mot de passe spécifique à l'app)
+- `APPLE_TEAM_ID`
+
+La release exige Developer ID + Hardened Runtime + notarisation/stapling. Le mode ad-hoc `-` reste réservé au package-smoke/local.
+
+### Windows
+
+Secrets :
+
+- `WINDOWS_CERTIFICATE` (PFX base64)
+- `WINDOWS_CERTIFICATE_PASSWORD`
+
+Variable :
+
+- `WINDOWS_TIMESTAMP_URL`
+
+La release publique refuse le fallback non signé.
+
+### Moteurs
+
+Variables :
+
+- `FILEFLOW_ENGINE_MODE=core` (ou `full` après audit complet des licences)
+- `FILEFLOW_ENGINE_PACK_URL_TEMPLATE` avec `{packVersion}` + `{target}`
+
+## Updater et publication atomique
+
+Tauri produit les artefacts updater signés. Le job final génère un `latest.json` unique couvrant :
+
+- `darwin-aarch64`
+- `darwin-x86_64`
+- `windows-x86_64`
+- `linux-x86_64`
+- `linux-aarch64`
+
+Les collisions de noms génériques (`FileFlow.app.tar.gz`, `FileFlow.AppImage`, etc.) sont normalisées avec le target avant publication. `SHA256SUMS` utilise ensuite les noms d'assets plats réellement visibles dans GitHub Releases.
+
+`verify-release.mjs` exige tous les installateurs, toutes les signatures updater, la correspondance des signatures de `latest.json` et la couverture SHA-256 de **chaque** asset avant création du draft.
+
+Le draft reste manuel au début : télécharger/tester les cinq familles d'installateurs puis cliquer **Publish**. Après plusieurs releases sans incident, ce dernier clic pourra être automatisé séparément.
+
+## Test de transition updater
+
+Le job final compare la dernière release publique à la nouvelle version et exécute `verify-updater-transition.mjs`. Il refuse une version qui ne progresse pas et exige les cinq URLs/signatures.
+
+Le véritable test installé `1.0.1 -> 1.0.2` ne peut être exécuté qu'une fois les deux versions signées/publiées disponibles. L'infrastructure est prête : lorsque `v1.0.2` est construite après `v1.0.1`, la transition est automatiquement contrôlée avant le draft. Un test d'installation updater bout-en-bout sur machine propre reste le dernier gate manuel avant publication tant qu'une ancienne release installable n'existe pas dans la CI.
 
 ## Processus de release
 
-1. `pnpm run release:version -- X.Y.Z`
-2. `pnpm run release:bootstrap`
-3. revoir et committer les lockfiles
-4. `git status` doit être propre
-5. tag annoté `vX.Y.Z`
-6. pousser le tag
-7. `.github/workflows/release.yml` construit chaque OS/architecture nativement
-8. la CI crée/complète une GitHub Release en brouillon
-9. SHA-256 est produit pour chaque target
-10. smoke-test de chaque installateur sur machine propre
-11. publier la GitHub Release seulement après validation
+```bash
+pnpm run release:version -- 1.0.2
+pnpm run release:bootstrap
+# revue des changements + commit
+git tag v1.0.2
+git push origin v1.0.2
+```
 
-La release `full` n'est considérée autonome que si le stage `FILEFLOW_ENGINE_MODE=full` passe pour toutes les cibles et que les licences/dépendances du pack ont été auditées.
+GitHub : preflight -> 5 builds -> engines -> verify -> package -> smoke -> signatures/notarisation -> artifacts privés -> manifest/checksums -> draft atomique.
 
-## Smoke-test des moteurs
+Ne fusionner une branche de distribution vers `main` et ne publier le draft qu'après un passage réellement vert sur GitHub Actions. Un checkout local ne peut pas certifier Windows/macOS/Linux à la place des runners natifs.
 
-Après staging, `smoke-engines.py` lance chaque exécutable réellement embarqué avec une commande de version/diagnostic. Une DLL, dylib, `.so` ou donnée runtime manquante fait échouer la release avant le bundling. Cette étape est exécutée automatiquement par les builds locaux et GitHub Actions.
+### Runtime Windows
+
+Le bundle Windows active `bundleVCRuntime` afin que l’application et les moteurs/sidecars natifs ne dépendent pas d’une installation préalable du redistribuable Visual C++ sur la machine cible.

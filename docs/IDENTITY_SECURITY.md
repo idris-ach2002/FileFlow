@@ -10,9 +10,10 @@ This is deliberately different from pretending that a remote/cloud account alrea
 
 - Passwords are never stored in clear text.
 - The current local KDF is PBKDF2-HMAC-SHA256 with 600,000 iterations and a unique 128-bit salt per account.
-- Password derivation and verification run on a blocking worker instead of the async UI/runtime path.
+- Password derivation and verification run on a blocking worker instead of the async UI/runtime path. The PBKDF2 implementation precomputes reusable HMAC SHA-256 inner/outer states; this preserves the exact stored hash format and 600,000-round work factor while removing redundant per-round setup.
 - Unknown-account login attempts perform comparable KDF work to reduce account-discovery timing differences.
 - Password changes create a fresh salt/hash and rotate the active session.
+- Avatar loading is cosmetic and starts after authentication succeeds, so avatar disk I/O cannot hold the login UI in its busy state.
 - Passwords are limited to 12–128 Unicode characters in the local profile UI.
 
 The KDF implementation is intentionally isolated in `fileflow-storage::auth`; it can be replaced by a dedicated Argon2id/PBKDF2 library without changing account storage or the frontend contract.

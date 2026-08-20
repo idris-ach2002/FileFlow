@@ -7,7 +7,8 @@ FileFlow deliberately separates a simple user-facing desktop experience from a m
 ## Supported desktop targets
 
 - macOS (Apple Silicon and Intel)
-- Linux (Debian/Ubuntu packaging first)
+- Windows x64
+- Linux x64 and ARM64
 
 Platform-specific integration stays behind Tauri or engine discovery. Domain/planner/execution crates do not depend on Angular.
 
@@ -68,7 +69,7 @@ On first launch, the desktop shell guides the user through local account creatio
 
 ## Local identity and session boundary
 
-The current identity model is intentionally **device-local**. It is not presented as cloud authentication or multi-device sync. SQLite stores account/profile/onboarding records and a salted password derivation; plaintext passwords and session tokens are not persisted. Password derivation runs off the async execution thread.
+The current identity model is intentionally **device-local**. It is not presented as cloud authentication or multi-device sync. SQLite stores account/profile/onboarding records and a salted password derivation; plaintext passwords and session tokens are not persisted. Password derivation runs off the async execution thread. PBKDF2 keeps the existing 600,000-round format while reusing pre-seeded HMAC states so login does not pay redundant SHA-256 setup work on every round.
 
 A successful login creates a short-lived opaque session identifier held only in Tauri/Angular process memory. Expiration or logout clears the session, cancels active jobs and drops the current-session output registry. Filesystem-sensitive Tauri commands (workspace intake, execution, analysis, history, recipes and favourites) require an active backend session in addition to Angular route guards.
 
@@ -197,8 +198,9 @@ Probe order is adapter-aware and cross-platform. In addition to `PATH`, macOS ch
 ```text
 shared source tree
       │
-      ├── macOS → FileFlow.app / FileFlow.dmg
-      └── Linux → FileFlow.deb / FileFlow.AppImage
+      ├── macOS → APP / DMG
+      ├── Windows → NSIS EXE / MSI
+      └── Linux → DEB / AppImage / RPM
 ```
 
 Docker is intentionally absent from runtime and the normal developer workflow.
