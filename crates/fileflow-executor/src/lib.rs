@@ -3897,6 +3897,71 @@ fn file_url(path: &Path) -> String {
     format!("file://{encoded}")
 }
 
+#[cfg(target_os = "linux")]
+fn sanitize_external_process_environment(command: &mut Command) {
+    // AppImage launchers can inject runtime paths into the parent process.
+    // FileFlow deliberately uses system-managed engines, so those variables
+    // must not leak into system Python/LibreOffice/FFmpeg/etc. A leaked
+    // PYTHONHOME is enough to make /usr/bin/python3 search for its stdlib in
+    // the mounted AppImage and fail before img2pdf even starts.
+    let appdir = std::env::var_os("APPDIR").map(PathBuf::from);
+    let running_from_appimage = appdir.is_some() || std::env::var_os("APPIMAGE").is_some();
+    if !running_from_appimage {
+        return;
+    }
+
+    for key in [
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "PYTHONEXECUTABLE",
+        "PYTHONUSERBASE",
+        "VIRTUAL_ENV",
+    ] {
+        command.env_remove(key);
+    }
+
+    if let Some(appdir) = appdir.as_ref() {
+        for key in [
+            "PATH",
+            "LD_LIBRARY_PATH",
+            "GI_TYPELIB_PATH",
+            "GIO_EXTRA_MODULES",
+            "GTK_PATH",
+            "QT_PLUGIN_PATH",
+            "QML2_IMPORT_PATH",
+        ] {
+            let Some(value) = std::env::var_os(key) else {
+                continue;
+            };
+            let filtered = std::env::split_paths(&value)
+                .filter(|entry| !entry.starts_with(appdir))
+                .collect::<Vec<_>>();
+            if filtered.is_empty() {
+                command.env_remove(key);
+            } else if let Ok(joined) = std::env::join_paths(filtered) {
+                command.env(key, joined);
+            }
+        }
+
+        if let Some(value) = std::env::var_os("LD_PRELOAD") {
+            let value = value.to_string_lossy();
+            let appdir_text = appdir.to_string_lossy();
+            if value.contains(appdir_text.as_ref()) {
+                command.env_remove("LD_PRELOAD");
+            }
+        }
+
+        if let Some(value) = std::env::var_os("GSETTINGS_SCHEMA_DIR") {
+            if PathBuf::from(value).starts_with(appdir) {
+                command.env_remove("GSETTINGS_SCHEMA_DIR");
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sanitize_external_process_environment(_command: &mut Command) {}
+
 fn process_timeout(engine: &Path) -> Duration {
     let name = engine
         .file_name()
@@ -3923,6 +3988,7 @@ async fn capture_process(
         return Err(ExecutionError::Cancelled);
     }
     let mut command = Command::new(engine);
+    sanitize_external_process_environment(&mut command);
     command
         .args(args)
         .stdin(Stdio::null())
@@ -3966,6 +4032,7 @@ async fn run_process_with_env(
         return Err(ExecutionError::Cancelled);
     }
     let mut command = Command::new(engine);
+    sanitize_external_process_environment(&mut command);
     command
         .args(args)
         .envs(env.iter().map(|(key, value)| (*key, value.as_str())))
@@ -4009,6 +4076,7 @@ async fn run_process(
         return Err(ExecutionError::Cancelled);
     }
     let mut command = Command::new(engine);
+    sanitize_external_process_environment(&mut command);
     command
         .args(args)
         .stdin(Stdio::null())
