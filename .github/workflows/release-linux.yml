@@ -31,7 +31,7 @@ jobs:
       - name: Tauri prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev xdg-utils libfuse2 rpm xvfb file patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xdg-utils libfuse2 rpm xvfb file patchelf pkg-config
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
@@ -73,7 +73,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: pnpm exec tauri build --target '${{ matrix.target }}' --bundles deb,appimage,rpm --config src-tauri/tauri.release.conf.json
+        run: TAURI_LINUX_AYATANA_APPINDICATOR=1 pnpm exec tauri build --target '${{ matrix.target }}' --bundles deb,appimage,rpm --config src-tauri/tauri.release.conf.json
       - name: Validate release
         run: |
           node scripts/release/validate-distribution.mjs --target '${{ matrix.target }}'
