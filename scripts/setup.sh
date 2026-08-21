@@ -1,19 +1,8 @@
-#!/bin/sh
-set -eu
-
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-OS=$(uname -s 2>/dev/null || printf unknown)
-
-case "$OS" in
-  Darwin)
-    exec sh "$SCRIPT_DIR/setup-macos.sh" "$@"
-    ;;
-  Linux)
-    exec sh "$SCRIPT_DIR/setup-linux.sh" "$@"
-    ;;
-  *)
-    echo "Unsupported host: $OS"
-    echo "FileFlow development currently supports macOS and Linux."
-    exit 1
-    ;;
+#!/usr/bin/env bash
+set -u
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+case "$(uname -s 2>/dev/null || printf unknown)" in
+  Darwin) exec bash "$SCRIPT_DIR/setup-macos.sh" "$@" ;;
+  Linux) exec bash "$SCRIPT_DIR/setup-linux.sh" "$@" ;;
+  *) echo 'Unsupported development host. Windows uses install.ps1/runtime scripts.' >&2; exit 1 ;;
 esac

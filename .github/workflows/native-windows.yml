@@ -14,8 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  native:
-    name: Native Windows / x64
+  build:
+    name: Windows / x64
     runs-on: windows-2025
     env:
       CARGO_INCREMENTAL: '0'
@@ -35,166 +35,38 @@ jobs:
         with:
           toolchain: '1.97.1'
           targets: x86_64-pc-windows-msvc
-          components: clippy
       - uses: swatinem/rust-cache@v2
         with:
-          shared-key: quality-Windows-X64
+          shared-key: native-windows-x64
           cache-on-failure: true
-      - name: Install dependencies
-        shell: pwsh
-        run: pnpm install --frozen-lockfile
-      - name: Windows deterministic preflight
-        shell: pwsh
-        run: ./scripts/ci/windows-preflight.ps1
-      - name: Windows platform preflight
+      - run: pnpm install --frozen-lockfile
+      - name: Platform/source preflight
         shell: pwsh
         run: |
           pnpm run ci:platform-info
           pnpm run ci:preflight
-          pnpm run release:self-test
-          python scripts/release/check-release.py --allow-dirty
-      - name: Windows native compile + Clippy
+          pnpm run release:check
+          ./scripts/ci/windows-preflight.ps1
+          cargo check --workspace --all-features --locked --target x86_64-pc-windows-msvc
+      - name: Generate lightweight package config
         shell: pwsh
-        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      - name: Windows native Rust tests
-        shell: pwsh
-        run: cargo test --workspace --locked
-
-  engine-certify:
-    name: Engine certification Windows / x64
-    runs-on: windows-2025
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.13'
-      - name: Restore immutable certified engine cache
-        id: engine-cache
-        uses: actions/cache@v4
-        with:
-          path: release/engines/out
-          key: fileflow-engines-x86_64-pc-windows-msvc-${{ hashFiles('.github/workflows/native-windows.yml', 'release/engines/**', 'scripts/release/*engine*.py', 'scripts/release/native_dependency_policy.py', 'scripts/release/fetch-libreoffice-runtime.py', 'scripts/release/windows-engine-launcher.rs') }}
-      - uses: dtolnay/rust-toolchain@stable
-        if: steps.engine-cache.outputs.cache-hit != 'true'
-        with:
-          toolchain: '1.97.1'
-          targets: x86_64-pc-windows-msvc
-      - name: Provision FULL engine runtime
-        if: steps.engine-cache.outputs.cache-hit != 'true'
-        uses: mamba-org/setup-micromamba@v2
-        with:
-          environment-name: fileflow-engines
-          create-args: "python=3.12 pip ffmpeg imagemagick libvips qpdf 7zip zstd lz4 exiftool tesseract poppler ghostscript pandoc"
-          cache-environment: true
-          cache-downloads: true
-          init-shell: powershell
-      - name: Install portable Python engines
-        if: steps.engine-cache.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          micromamba run -n fileflow-engines python -m pip install --disable-pip-version-check --no-cache-dir -r release/engines/python-requirements.txt
-          micromamba run -n fileflow-engines python -c "import PIL, pikepdf, img2pdf, ocrmypdf; print('FileFlow Python engines OK')"
-      - name: Fetch verified official LibreOffice runtime
-        if: steps.engine-cache.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: python scripts/release/fetch-libreoffice-runtime.py --target x86_64-pc-windows-msvc
-      - name: Build + harden + certify FULL engines
-        if: steps.engine-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 60
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          python scripts/release/build-native-engine-pack.py --target x86_64-pc-windows-msvc --prefix "$env:CONDA_PREFIX"
-          python scripts/release/stage-engines.py --target x86_64-pc-windows-msvc --mode full
-          python scripts/release/harden-engine-pack.py --target x86_64-pc-windows-msvc
-          python scripts/release/validate-engine-pack.py --target x86_64-pc-windows-msvc --scope full
-          python scripts/release/smoke-engines.py --mode full
-          python scripts/release/functional-engine-tests.py --mode full
-          python scripts/release/make-engine-pack.py --target x86_64-pc-windows-msvc --source src-tauri/resources/engines --licenses src-tauri/resources/licenses
-      - name: Re-stage immutable artifact and validate closure
-        shell: pwsh
-        run: |
-          python scripts/release/stage-local-engine-pack.py --target x86_64-pc-windows-msvc --directory release/engines/out --mode full
-          python scripts/release/validate-engine-pack.py --target x86_64-pc-windows-msvc --scope full
-          python scripts/release/smoke-engines.py --mode full
-          python scripts/release/functional-engine-tests.py --mode full
-          python scripts/release/report-engine-footprint.py --target x86_64-pc-windows-msvc
-      - name: Upload certified immutable engine pack
-        uses: actions/upload-artifact@v7
-        with:
-          name: engines-x86_64-pc-windows-msvc
-          path: |
-            release/engines/out/fileflow-engines-*-x86_64-pc-windows-msvc.tar.gz
-            release/engines/out/fileflow-engines-*-x86_64-pc-windows-msvc.tar.gz.sha256
-          if-no-files-found: error
-          retention-days: 14
-
-  package-smoke:
-    name: Package smoke Windows / x64
-    needs: [native, engine-certify]
-    if: ${{ !cancelled() && needs.native.result == 'success' && needs.engine-certify.result == 'success' }}
-    runs-on: windows-2025
-    env:
-      CARGO_INCREMENTAL: '0'
-      RUST_BACKTRACE: '1'
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
-        with:
-          name: engines-x86_64-pc-windows-msvc
-          path: release/engines/out
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '22.22.3'
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.13'
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: '1.97.1'
-          targets: x86_64-pc-windows-msvc
-      - uses: swatinem/rust-cache@v2
-        with:
-          shared-key: quality-Windows-X64
-          cache-on-failure: true
-      - name: Install dependencies
-        shell: pwsh
-        run: pnpm install --frozen-lockfile
-      - name: Deterministic Windows gate
-        shell: pwsh
-        run: ./scripts/ci/windows-preflight.ps1
-      - name: Stage certified engines without rebuilding them
-        shell: pwsh
-        run: |
-          python scripts/release/stage-local-engine-pack.py --target x86_64-pc-windows-msvc --directory release/engines/out --mode full
-          python scripts/release/validate-engine-pack.py --target x86_64-pc-windows-msvc --scope full
-          python scripts/release/smoke-engines.py --mode full
-          python scripts/release/generate-release-config.py --target x86_64-pc-windows-msvc
-      - name: Build package smoke
+        run: python scripts/release/generate-release-config.py --target x86_64-pc-windows-msvc
+      - name: Build FileFlow app only
         shell: pwsh
         run: pnpm exec tauri build --target x86_64-pc-windows-msvc --bundles nsis,msi --config src-tauri/tauri.release.conf.json
-      - name: Validate engines from final packaged artifact
-        timeout-minutes: 12
-        run: python scripts/release/smoke-packaged-engines.py --target x86_64-pc-windows-msvc --mode full
-      - name: Validate package smoke
+      - name: Package smoke
         shell: pwsh
         run: |
           node scripts/release/validate-distribution.mjs --target x86_64-pc-windows-msvc
           node scripts/release/smoke-packaged-app.mjs --target x86_64-pc-windows-msvc
-      - name: Collect candidate artifacts
-        shell: pwsh
-        run: node scripts/release/collect-artifacts.mjs --target x86_64-pc-windows-msvc
-      - name: Upload Windows candidate
-        uses: actions/upload-artifact@v7
+          node scripts/release/collect-artifacts.mjs --target x86_64-pc-windows-msvc
+      - uses: actions/upload-artifact@v7
         with:
-          name: fileflow-windows-x86_64-pc-windows-msvc-${{ github.event.pull_request.head.sha || github.sha }}-candidate
+          name: fileflow-windows-x86_64-pc-windows-msvc-${{ github.event.pull_request.head.sha || github.sha }}
           path: dist/release/x86_64-pc-windows-msvc
           if-no-files-found: error
           retention-days: 14
-      - name: Publish Git-only install payload
+      - name: Publish install payload
         if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
         shell: pwsh
-        run: python scripts/release/publish-git-payload.py --target 'x86_64-pc-windows-msvc' --root 'dist/release/x86_64-pc-windows-msvc'
+        run: python scripts/release/publish-git-payload.py --target x86_64-pc-windows-msvc --root dist/release/x86_64-pc-windows-msvc

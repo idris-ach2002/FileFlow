@@ -24,11 +24,7 @@ Thumbs.db
 *.log
 npm-debug.log*
 src-tauri/tauri.release.conf.json
-src-tauri/resources/engines/bin/
-release/engines/packs/
 __pycache__/
 *.pyc
-release/engines/out/
 
 # Native engine factory inputs fetched during CI
-release/engines/vendor/

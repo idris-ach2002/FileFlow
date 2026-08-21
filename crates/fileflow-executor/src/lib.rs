@@ -2906,61 +2906,6 @@ fn safe_folder_name(value: &str) -> String {
     }
 }
 
-fn configure_pack_environment(command: &mut Command, engine: &Path) {
-    let Some(bin_dir) = engine.parent() else {
-        return;
-    };
-    if bin_dir.file_name().and_then(|value| value.to_str()) != Some("bin") {
-        return;
-    }
-    let Some(root) = bin_dir.parent() else {
-        return;
-    };
-
-    let mut path_entries = vec![bin_dir.to_path_buf()];
-    let library_dir = root.join("lib");
-    // Windows resolves adjacent/native DLLs through PATH, while Unix engines
-    // may also spawn helper binaries shipped in lib/. Keep both directories in
-    // the child-only environment without modifying FileFlow's global process.
-    if library_dir.is_dir() {
-        path_entries.push(library_dir.clone());
-    }
-    if let Some(existing) = env::var_os("PATH") {
-        path_entries.extend(env::split_paths(&existing));
-    }
-    if let Ok(joined) = env::join_paths(path_entries) {
-        command.env("PATH", joined);
-    }
-
-    if library_dir.is_dir() {
-        #[cfg(target_os = "linux")]
-        {
-            let mut entries = vec![library_dir.clone()];
-            if let Some(existing) = env::var_os("LD_LIBRARY_PATH") {
-                entries.extend(env::split_paths(&existing));
-            }
-            if let Ok(joined) = env::join_paths(entries) {
-                command.env("LD_LIBRARY_PATH", joined);
-            }
-        }
-        #[cfg(target_os = "macos")]
-        {
-            let mut entries = vec![library_dir];
-            if let Some(existing) = env::var_os("DYLD_LIBRARY_PATH") {
-                entries.extend(env::split_paths(&existing));
-            }
-            if let Ok(joined) = env::join_paths(entries) {
-                command.env("DYLD_LIBRARY_PATH", joined);
-            }
-        }
-    }
-
-    let tessdata = root.join("share").join("tessdata");
-    if tessdata.is_dir() {
-        command.env("TESSDATA_PREFIX", tessdata);
-    }
-}
-
 async fn capture_process(
     engine: &Path,
     args: &[OsString],
@@ -2970,7 +2915,6 @@ async fn capture_process(
         return Err(ExecutionError::Cancelled);
     }
     let mut command = Command::new(engine);
-    configure_pack_environment(&mut command, engine);
     command
         .args(args)
         .stdin(Stdio::null())
@@ -3008,7 +2952,6 @@ async fn run_process_with_env(
         return Err(ExecutionError::Cancelled);
     }
     let mut command = Command::new(engine);
-    configure_pack_environment(&mut command, engine);
     command
         .args(args)
         .envs(env.iter().map(|(key, value)| (*key, value.as_str())))
@@ -3046,7 +2989,6 @@ async fn run_process(
         return Err(ExecutionError::Cancelled);
     }
     let mut command = Command::new(engine);
-    configure_pack_environment(&mut command, engine);
     command
         .args(args)
         .stdin(Stdio::null())

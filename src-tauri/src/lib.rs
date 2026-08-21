@@ -217,10 +217,6 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let tray = build_tray(app)?;
-            let resource_dir = app.path().resource_dir()?;
-            let bundled_engines = resource_dir.join("engines").join("bin");
-            fileflow_engine::set_bundled_engine_root(bundled_engines.clone());
-            tracing::info!(path = %bundled_engines.display(), "bundled engine root configured");
             let data_dir = app.path().app_data_dir()?;
             let storage = Arc::new(Storage::open(&data_dir.join("fileflow.sqlite3"))?);
             if let Err(error) = storage.mark_running_jobs_interrupted() {

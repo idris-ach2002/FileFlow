@@ -1,3 +1,0 @@
-# FileFlow portable Python engines
-img2pdf==0.6.3
-ocrmypdf==17.8.1

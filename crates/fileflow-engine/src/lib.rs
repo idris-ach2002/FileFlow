@@ -4,24 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     env,
     path::{Path, PathBuf},
-    sync::{OnceLock, RwLock},
 };
-
-static BUNDLED_ENGINE_ROOT: OnceLock<RwLock<Option<PathBuf>>> = OnceLock::new();
-
-pub fn set_bundled_engine_root(root: PathBuf) {
-    let slot = BUNDLED_ENGINE_ROOT.get_or_init(|| RwLock::new(None));
-    if let Ok(mut guard) = slot.write() {
-        *guard = Some(root);
-    }
-}
-
-fn bundled_engine_root() -> Option<PathBuf> {
-    BUNDLED_ENGINE_ROOT
-        .get()
-        .and_then(|slot| slot.read().ok())
-        .and_then(|guard| guard.as_ref().cloned())
-}
 
 fn executable_variants(executable: &str) -> Vec<String> {
     #[cfg(target_os = "windows")]
@@ -107,15 +90,18 @@ pub fn find_executable(executable: &str) -> Option<PathBuf> {
         return Some(found);
     }
 
-    // Packaged engines always win so a release behaves identically regardless
-    // of the user's shell PATH or package manager configuration.
-    if let Some(root) = bundled_engine_root()
-        && let Some(found) = variants
-            .iter()
-            .map(|name| root.join(name))
-            .find(|candidate| is_executable_file(candidate))
+    // Explicit per-engine override. Example: FILEFLOW_FFMPEG_PATH=/custom/ffmpeg.
+    let env_key = format!(
+        "FILEFLOW_{}_PATH",
+        executable
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' })
+            .collect::<String>()
+    );
+    if let Some(path) = env::var_os(env_key)
+        && is_executable_file(Path::new(&path))
     {
-        return Some(found);
+        return Some(PathBuf::from(path));
     }
 
     if let Some(path) = env::var_os("PATH")
@@ -133,20 +119,36 @@ pub fn find_executable(executable: &str) -> Option<PathBuf> {
 }
 
 fn platform_search_directories() -> Vec<PathBuf> {
-    #[cfg_attr(target_os = "windows", allow(unused_mut))]
     let mut directories = Vec::new();
+
+    // Optional extra search path controlled by the installer/user. This is a
+    // directory list, not an executable, and never changes the global process PATH.
+    if let Some(extra) = env::var_os("FILEFLOW_ENGINE_PATH") {
+        directories.extend(env::split_paths(&extra));
+    }
 
     #[cfg(target_os = "macos")]
     {
-        // Finder/Dock launched GUI applications do not necessarily inherit the
-        // interactive shell PATH. Cover the standard Apple Silicon and Intel
-        // Homebrew prefixes explicitly.
+        // Finder/Dock applications do not inherit an interactive shell PATH.
         directories.extend([
             PathBuf::from("/opt/homebrew/bin"),
             PathBuf::from("/usr/local/bin"),
             PathBuf::from("/usr/bin"),
             PathBuf::from("/bin"),
         ]);
+        if let Some(home) = env::var_os("HOME") {
+            let home = PathBuf::from(home);
+            directories.push(home.join(".local/bin"));
+            let python_root = home.join("Library/Python");
+            if let Ok(entries) = std::fs::read_dir(python_root) {
+                directories.extend(
+                    entries
+                        .flatten()
+                        .map(|entry| entry.path().join("bin"))
+                        .filter(|path| path.is_dir()),
+                );
+            }
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -164,7 +166,62 @@ fn platform_search_directories() -> Vec<PathBuf> {
         }
     }
 
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(local) = env::var_os("LOCALAPPDATA") {
+            let local = PathBuf::from(local);
+            directories.extend([
+                local.join("Microsoft/WinGet/Links"),
+                local.join("Microsoft/WindowsApps"),
+                local.join("Programs/Python/Python312/Scripts"),
+            ]);
+            add_windows_install_subdirectories(&mut directories, &local.join("Programs"));
+        }
+        if let Some(profile) = env::var_os("USERPROFILE") {
+            directories.push(PathBuf::from(profile).join("scoop/shims"));
+        }
+        if let Some(choco) = env::var_os("ChocolateyInstall") {
+            directories.push(PathBuf::from(choco).join("bin"));
+        }
+        if let Some(appdata) = env::var_os("APPDATA") {
+            directories.push(PathBuf::from(appdata).join("Python/Scripts"));
+        }
+        for variable in ["ProgramFiles", "ProgramFiles(x86)"] {
+            if let Some(root) = env::var_os(variable) {
+                add_windows_install_subdirectories(&mut directories, &PathBuf::from(root));
+            }
+        }
+    }
+
     directories
+}
+
+#[cfg(target_os = "windows")]
+fn add_windows_install_subdirectories(directories: &mut Vec<PathBuf>, root: &Path) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        directories.push(path.clone());
+        directories.push(path.join("bin"));
+        directories.push(path.join("program"));
+
+        // Ghostscript and a few portable tools add a version directory between
+        // the product root and bin/. One extra level is enough and avoids a
+        // recursive filesystem crawl on every engine probe.
+        if let Ok(children) = std::fs::read_dir(&path) {
+            for child in children.flatten() {
+                let child = child.path();
+                if child.is_dir() {
+                    directories.push(child.join("bin"));
+                }
+            }
+        }
+    }
 }
 
 fn is_executable_file(path: &Path) -> bool {

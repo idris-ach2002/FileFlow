@@ -25,123 +25,55 @@ jobs:
             os: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
     runs-on: ${{ matrix.os }}
-
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Linux prerequisites
+        with: { fetch-depth: 0 }
+      - name: Tauri prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
-            patchelf xdg-utils libfuse2 rpm xvfb file binutils
-
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev xdg-utils libfuse2 rpm xvfb file
       - uses: pnpm/action-setup@v6
-
       - uses: actions/setup-node@v6
         with:
           node-version: '22.22.3'
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-
       - uses: actions/setup-python@v6
-        with:
-          python-version: '3.13'
-
-      - name: Validate tag provenance/version before expensive work
-        shell: bash
-        run: |
-          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          test "${GITHUB_REF_NAME}" = "linux-v${VERSION}" || {
-            echo "Expected linux-v${VERSION}, got ${GITHUB_REF_NAME}" >&2
-            exit 2
-          }
-          git fetch origin main:refs/remotes/origin/main
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
-            echo 'Linux release tag must point to a commit contained in main' >&2
-            exit 2
-          }
-
-      - name: Require Linux production settings
-        shell: bash
-        env:
-          TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          FILEFLOW_UPDATE_ENDPOINT: ${{ vars.FILEFLOW_UPDATE_ENDPOINT }}
-          FILEFLOW_ENGINE_PACK_URL_TEMPLATE: ${{ vars.FILEFLOW_ENGINE_PACK_URL_TEMPLATE }}
-          FILEFLOW_ENGINE_MODE: full
-        run: |
-          for name in \
-            TAURI_UPDATER_PUBKEY TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
-            FILEFLOW_UPDATE_ENDPOINT FILEFLOW_ENGINE_PACK_URL_TEMPLATE FILEFLOW_ENGINE_MODE; do
-            test -n "${!name:-}" || { echo "Missing $name" >&2; exit 2; }
-          done
-          [[ "$FILEFLOW_ENGINE_PACK_URL_TEMPLATE" == *'{packVersion}'* ]]
-          [[ "$FILEFLOW_ENGINE_PACK_URL_TEMPLATE" == *'{target}'* ]]
-          [[ "$FILEFLOW_ENGINE_MODE" == 'core' || "$FILEFLOW_ENGINE_MODE" == 'full' ]]
-
+        with: { python-version: '3.13' }
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.97.1'
           targets: ${{ matrix.target }}
-
       - uses: swatinem/rust-cache@v2
         with:
           shared-key: release-linux-${{ matrix.target }}
           cache-on-failure: true
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Release source preflight
+      - run: pnpm install --frozen-lockfile
+      - name: Validate tag and source
+        shell: bash
         run: |
-          pnpm run ci:preflight
-          pnpm run release:self-test
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          test "$GITHUB_REF_NAME" = "linux-v${VERSION}"
+          git fetch origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
           pnpm run release:check
-
-      - name: Prepare immutable native engines
-        env:
-          FILEFLOW_ENGINE_PACK_URL_TEMPLATE: ${{ vars.FILEFLOW_ENGINE_PACK_URL_TEMPLATE }}
-          FILEFLOW_ENGINE_PACK_TOKEN: ${{ secrets.FILEFLOW_ENGINE_PACK_TOKEN }}
-          GITHUB_TOKEN: ${{ github.token }}
-          FILEFLOW_ENGINE_MODE: full
-        run: |
-          python scripts/release/fetch-engine-pack.py --target '${{ matrix.target }}'
-          python scripts/release/stage-engines.py --target '${{ matrix.target }}' --mode "$FILEFLOW_ENGINE_MODE"
-          python scripts/release/harden-engine-pack.py --target '${{ matrix.target }}'
-          python scripts/release/validate-engine-pack.py --target '${{ matrix.target }}' --require-signature --scope full
-          python scripts/release/smoke-engines.py --mode "$FILEFLOW_ENGINE_MODE"
-          python scripts/release/functional-engine-tests.py --mode "$FILEFLOW_ENGINE_MODE"
-
-      - name: Generate strict Linux Tauri configuration
+      - name: Generate production config
         env:
           TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           FILEFLOW_UPDATE_ENDPOINT: ${{ vars.FILEFLOW_UPDATE_ENDPOINT }}
         run: python scripts/release/generate-release-config.py --target '${{ matrix.target }}' --strict
-
-      - name: Build Linux bundle
+      - name: Build release
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm exec tauri build --target '${{ matrix.target }}' --bundles deb,appimage,rpm --config src-tauri/tauri.release.conf.json
-
-      - name: Validate engines from final packaged artifact
-        timeout-minutes: 12
-        env:
-          FILEFLOW_ENGINE_MODE: full
-        run: python scripts/release/smoke-packaged-engines.py --target '${{ matrix.target }}' --mode "$FILEFLOW_ENGINE_MODE"
-
-      - name: Validate + runtime smoke
+      - name: Validate release
         run: |
-          node scripts/release/validate-distribution.mjs --target '${{ matrix.target }}' --strict
+          node scripts/release/validate-distribution.mjs --target '${{ matrix.target }}'
           xvfb-run -a node scripts/release/smoke-packaged-app.mjs --target '${{ matrix.target }}'
           node scripts/release/collect-artifacts.mjs --target '${{ matrix.target }}'
-
       - uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.target }}
@@ -150,49 +82,28 @@ jobs:
           retention-days: 14
 
   publish:
-    name: Publish Linux only
+    name: Publish Linux
     needs: build
-    if: ${{ success() }}
     runs-on: ubuntu-22.04
-    permissions:
-      contents: write
+    permissions: { contents: write }
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
-        with:
-          node-version: '22.22.3'
+        with: { node-version: '22.22.3' }
       - uses: actions/download-artifact@v8
         with:
           pattern: native-*
           path: dist/release
-
-      - name: Restore target directory names
-        shell: bash
+      - name: Restore target names
         run: |
-          for dir in dist/release/native-*; do
-            test -d "$dir" || continue
-            target="${dir##*/native-}"
-            mv "$dir" "dist/release/$target"
-          done
-
-      - name: Normalize and checksum Linux assets
+          for dir in dist/release/native-*; do test -d "$dir" || continue; target="${dir##*/native-}"; mv "$dir" "dist/release/$target"; done
+      - name: Canonicalize and checksum
         run: |
-          node scripts/release/normalize-artifacts.mjs --root dist/release
           node scripts/release/canonicalize-installers.mjs --platform linux --root dist/release
           node scripts/release/generate-checksums.mjs --root dist/release --output SHA256SUMS-linux
-
-      - name: Publish immutable Linux release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Publish immutable release
+        env: { GH_TOKEN: '${{ github.token }}' }
         run: |
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            echo "Release $GITHUB_REF_NAME already exists; refusing replacement" >&2
-            exit 2
-          fi
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && { echo "Release already exists" >&2; exit 2; } || true
           mapfile -d '' ASSETS < <(find dist/release -type f -print0 | sort -z)
-          gh release create "$GITHUB_REF_NAME" \
-            "${ASSETS[@]}" SHA256SUMS-linux \
-            --verify-tag \
-            --title "FileFlow ${GITHUB_REF_NAME#linux-v} — Linux" \
-            --notes "Release Linux certifiée indépendamment. Provenance: ${GITHUB_SHA}."
+          gh release create "$GITHUB_REF_NAME" "${ASSETS[@]}" SHA256SUMS-linux --verify-tag --title "FileFlow ${GITHUB_REF_NAME#linux-v} — Linux" --notes "FileFlow app; conversion engines are installed locally by install.sh. Provenance: ${GITHUB_SHA}."

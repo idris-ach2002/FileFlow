@@ -17,8 +17,6 @@ function put(path, value) {
   writeFileSync(path, value);
 }
 
-run('scripts/release/run-python.mjs', ['scripts/release/test-native-engine-tooling.py']);
-
 const temp = mkdtempSync(join(tmpdir(), 'fileflow-release-tooling-'));
 const root = join(temp, 'release');
 try {

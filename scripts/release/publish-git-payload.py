@@ -71,96 +71,6 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def verify_full_engines(
-    repo: Path,
-    target: str,
-) -> tuple[str, int, int]:
-    release_manifest = json.loads(
-        (repo / "release/engines/manifest.json").read_text()
-    )
-    metadata_path = (
-        repo / "src-tauri/resources/engine-pack.json"
-    )
-    if not metadata_path.is_file():
-        raise SystemExit(
-            "refusing distribution publish: "
-            "staged engine-pack.json is missing"
-        )
-    metadata = json.loads(metadata_path.read_text())
-
-    if metadata.get("target") != target:
-        raise SystemExit(
-            "refusing distribution publish: engine target mismatch"
-        )
-    if metadata.get("flavor") != "full":
-        raise SystemExit(
-            "refusing distribution publish: engine flavor is not FULL"
-        )
-    if not metadata.get("hardened"):
-        raise SystemExit(
-            "refusing distribution publish: "
-            "engine runtime was not hardened"
-        )
-
-    pack_version = str(
-        metadata.get("packVersion", "")
-    ).strip()
-    expected_pack_version = str(
-        release_manifest.get("packVersion", "")
-    ).strip()
-    if (
-        not pack_version
-        or pack_version != expected_pack_version
-    ):
-        raise SystemExit(
-            "refusing distribution publish: "
-            "engine pack version mismatch"
-        )
-
-    staged = {
-        (
-            str(item.get("engine", "")),
-            str(item.get("name", "")),
-        )
-        for item in metadata.get("engines", [])
-    }
-
-    missing: list[str] = []
-    expected = 0
-    for engine in release_manifest["engines"]:
-        for executable in engine["executables"]:
-            expected += 1
-            variants = [executable, f"{executable}.exe"]
-            if not any(
-                (engine["id"], name) in staged
-                for name in variants
-            ):
-                missing.append(
-                    f"{engine['id']}:{executable}"
-                )
-
-    if missing:
-        raise SystemExit(
-            "refusing distribution publish: "
-            "missing FULL engines: "
-            + ", ".join(missing)
-        )
-
-    if len(staged) != expected:
-        raise SystemExit(
-            "refusing distribution publish: "
-            f"staged executable count {len(staged)} "
-            f"!= expected {expected}"
-        )
-
-    print(
-        f"[engines] publish gate OK target={target} "
-        f"pack={pack_version} "
-        f"executables={len(staged)}/{expected}"
-    )
-    return pack_version, len(staged), expected
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", required=True)
@@ -201,12 +111,6 @@ def main() -> None:
             (repo / "src-tauri/tauri.conf.json").read_text()
         )["version"]
     )
-
-    (
-        engine_pack_version,
-        engine_count,
-        expected_engine_count,
-    ) = verify_full_engines(repo, args.target)
 
     package_sha = sha256(package)
     package_size = package.stat().st_size
@@ -268,12 +172,7 @@ def main() -> None:
             "PACKAGE_SHA256": package_sha,
             "PACKAGE_SIZE": str(package_size),
             "CHUNK_COUNT": str(parts),
-            "ENGINE_MODE": "full",
-            "ENGINE_PACK_VERSION": engine_pack_version,
-            "ENGINE_EXECUTABLE_COUNT": str(engine_count),
-            "ENGINE_EXPECTED_EXECUTABLE_COUNT": str(
-                expected_engine_count
-            ),
+            "RUNTIME_MODE": "system",
         }
 
         (worktree / "manifest.env").write_text(
@@ -285,8 +184,7 @@ def main() -> None:
         )
         (worktree / "README.txt").write_text(
             "FileFlow binary transport branch.\n"
-            "Publication is fail-closed and requires "
-            "a validated FULL engine pack.\n",
+            "Conversion engines are installed locally by install.sh/install.ps1.\n",
             encoding="utf-8",
         )
 
@@ -315,8 +213,7 @@ def main() -> None:
         )
         print(
             f"[OK] {branch} chunks={parts} "
-            f"sha256={package_sha} "
-            f"engines=full/{engine_count}"
+            f"sha256={package_sha} runtime=system"
         )
     finally:
         try:

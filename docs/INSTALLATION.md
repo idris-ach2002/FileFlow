@@ -1,51 +1,41 @@
-# FileFlow — installation utilisateur
+# FileFlow — installation permanente
 
-FileFlow utilise deux circuits distincts :
+FileFlow utilise désormais un modèle simple : **l'application est construite par GitHub Actions, les moteurs de conversion sont installés une seule fois sur la machine**.
 
-- **CI / développeur** : `fileflow.sh` et les artifacts GitHub Actions.
-- **Production / utilisateur final** : `install.sh` (macOS/Linux) et `install.ps1` (Windows), basés uniquement sur les GitHub Releases publiques.
+Le dépôt cloné ne sert qu'à lancer l'installateur. Après succès, il peut être supprimé :
 
-Aucun environnement de développement n'est requis sur la machine utilisateur :
-Node.js, pnpm, Rust, Cargo, Python, Tauri et GitHub CLI ne sont pas nécessaires.
+- l'application reste installée dans le système ;
+- les moteurs (`ffmpeg`, LibreOffice, qpdf, Tesseract, etc.) restent installés par le gestionnaire de paquets de l'OS ;
+- l'icône / le widget tray FileFlow reste disponible avec l'application.
 
-## macOS
+## Installation utilisateur
 
-```bash
-./install.sh
-```
-
-L'installateur :
-
-1. détecte Apple Silicon ou Intel ;
-2. télécharge le DMG officiel correspondant ;
-3. vérifie `SHA256SUMS-macos` ;
-4. vérifie la signature de code et Gatekeeper ;
-5. installe `FileFlow.app` dans `/Applications` si possible, sinon `~/Applications` ;
-6. lance FileFlow.
-
-FileFlow apparaît ensuite dans Applications, Launchpad et Spotlight.
-
-## Linux
+### macOS / Linux
 
 ```bash
 ./install.sh
 ```
 
-Comportement automatique :
+Le script :
 
-- Debian/Ubuntu : `.deb` via `apt`, avec résolution des dépendances runtime ;
-- Fedora/RHEL et dérivés : `.rpm` ;
-- autre distribution ou absence de privilèges : installation AppImage locale sous `~/.local/opt/fileflow`, création du `.desktop`, de l'icône et du lanceur `~/.local/bin/fileflow`.
+1. détecte l'OS et l'architecture ;
+2. installe les moteurs localement avec plusieurs fallbacks ;
+3. exécute le doctor FileFlow sans bloquer si une capacité optionnelle manque ;
+4. récupère le paquet FileFlow précompilé depuis la branche `distribution/<os>-<arch>` ;
+5. vérifie sa taille et son SHA-256 ;
+6. installe l'application de façon permanente ;
+7. lance FileFlow sauf avec `--no-launch`.
 
-Le fallback AppImage utilise `APPIMAGE_EXTRACT_AND_RUN=1`, donc il ne dépend pas de FUSE/libfuse2 pour démarrer.
-
-Pour forcer l'installation sans sudo :
+Options utiles :
 
 ```bash
-./install.sh --linux-user
+./install.sh --mode dev     # diagnostic détaillé
+./install.sh --force        # réinstalle le même paquet
+./install.sh --skip-deps    # ne touche pas aux moteurs
+./install.sh --doctor       # vérifie seulement les moteurs
 ```
 
-## Windows
+### Windows
 
 Depuis PowerShell :
 
@@ -54,100 +44,84 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\install.ps1
 ```
 
-L'installateur :
-
-1. télécharge `FileFlow-Windows-x64-Setup.exe` ;
-2. vérifie `SHA256SUMS-windows` ;
-3. vérifie Authenticode ;
-4. exécute l'installation NSIS en mode utilisateur ;
-5. FileFlow apparaît dans le menu Démarrer / recherche Windows ;
-6. tente de lancer l'application.
-
-## Diagnostic utilisateur / développeur
-
-Mode utilisateur, par défaut :
-
-```bash
-./install.sh
-```
-
-Le message contient uniquement :
-
-- un code stable, par exemple `FF-I-004` ;
-- une explication compréhensible ;
-- l'action à effectuer.
-
-Mode développeur :
-
-```bash
-./install.sh --mode dev
-```
-
-ou :
+Options :
 
 ```powershell
 .\install.ps1 -Mode dev
+.\install.ps1 -Force
+.\install.ps1 -SkipDependencies
+.\install.ps1 -Doctor
 ```
 
-Le diagnostic ajoute :
+## Stratégie de fallback des dépendances
 
-- étape exacte ;
-- OS et architecture ;
-- version/tag ;
-- asset et URL ;
-- erreur système ;
-- chemin du log.
-
-Logs :
-
-- macOS : `~/Library/Logs/FileFlow/`
-- Linux : `~/.local/state/fileflow/` ou `$XDG_STATE_HOME/fileflow/`
-- Windows : `%LOCALAPPDATA%\FileFlow\Logs\`
-
-## Codes d'erreur installateur
-
-| Code | Catégorie |
-|---|---|
-| `FF-I-001` | OS / architecture non supporté |
-| `FF-I-002` | réseau / serveur inaccessible |
-| `FF-I-003` | release ou asset absent |
-| `FF-I-004` | checksum absent ou invalide |
-| `FF-I-005` | permissions / écriture |
-| `FF-I-006` | signature / confiance du système |
-| `FF-I-007` | DMG / archive / extraction invalide |
-| `FF-I-008` | installation du paquet échouée |
-| `FF-I-009` | application installée mais lancement automatique échoué |
-| `FF-I-010` | outil système indispensable absent |
-| `FF-I-011` | version invalide / introuvable |
-| `FF-I-999` | erreur système inattendue |
-
-## Assets canoniques de production
-
-Les workflows de release produisent toujours ces noms :
-
-### macOS
-
-- `FileFlow-macOS-arm64.dmg`
-- `FileFlow-macOS-x64.dmg`
+Une dépendance introuvable dans un dépôt **ne stoppe pas l'installation globale**. Le script passe à la source suivante puis continue avec le moteur suivant.
 
 ### Linux
 
-- `FileFlow-Linux-x64.AppImage`
-- `FileFlow-Linux-x64.deb`
-- `FileFlow-Linux-x64.rpm`
-- `FileFlow-Linux-arm64.AppImage`
-- `FileFlow-Linux-arm64.deb`
-- `FileFlow-Linux-arm64.rpm`
+Ordre principal selon la distribution :
+
+- Debian/Ubuntu : `apt` ;
+- Fedora/RHEL : `dnf` ;
+- openSUSE : `zypper` ;
+- Arch : `pacman` ;
+- Homebrew Linux si déjà disponible.
+
+Fallbacks supplémentaires :
+
+- Homebrew pour plusieurs CLI ;
+- `pipx` pour `img2pdf` et `ocrmypdf` ;
+- Flatpak pour LibreOffice si Flatpak est déjà présent.
+
+### macOS
+
+Homebrew est utilisé pour les moteurs CLI et le cask LibreOffice. S'il manque, l'installateur tente l'installateur officiel Homebrew puis continue même en cas d'échec.
 
 ### Windows
 
-- `FileFlow-Windows-x64-Setup.exe`
-- `FileFlow-Windows-x64.msi`
+Ordre de tentative par moteur :
 
-Les installateurs utilisent les tags indépendants :
+1. `winget` ;
+2. Chocolatey s'il est installé ;
+3. Scoop s'il est installé ;
+4. `pipx` pour les outils Python.
 
-- `macos-vX.Y.Z`
-- `linux-vX.Y.Z`
-- `windows-vX.Y.Z`
+## Moteurs recherchés
 
-L'échec ou l'absence d'une plateforme n'empêche pas l'installation des autres.
+FileFlow détecte : FFmpeg, libvips, ImageMagick, qpdf, img2pdf, Poppler, Ghostscript, Tesseract, OCRmyPDF, LibreOffice, Pandoc, ExifTool, 7-Zip, Zstandard et LZ4.
+
+Une dépendance manquante désactive uniquement les actions qui en dépendent. FileFlow peut toujours démarrer.
+
+## Où FileFlow cherche les exécutables
+
+L'ordre est :
+
+1. override explicite `FILEFLOW_<EXECUTABLE>_PATH` ;
+2. `PATH` du processus ;
+3. `FILEFLOW_ENGINE_PATH` ;
+4. emplacements standards de la plateforme.
+
+Sont notamment couverts :
+
+- `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin` ;
+- les dossiers Python utilisateur macOS ;
+- WinGet Links, WindowsApps, Scoop shims et Chocolatey ;
+- les emplacements LibreOffice usuels sur macOS et Windows.
+
+## Diagnostic
+
+```bash
+bash scripts/runtime/doctor.sh
+```
+
+ou Windows :
+
+```powershell
+.\scripts\runtime\doctor.ps1
+```
+
+Le doctor indique `[OK]` ou `[MISS]` pour chaque moteur. Avec `--strict` / `-Strict`, il renvoie une erreur si une capacité manque.
+
+## Important
+
+Les dépendances de **développement** (Node, pnpm, Rust, Tauri) ne sont jamais installées par l'installateur utilisateur. Elles restent uniquement nécessaires pour contribuer au projet.
