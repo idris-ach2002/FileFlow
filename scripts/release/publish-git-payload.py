@@ -172,7 +172,7 @@ def main() -> None:
             "PACKAGE_SHA256": package_sha,
             "PACKAGE_SIZE": str(package_size),
             "CHUNK_COUNT": str(parts),
-            "RUNTIME_MODE": "bundled-first",
+            "RUNTIME_MODE": "system-managed",
         }
 
         (worktree / "manifest.env").write_text(
@@ -213,7 +213,7 @@ def main() -> None:
         )
         print(
             f"[OK] {branch} chunks={parts} "
-            f"sha256={package_sha} runtime=bundled-first"
+            f"sha256={package_sha} runtime=system-managed"
         )
     finally:
         try:

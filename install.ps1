@@ -139,15 +139,15 @@ try {
   Write-Host '== 1/2 Runtime FileFlow =='
   Write-Host 'Les moteurs coeur certifies sont inclus dans le paquet FileFlow.'
   if ($SkipDependencies) {
-    Write-Host 'Integrations hote optionnelles ignorees (-SkipDependencies).'
+    Write-Host 'Installation des dependances systeme ignoree (-SkipDependencies).'
   } else {
-    Write-Host 'Verification des integrations hote optionnelles (LibreOffice, ExifTool)...'
+    Write-Host 'Installation/verification des moteurs de conversion Windows...'
     try {
-      & "$Root\scripts\runtime\install-dependencies.ps1" -Quiet -FallbackOnly 2>&1 |
+      & "$Root\scripts\runtime\install-dependencies.ps1" -Quiet 2>&1 |
         Tee-Object -FilePath $script:Log -Append |
         Write-Host
     } catch {
-      Write-Dev "optional host dependency helper failed; bundled core remains usable: $($_.Exception.Message)"
+      Write-Dev "system dependency helper failed; FileFlow will use available engines: $($_.Exception.Message)"
     }
   }
 
@@ -180,7 +180,7 @@ try {
     }
   }
 
-  if ($manifest['RUNTIME_MODE'] -ne 'bundled-first') {
+  if ($manifest['RUNTIME_MODE'] -ne 'system-managed') {
     Fail-Install 'FF-I-013' 'Ce paquet ne contient pas le runtime FileFlow attendu.' "runtime=$($manifest['RUNTIME_MODE'])"
   }
 
@@ -251,7 +251,7 @@ try {
   Write-Host '============================================================'
   Write-Host "FileFlow $($manifest['VERSION']) est installe"
   Write-Host '============================================================'
-  Write-Host 'Runtime : moteurs FileFlow embarques, moteurs Windows en fallback.'
+  Write-Host 'Runtime : moteurs installes et verifies sur Windows.'
   Write-Host 'Le depot clone peut etre supprime.'
 
   if (-not $NoLaunch) {

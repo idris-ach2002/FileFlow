@@ -48,12 +48,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'release tag must point to main' }
           pnpm run release:check
           ./scripts/ci/windows-preflight.ps1
-      - name: Stage and certify FileFlow runtime
-        shell: pwsh
-        run: |
-          ./scripts/runtime/install-dependencies.ps1
-          python scripts/runtime/stage-bundled-runtime.py --target x86_64-pc-windows-msvc --strict
-          python scripts/runtime/smoke-bundled-runtime.py --root src-tauri/runtime --strict
       - name: Import signing certificate
         shell: pwsh
         env:

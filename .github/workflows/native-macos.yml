@@ -53,11 +53,6 @@ jobs:
           pnpm run ci:preflight
           pnpm run release:check
           cargo check --workspace --all-features --locked --target '${{ matrix.target }}'
-      - name: Stage and certify FileFlow runtime
-        run: |
-          bash scripts/runtime/install-dependencies.sh --no-update
-          python scripts/runtime/stage-bundled-runtime.py --target '${{ matrix.target }}' --strict
-          python scripts/runtime/smoke-bundled-runtime.py --root src-tauri/runtime --strict
       - name: Generate lightweight package config
         run: python scripts/release/generate-release-config.py --target '${{ matrix.target }}'
       - name: Build FileFlow app only

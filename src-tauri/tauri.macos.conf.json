@@ -7,9 +7,6 @@
     "macOS": {
       "minimumSystemVersion": "11.0",
       "hardenedRuntime": true
-    },
-    "resources": [
-      "runtime/**/*"
-    ]
+    }
   }
 }

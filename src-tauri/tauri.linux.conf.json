@@ -4,9 +4,6 @@
       "deb",
       "appimage",
       "rpm"
-    ],
-    "resources": [
-      "runtime/**/*"
     ]
   }
 }

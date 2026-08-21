@@ -73,11 +73,6 @@ jobs:
           IDENTITY=$(security find-identity -v -p codesigning fileflow-build.keychain | awk -F'"' '/Developer ID Application/ {print $2; exit}')
           test -n "$IDENTITY"
           echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
-      - name: Stage and certify FileFlow runtime
-        run: |
-          bash scripts/runtime/install-dependencies.sh --no-update
-          python scripts/runtime/stage-bundled-runtime.py --target '${{ matrix.target }}' --strict
-          python scripts/runtime/smoke-bundled-runtime.py --root src-tauri/runtime --strict
       - name: Generate production config
         env:
           TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}

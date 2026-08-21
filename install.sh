@@ -89,16 +89,15 @@ trap 's=$?; trap - ERR; fail FF-I-999 "Une erreur système inattendue est surven
 
 # 1) Core engines are part of the signed/native FileFlow package. Only the
 # heavyweight/non-relocatable integrations remain host-side fallbacks.
-STEP="runtime FileFlow"
-printf '\n== 1/2 Runtime FileFlow ==\n'
-printf 'Les moteurs cœur certifiés sont inclus dans le paquet FileFlow.\n'
+STEP="dépendances système FileFlow"
+printf '\n== 1/2 Dépendances système FileFlow ==\n'
 if [ "$SKIP_DEPS" -eq 0 ]; then
-  printf 'Vérification des intégrations hôte optionnelles (LibreOffice, ExifTool)...\n'
-  if ! bash "$ROOT/scripts/runtime/install-dependencies.sh" --quiet --fallback-only >>"$LOG" 2>&1; then
-    dev "optional host dependency helper failed; bundled core remains usable"
+  printf 'Installation/vérification des moteurs de conversion sur ce système...\n'
+  if ! bash "$ROOT/scripts/runtime/install-dependencies.sh" --quiet >>"$LOG" 2>&1; then
+    dev "system dependency helper returned a failure; FileFlow will still install with available engines"
   fi
 else
-  printf 'Intégrations hôte optionnelles ignorées (--skip-deps).\n'
+  printf 'Installation des dépendances système ignorée (--skip-deps).\n'
 fi
 
 # 2) Fetch the application + bundled runtime produced by native GitHub Actions.
@@ -111,7 +110,7 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/fileflow-install.XXXXXX")"; MANIFEST="$TMP/man
 git show "$REF:manifest.env" >"$MANIFEST" || fail FF-I-004 "Le manifeste d’installation FileFlow est absent ou invalide."
 manifest(){ sed -n "s/^${1}=//p" "$MANIFEST" | head -n1; }
 VERSION="$(manifest VERSION)"; SOURCE_SHA="$(manifest SOURCE_SHA)"; PACKAGE_NAME="$(manifest PACKAGE_NAME)"; PACKAGE_SHA256="$(manifest PACKAGE_SHA256)"; PACKAGE_SIZE="$(manifest PACKAGE_SIZE)"; CHANNEL="$(manifest CHANNEL)"; RUNTIME_MODE="$(manifest RUNTIME_MODE)"
-[ -n "$VERSION" ] && [ -n "$PACKAGE_NAME" ] && [ -n "$PACKAGE_SHA256" ] && [ "$RUNTIME_MODE" = bundled-first ] || fail FF-I-004 "Le manifeste FileFlow est incomplet ou ne contient pas le runtime embarqué attendu."
+[ -n "$VERSION" ] && [ -n "$PACKAGE_NAME" ] && [ -n "$PACKAGE_SHA256" ] && [ "$RUNTIME_MODE" = system-managed ] || fail FF-I-004 "Le manifeste FileFlow est incomplet ou ne contient pas le mode de dépendances système attendu."
 
 installed_ok(){ [ -f "$MARKER" ] || return 1; if [ "$OS" = Linux ]; then [ -x "$HOME/.local/opt/fileflow/FileFlow.AppImage" ]; else [ -d "/Applications/FileFlow.app" ] || [ -d "$HOME/Applications/FileFlow.app" ]; fi; }
 marker_value(){ [ -f "$MARKER" ] || return 0; sed -n "s/^${1}=//p" "$MARKER" | head -n1; }
@@ -182,5 +181,5 @@ RUNTIME_MODE=$RUNTIME_MODE
 INSTALLED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 APP_LOCATION=$APP_LOCATION
 MARKER
-printf '\n============================================================\n✓ FileFlow %s est installé définitivement\n============================================================\nApplication : %s\nPlateforme  : %s\nRuntime     : moteurs FileFlow embarqués + fallback système\n\nLe dépôt cloné n’est plus nécessaire et peut être supprimé.\n' "$VERSION" "$APP_LOCATION" "$TARGET"
+printf '\n============================================================\n✓ FileFlow %s est installé définitivement\n============================================================\nApplication : %s\nPlateforme  : %s\nRuntime     : moteurs installés et vérifiés sur le système\n\nLe dépôt cloné n’est plus nécessaire et peut être supprimé.\n' "$VERSION" "$APP_LOCATION" "$TARGET"
 if [ "$NO_LAUNCH" -eq 0 ]; then STEP="lancement"; if [ "$OS" = Linux ]; then nohup "$HOME/.local/bin/fileflow" >/dev/null 2>&1 & else open "$APP_LOCATION"; fi; printf '✓ FileFlow a été lancé.\n'; fi

@@ -96,14 +96,14 @@ def main() -> None:
         raise SystemExit("Linux release must produce DEB + AppImage + RPM")
     for rel in ["src-tauri/tauri.linux.conf.json", "src-tauri/tauri.macos.conf.json", "src-tauri/tauri.windows.conf.json"]:
         resources = load_json(rel).get("bundle", {}).get("resources", [])
-        if "runtime/**/*" not in resources:
-            raise SystemExit(f"{rel} must embed the staged FileFlow runtime")
+        if "runtime/**/*" in resources:
+            raise SystemExit(f"{rel} must not embed generated conversion engines")
 
     unix_installer = require_tokens("install.sh", [
-        "git fetch", "RUNTIME_MODE", "bundled-first", "moteurs FileFlow embarqués",
+        "git fetch", "RUNTIME_MODE", "system-managed", "Dépendances système FileFlow",
     ])
     windows_installer = require_tokens("install.ps1", [
-        "git fetch", "RUNTIME_MODE", "bundled-first", "Runtime FileFlow",
+        "git fetch", "RUNTIME_MODE", "system-managed", "moteurs de conversion Windows",
     ])
     require_tokens("scripts/runtime/install-dependencies.sh", [
         "apt-get", "dnf", "zypper", "pacman", "brew", "pipx", "trying next source",
@@ -111,7 +111,7 @@ def main() -> None:
     require_tokens("scripts/runtime/install-dependencies.ps1", [
         "winget", "choco", "scoop", "pipx", "trying next source",
     ])
-    require_tokens("scripts/release/publish-git-payload.py", ['"RUNTIME_MODE": "bundled-first"'])
+    require_tokens("scripts/release/publish-git-payload.py", ['"RUNTIME_MODE": "system-managed"'])
     require_tokens("crates/fileflow-engine/src/lib.rs", [
         "FILEFLOW_ENGINE_PATH", "set_bundled_runtime_root", "runtime-manifest.json",
         "/opt/homebrew/bin", "Microsoft/WinGet/Links", ".local/bin",
@@ -134,8 +134,8 @@ def main() -> None:
                 raise SystemExit(f"{rel} still contains legacy engine-factory token: {token}")
         if "tauri build" not in text:
             raise SystemExit(f"{rel} must build the FileFlow application")
-        if "stage-bundled-runtime.py" not in text or "smoke-bundled-runtime.py" not in text:
-            raise SystemExit(f"{rel} must stage and smoke-test the native FileFlow runtime")
+        if "stage-bundled-runtime.py" in text or "smoke-bundled-runtime.py" in text:
+            raise SystemExit(f"{rel} must not build conversion-engine runtimes in CI")
 
     if "ENGINE_PACK_" in unix_installer or "ENGINE_PACK_" in windows_installer:
         raise SystemExit("installer manifests must no longer depend on engine pack metadata")
@@ -145,7 +145,7 @@ def main() -> None:
         dirty = subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True).strip()
         if dirty:
             raise SystemExit("working tree is not clean")
-    print(f"release metadata OK; FileFlow {version}; runtime engines=bundled-first")
+    print(f"release metadata OK; FileFlow {version}; runtime engines=system-managed")
 
 
 if __name__ == "__main__":

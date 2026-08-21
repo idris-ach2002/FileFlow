@@ -58,15 +58,10 @@ jobs:
           pnpm run ci:preflight
           pnpm run release:check
           cargo check --workspace --all-features --locked --target '${{ matrix.target }}'
-      - name: Stage and certify FileFlow runtime
-        run: |
-          bash scripts/runtime/install-dependencies.sh --no-update
-          python scripts/runtime/stage-bundled-runtime.py --target '${{ matrix.target }}' --strict
-          python scripts/runtime/smoke-bundled-runtime.py --root src-tauri/runtime --strict
       - name: Generate lightweight package config
         run: python scripts/release/generate-release-config.py --target '${{ matrix.target }}'
       - name: Build FileFlow app only
-        run: TAURI_LINUX_AYATANA_APPINDICATOR=1 pnpm exec tauri build --target '${{ matrix.target }}' --bundles deb,appimage,rpm --config src-tauri/tauri.release.conf.json
+        run: TAURI_LINUX_AYATANA_APPINDICATOR=1 pnpm exec tauri build --verbose --target '${{ matrix.target }}' --bundles deb,appimage,rpm --config src-tauri/tauri.release.conf.json
       - name: Package smoke
         timeout-minutes: 4
         run: |
