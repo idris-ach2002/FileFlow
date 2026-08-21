@@ -33,6 +33,16 @@ export const routes: Routes = [
     loadComponent: () => import('./features/history/history.page').then((m) => m.HistoryPage),
   },
   {
+    path: 'favorites',
+    canActivate: [requireAccountGuard],
+    loadComponent: () => import('./features/favorites/favorites.page').then((m) => m.FavoritesPage),
+  },
+  {
+    path: 'advanced',
+    canActivate: [requireAccountGuard],
+    loadComponent: () => import('./features/advanced/advanced.page').then((m) => m.AdvancedPage),
+  },
+  {
     path: 'formats',
     canActivate: [requireAccountGuard],
     loadComponent: () => import('./features/formats/formats.page').then((m) => m.FormatsPage),

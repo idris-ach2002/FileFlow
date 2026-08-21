@@ -45,5 +45,11 @@
     "createUpdaterArtifacts": false,
     "longDescription": "FileFlow est une boîte à outils locale de conversion, compression, organisation et automatisation de fichiers.",
     "publisher": "FileFlow"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": []
+    }
   }
 }
