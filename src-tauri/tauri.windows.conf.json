@@ -16,8 +16,7 @@
           "French",
           "English"
         ]
-      },
-      "staticVCRuntime": true
+      }
     }
   }
 }

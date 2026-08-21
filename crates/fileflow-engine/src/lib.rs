@@ -95,7 +95,11 @@ pub fn find_executable(executable: &str) -> Option<PathBuf> {
         "FILEFLOW_{}_PATH",
         executable
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' })
+            .map(|c| if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            })
             .collect::<String>()
     );
     if let Some(path) = env::var_os(env_key)
