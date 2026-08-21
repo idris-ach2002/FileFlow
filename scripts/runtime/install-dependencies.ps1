@@ -1,5 +1,8 @@
 [CmdletBinding()]
-param([switch]$Quiet)
+param(
+  [switch]$Quiet,
+  [switch]$FallbackOnly
+)
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
@@ -46,9 +49,37 @@ function Find-LibreOffice {
   return $null
 }
 
+function Get-ProbeArgs([string]$Name) {
+  switch -Regex ($Name.ToLowerInvariant()) {
+    '^ffmpeg(\.exe)?$' { return @('-version') }
+    '^(magick|convert)(\.exe)?$' { return @('-version') }
+    '^(pdftoppm|pdftotext)(\.exe)?$' { return @('-v') }
+    '^exiftool(\.exe)?$' { return @('-ver') }
+    '^(7zz|7z)(\.exe)?$' { return @('i') }
+    default { return @('--version') }
+  }
+}
+
+function Test-EngineRuntime([string]$Path) {
+  if (-not $Path) { return $false }
+  try {
+    $args = @(Get-ProbeArgs ([IO.Path]::GetFileName($Path)))
+    & $Path @args *> $null
+    return ($LASTEXITCODE -eq 0)
+  } catch {
+    return $false
+  }
+}
+
 function Is-Available([string]$Probe) {
-  if ($Probe -eq '@office') { return [bool](Find-LibreOffice) }
-  return [bool](Find-Any ($Probe -split '\|'))
+  if ($Probe -eq '@office') {
+    return (Test-EngineRuntime (Find-LibreOffice))
+  }
+  foreach ($name in ($Probe -split '\|')) {
+    $path = Find-Any @($name)
+    if ($path -and (Test-EngineRuntime $path)) { return $true }
+  }
+  return $false
 }
 
 function Invoke-WingetInstall([string]$Id) {
@@ -125,7 +156,7 @@ function Ensure-Engine([string]$Label, [string]$Probe, [string[]]$Candidates) {
       $script:Available++
       return
     }
-    Warn "$Label: $candidate unavailable or installation failed; trying next source."
+    Warn "${Label}: $candidate unavailable or installation failed; trying next source."
   }
   Write-Warning ('[MISS] {0,-14} not installed; related features will be disabled.' -f $Label)
   $script:Missing++
@@ -134,14 +165,22 @@ function Ensure-Engine([string]$Label, [string]$Probe, [string[]]$Candidates) {
 Write-Host "FileFlow runtime dependency setup - Windows / $([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)"
 Refresh-Path
 
+if ($FallbackOnly) {
+  Ensure-Engine 'LibreOffice' '@office' @('winget:TheDocumentFoundation.LibreOffice','choco:libreoffice-fresh','scoop:libreoffice')
+  Ensure-Engine 'ExifTool' 'exiftool.exe|exiftool' @('winget:OliverBetz.ExifTool','choco:exiftool','scoop:exiftool')
+  Write-Host ''
+  Write-Host "Fallback host dependencies: $script:Available available, $script:Missing missing, $script:Warnings warnings."
+  exit 0
+}
+
 Ensure-Engine 'FFmpeg'       'ffmpeg.exe|ffmpeg'             @('winget:Gyan.FFmpeg','choco:ffmpeg','scoop:ffmpeg')
 Ensure-Engine 'libvips'      'vips.exe|vips'                 @('winget:libvips.libvips','choco:vips','scoop:vips')
 Ensure-Engine 'ImageMagick'  'magick.exe|magick'             @('winget:ImageMagick.ImageMagick','choco:imagemagick','scoop:imagemagick')
 Ensure-Engine 'qpdf'         'qpdf.exe|qpdf'                 @('winget:QPDF.QPDF','choco:qpdf','scoop:qpdf')
 Ensure-Engine 'img2pdf'      'img2pdf.exe|img2pdf'           @('pipx:img2pdf','scoop:img2pdf')
 Ensure-Engine 'Poppler'      'pdftoppm.exe|pdftoppm'         @('winget:oschwartz10612.Poppler','choco:poppler','scoop:poppler')
-Ensure-Engine 'Ghostscript'  'gswin64c.exe|gswin32c.exe|gs'  @('winget:ArtifexSoftware.GhostScript','choco:ghostscript','scoop:ghostscript')
-Ensure-Engine 'Tesseract'    'tesseract.exe|tesseract'       @('winget:tesseract-ocr.tesseract','choco:tesseract','scoop:tesseract')
+Ensure-Engine 'Ghostscript'  'gswin64c.exe|gswin32c.exe|gs'  @('choco:ghostscript','scoop:ghostscript')
+Ensure-Engine 'Tesseract'    'tesseract.exe|tesseract'       @('winget:UB-Mannheim.TesseractOCR','winget:tesseract-ocr.tesseract','choco:tesseract','scoop:tesseract')
 Ensure-Engine 'OCRmyPDF'     'ocrmypdf.exe|ocrmypdf'         @('pipx:ocrmypdf')
 Ensure-Engine 'LibreOffice'  '@office'                       @('winget:TheDocumentFoundation.LibreOffice','choco:libreoffice-fresh','scoop:libreoffice')
 Ensure-Engine 'Pandoc'       'pandoc.exe|pandoc'             @('winget:JohnMacFarlane.Pandoc','choco:pandoc','scoop:pandoc')

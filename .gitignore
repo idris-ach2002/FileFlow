@@ -28,3 +28,7 @@ __pycache__/
 *.pyc
 
 # Native engine factory inputs fetched during CI
+
+# Generated native runtime payload (manifest placeholder stays tracked)
+src-tauri/runtime/*
+!src-tauri/runtime/runtime-manifest.json

@@ -110,4 +110,4 @@ jobs:
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && { echo "Release already exists" >&2; exit 2; } || true
           mapfile -d '' ASSETS < <(find dist/release -type f -print0 | sort -z)
-          gh release create "$GITHUB_REF_NAME" "${ASSETS[@]}" SHA256SUMS-windows --verify-tag --title "FileFlow ${GITHUB_REF_NAME#windows-v} — Windows" --notes "FileFlow app; conversion engines are installed locally by install.ps1. Provenance: ${GITHUB_SHA}."
+          gh release create "$GITHUB_REF_NAME" "${ASSETS[@]}" SHA256SUMS-windows --verify-tag --title "FileFlow ${GITHUB_REF_NAME#windows-v} — Windows" --notes "FileFlow app + certified bundled runtime; host engines are fallback only. Provenance: ${GITHUB_SHA}."

@@ -59,10 +59,10 @@ PACKAGE_NAME=...
 PACKAGE_SHA256=...
 PACKAGE_SIZE=...
 CHANNEL=...
-RUNTIME_MODE=system
+RUNTIME_MODE=system-managed
 ```
 
-Le paquet est fragmenté uniquement pour son transport Git. Aucun moteur n'est inclus dedans.
+Le paquet est fragmenté uniquement pour son transport Git. Le runtime natif certifié est inclus dans le paquet FileFlow ; LibreOffice et ExifTool restent des fallbacks hôte.
 
 ## Releases signées
 
@@ -116,7 +116,7 @@ clone temporaire
  install.sh / install.ps1
       │
       ├── gestionnaire de paquets OS
-      │      └── moteurs locaux persistants
+      │      └── runtime fourni par le système cible + fallback système
       │
       └── paquet FileFlow précompilé
              └── application persistante + tray/widget
@@ -135,7 +135,7 @@ Un moteur absent n'empêche pas l'application de démarrer : la capability corre
 - absence de l'ancienne infrastructure de packs moteurs ;
 - présence des installateurs runtime et de leurs fallbacks ;
 - absence de micromamba/engine-certify dans les workflows ;
-- payload `RUNTIME_MODE=system` ;
+- payload `RUNTIME_MODE=system-managed` ;
 - `git diff --check`.
 
 ## Test du bundle
@@ -147,3 +147,14 @@ Un moteur absent n'empêche pas l'application de démarrer : la capability corre
 - installation NSIS temporaire sur Windows.
 
 Le test valide le handshake frontend Angular -> backend Tauri. Il ne nécessite aucun moteur de conversion, conformément à l'architecture runtime système.
+
+## Politique des moteurs de conversion
+
+Les workflows CI construisent et empaquettent uniquement l'application FileFlow.
+Les moteurs tiers (FFmpeg, libvips, ImageMagick, qpdf, Poppler, Ghostscript,
+Tesseract, Pandoc, 7-Zip, Zstd, LZ4, img2pdf, OCRmyPDF, LibreOffice et
+ExifTool) sont installés ou vérifiés sur la machine cible par `install.sh` ou
+`install.ps1`. FileFlow nettoie l'environnement de ses sous-processus avant de
+lancer ces moteurs afin d'éviter qu'un AppImage contamine Python ou les
+bibliothèques système. Les scripts de staging restent des outils de diagnostic
+optionnels et ne font plus partie du chemin de publication.

@@ -30,6 +30,9 @@ $requiredFiles = @(
   'Cargo.toml',
   'Cargo.lock',
   'rust-toolchain.toml',
+  'install.ps1',
+  'scripts\runtime\install-dependencies.ps1',
+  'scripts\runtime\doctor.ps1',
   'src-tauri\Cargo.toml',
   'src-tauri\tauri.conf.json',
   'src-tauri\tauri.windows.conf.json',
@@ -39,6 +42,60 @@ $requiredFiles = @(
 
 foreach ($file in $requiredFiles) {
   Require-File $file
+}
+
+# Windows PowerShell 5.1 treats UTF-8 without BOM as the active ANSI code page.
+# Keep bootstrap/runtime scripts ASCII-only so the exact files cloned by a user
+# parse identically in Windows PowerShell 5.1 and PowerShell 7.
+foreach ($scriptPath in @(
+  'install.ps1',
+  'scripts\runtime\install-dependencies.ps1',
+  'scripts\runtime\doctor.ps1'
+)) {
+  $bytes = [IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $scriptPath))
+  $nonAsciiByte = $bytes | Where-Object { $_ -gt 127 } | Select-Object -First 1
+  if ($null -ne $nonAsciiByte) {
+    throw "Windows bootstrap script must remain ASCII-safe: $scriptPath"
+  }
+
+  $tokens = $null
+  $parseErrors = $null
+  [System.Management.Automation.Language.Parser]::ParseFile(
+    (Resolve-Path -LiteralPath $scriptPath).Path,
+    [ref]$tokens,
+    [ref]$parseErrors
+  ) | Out-Null
+
+  if ($parseErrors.Count -gt 0) {
+    $parseErrors | ForEach-Object { Write-Error "${scriptPath}: $($_.Message)" }
+    throw "PowerShell parser rejected $scriptPath"
+  }
+}
+
+# Parse every installer/runtime PowerShell script with the same parser used by
+# Windows PowerShell. This catches missing braces/try-catch syntax before a
+# distribution payload can ever be published.
+$powerShellFiles = @(
+  'install.ps1',
+  'scripts\runtime\install-dependencies.ps1',
+  'scripts\runtime\doctor.ps1'
+)
+foreach ($scriptFile in $powerShellFiles) {
+  Require-File $scriptFile
+  $tokens = $null
+  $errors = $null
+  [void][System.Management.Automation.Language.Parser]::ParseFile(
+    (Resolve-Path $scriptFile).Path,
+    [ref]$tokens,
+    [ref]$errors
+  )
+  if ($errors.Count -gt 0) {
+    foreach ($parseError in $errors) {
+      Write-Error "${scriptFile}:$($parseError.Extent.StartLineNumber): $($parseError.Message)"
+    }
+    throw "PowerShell parser rejected $scriptFile"
+  }
+  Write-Host "PowerShell syntax OK: $scriptFile"
 }
 
 # ICO header: reserved=0, type=1.

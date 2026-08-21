@@ -31,7 +31,7 @@ jobs:
       - name: Tauri prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev xdg-utils libfuse2 rpm xvfb file
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xdg-utils libfuse2 rpm xvfb file patchelf pkg-config
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
@@ -68,7 +68,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: pnpm exec tauri build --target '${{ matrix.target }}' --bundles deb,appimage,rpm --config src-tauri/tauri.release.conf.json
+        run: TAURI_LINUX_AYATANA_APPINDICATOR=1 pnpm exec tauri build --verbose --target '${{ matrix.target }}' --bundles deb,appimage,rpm --config src-tauri/tauri.release.conf.json
       - name: Validate release
         run: |
           node scripts/release/validate-distribution.mjs --target '${{ matrix.target }}'
@@ -106,4 +106,4 @@ jobs:
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && { echo "Release already exists" >&2; exit 2; } || true
           mapfile -d '' ASSETS < <(find dist/release -type f -print0 | sort -z)
-          gh release create "$GITHUB_REF_NAME" "${ASSETS[@]}" SHA256SUMS-linux --verify-tag --title "FileFlow ${GITHUB_REF_NAME#linux-v} — Linux" --notes "FileFlow app; conversion engines are installed locally by install.sh. Provenance: ${GITHUB_SHA}."
+          gh release create "$GITHUB_REF_NAME" "${ASSETS[@]}" SHA256SUMS-linux --verify-tag --title "FileFlow ${GITHUB_REF_NAME#linux-v} — Linux" --notes "FileFlow app + certified bundled runtime; host engines are fallback only. Provenance: ${GITHUB_SHA}."
