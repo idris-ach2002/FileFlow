@@ -1,0 +1,51 @@
+{
+  "name": "fileflow-workspace",
+  "version": "1.0.1",
+  "private": true,
+  "scripts": {
+    "frontend:dev": "pnpm --filter @fileflow/frontend start",
+    "frontend:build": "pnpm --filter @fileflow/frontend build",
+    "frontend:test": "pnpm --filter @fileflow/frontend test",
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "check:rust": "cargo check --workspace",
+    "test:rust": "cargo test --workspace",
+    "clippy": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+    "fmt": "cargo fmt --all -- --check",
+    "check": "pnpm run frontend:build && pnpm run check:rust",
+    "test": "pnpm run frontend:test && pnpm run test:rust",
+    "engines": "bash scripts/runtime/doctor.sh",
+    "setup": "sh scripts/setup.sh",
+    "build:mac": "tauri build --bundles app,dmg",
+    "build:mac:universal": "tauri build --target universal-apple-darwin --bundles app,dmg",
+    "build:linux": "tauri build --bundles deb,appimage,rpm",
+    "verify": "node scripts/verify.mjs",
+    "build:windows": "tauri build --bundles nsis,msi",
+    "release:check": "node scripts/release/run-python.mjs scripts/release/check-release.py",
+    "release:config": "node scripts/release/run-python.mjs scripts/release/generate-release-config.py",
+    "release:version": "node scripts/release/run-python.mjs scripts/release/set-version.py",
+    "release:bootstrap": "node scripts/release/run-python.mjs scripts/release/bootstrap-release.py",
+    "release:validate-frontend": "node scripts/release/validate-frontend-dist.mjs",
+    "ci:preflight": "node scripts/ci/verify-platform.mjs",
+    "ci:platform-info": "node scripts/ci/platform-info.mjs",
+    "ci:stress": "node scripts/ci/run-stress.mjs",
+    "release:smoke-app": "node scripts/release/smoke-packaged-app.mjs",
+    "release:collect": "node scripts/release/collect-artifacts.mjs",
+    "release:checksums": "node scripts/release/generate-checksums.mjs",
+    "release:verify": "node scripts/release/verify-release.mjs",
+    "release:updater-manifest": "node scripts/release/generate-updater-manifest.mjs",
+    "release:test-updater": "node scripts/release/verify-updater-transition.mjs",
+    "release:normalize": "node scripts/release/normalize-artifacts.mjs",
+    "release:self-test": "node scripts/release/test-release-tooling.mjs",
+    "runtime:doctor": "bash scripts/runtime/doctor.sh",
+    "runtime:install": "bash scripts/runtime/install-dependencies.sh"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.4"
+  },
+  "engines": {
+    "node": ">=22.22.3 <23 || >=24.15.0 <25 || >=26 <27"
+  },
+  "packageManager": "pnpm@11.20.0"
+}

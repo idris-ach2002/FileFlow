@@ -1,0 +1,113 @@
+name: FileFlow Release Windows
+
+on:
+  push:
+    tags: ['windows-v*.*.*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Release Windows / x64
+    runs-on: windows-2025
+    env:
+      CARGO_INCREMENTAL: '0'
+      RUST_BACKTRACE: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.22.3'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - uses: actions/setup-python@v6
+        with: { python-version: '3.13' }
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.1'
+          targets: x86_64-pc-windows-msvc
+      - uses: swatinem/rust-cache@v2
+        with:
+          shared-key: release-windows-x64
+          cache-on-failure: true
+      - run: pnpm install --frozen-lockfile
+      - name: Validate tag and source
+        shell: pwsh
+        run: |
+          $version = node -p "require('./src-tauri/tauri.conf.json').version"
+          if ($env:GITHUB_REF_NAME -ne "windows-v$version") { throw 'release tag/version mismatch' }
+          git fetch origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'release tag must point to main' }
+          pnpm run release:check
+          ./scripts/ci/windows-preflight.ps1
+      - name: Import signing certificate
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          New-Item -ItemType Directory -Force -Path certificate | Out-Null
+          [IO.File]::WriteAllBytes('certificate/certificate.pfx',[Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $password=ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
+          $cert=Import-PfxCertificate -FilePath certificate/certificate.pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          if(-not $cert.Thumbprint){throw 'certificate import failed'}
+          "WINDOWS_CERTIFICATE_THUMBPRINT=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Generate production config
+        shell: pwsh
+        env:
+          TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          FILEFLOW_UPDATE_ENDPOINT: ${{ vars.FILEFLOW_UPDATE_ENDPOINT }}
+          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+        run: python scripts/release/generate-release-config.py --target x86_64-pc-windows-msvc --strict
+      - name: Build signed release
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm exec tauri build --target x86_64-pc-windows-msvc --bundles nsis,msi --config src-tauri/tauri.release.conf.json
+      - name: Validate release
+        shell: pwsh
+        run: |
+          node scripts/release/validate-distribution.mjs --target x86_64-pc-windows-msvc --strict
+          node scripts/release/smoke-packaged-app.mjs --target x86_64-pc-windows-msvc
+          node scripts/release/collect-artifacts.mjs --target x86_64-pc-windows-msvc
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-x86_64-pc-windows-msvc
+          path: dist/release/x86_64-pc-windows-msvc
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish Windows
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions: { contents: write }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with: { node-version: '22.22.3' }
+      - uses: actions/download-artifact@v8
+        with:
+          name: native-x86_64-pc-windows-msvc
+          path: dist/release/x86_64-pc-windows-msvc
+      - name: Canonicalize and checksum
+        run: |
+          node scripts/release/canonicalize-installers.mjs --platform windows --root dist/release
+          node scripts/release/generate-checksums.mjs --root dist/release --output SHA256SUMS-windows
+      - name: Publish immutable release
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && { echo "Release already exists" >&2; exit 2; } || true
+          mapfile -d '' ASSETS < <(find dist/release -type f -print0 | sort -z)
+          gh release create "$GITHUB_REF_NAME" "${ASSETS[@]}" SHA256SUMS-windows --verify-tag --title "FileFlow ${GITHUB_REF_NAME#windows-v} — Windows" --notes "FileFlow app; conversion engines are installed locally by install.ps1. Provenance: ${GITHUB_SHA}."

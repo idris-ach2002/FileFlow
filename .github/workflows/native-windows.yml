@@ -1,0 +1,72 @@
+name: FileFlow Native Windows
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: native-windows-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Windows / x64
+    runs-on: windows-2025
+    env:
+      CARGO_INCREMENTAL: '0'
+      RUST_BACKTRACE: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.22.3'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.1'
+          targets: x86_64-pc-windows-msvc
+      - uses: swatinem/rust-cache@v2
+        with:
+          shared-key: native-windows-x64
+          cache-on-failure: true
+      - run: pnpm install --frozen-lockfile
+      - name: Platform/source preflight
+        shell: pwsh
+        run: |
+          pnpm run ci:platform-info
+          pnpm run ci:preflight
+          pnpm run release:check
+          ./scripts/ci/windows-preflight.ps1
+          cargo check --workspace --all-features --locked --target x86_64-pc-windows-msvc
+      - name: Generate lightweight package config
+        shell: pwsh
+        run: python scripts/release/generate-release-config.py --target x86_64-pc-windows-msvc
+      - name: Build FileFlow app only
+        shell: pwsh
+        run: pnpm exec tauri build --target x86_64-pc-windows-msvc --bundles nsis,msi --config src-tauri/tauri.release.conf.json
+      - name: Package smoke
+        shell: pwsh
+        run: |
+          node scripts/release/validate-distribution.mjs --target x86_64-pc-windows-msvc
+          node scripts/release/smoke-packaged-app.mjs --target x86_64-pc-windows-msvc
+          node scripts/release/collect-artifacts.mjs --target x86_64-pc-windows-msvc
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fileflow-windows-x86_64-pc-windows-msvc-${{ github.event.pull_request.head.sha || github.sha }}
+          path: dist/release/x86_64-pc-windows-msvc
+          if-no-files-found: error
+          retention-days: 14
+      - name: Publish install payload
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+        shell: pwsh
+        run: python scripts/release/publish-git-payload.py --target x86_64-pc-windows-msvc --root dist/release/x86_64-pc-windows-msvc

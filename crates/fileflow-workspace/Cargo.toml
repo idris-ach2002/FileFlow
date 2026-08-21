@@ -1,0 +1,12 @@
+[package]
+name = "fileflow-workspace"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+chrono.workspace = true
+fileflow-domain = { path = "../fileflow-domain" }
+parking_lot.workspace = true
+serde.workspace = true
+thiserror.workspace = true

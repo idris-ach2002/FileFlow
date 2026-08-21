@@ -1,0 +1,79 @@
+name: FileFlow Native Linux
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: native-linux-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Linux / ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - name: ARM64
+            os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tauri packaging prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev xdg-utils libfuse2 rpm xvfb file
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.22.3'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.1'
+          targets: ${{ matrix.target }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          shared-key: native-linux-${{ matrix.target }}
+          cache-on-failure: true
+      - name: Install source dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Platform/source preflight
+        run: |
+          pnpm run ci:platform-info
+          pnpm run ci:preflight
+          pnpm run release:check
+          cargo check --workspace --all-features --locked --target '${{ matrix.target }}'
+      - name: Generate lightweight package config
+        run: python scripts/release/generate-release-config.py --target '${{ matrix.target }}'
+      - name: Build FileFlow app only
+        run: pnpm exec tauri build --target '${{ matrix.target }}' --bundles deb,appimage,rpm --config src-tauri/tauri.release.conf.json
+      - name: Package smoke
+        timeout-minutes: 4
+        run: |
+          node scripts/release/validate-distribution.mjs --target '${{ matrix.target }}'
+          xvfb-run -a node scripts/release/smoke-packaged-app.mjs --target '${{ matrix.target }}'
+          node scripts/release/collect-artifacts.mjs --target '${{ matrix.target }}'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fileflow-linux-${{ matrix.target }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: dist/release/${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Publish install payload
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+        run: python scripts/release/publish-git-payload.py --target '${{ matrix.target }}' --root 'dist/release/${{ matrix.target }}'

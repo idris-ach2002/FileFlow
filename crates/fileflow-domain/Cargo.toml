@@ -1,0 +1,10 @@
+[package]
+name = "fileflow-domain"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+chrono.workspace = true
+serde.workspace = true
+uuid.workspace = true
