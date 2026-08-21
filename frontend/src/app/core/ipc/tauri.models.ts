@@ -213,6 +213,8 @@ export interface ConversionPlan {
   input: string;
   output: string;
   totalCost: number;
+  lossySteps: number;
+  intermediates: string[];
   steps: ConversionStep[];
 }
 
@@ -432,6 +434,8 @@ export interface ArchiveInspection {
 
 export interface AccountBootstrap {
   hasAccount: boolean;
+  knownAccounts: AccountProfile[];
+  restoredSession?: AuthSessionResponse | null;
 }
 
 export interface AccountProfile {
@@ -471,11 +475,13 @@ export interface CreateAccountRequest {
   displayName: string;
   firstName: string;
   lastName: string;
+  rememberDevice?: boolean;
 }
 
 export interface LoginRequest {
   email: string;
   password: string;
+  rememberDevice?: boolean;
 }
 
 export interface ChangePasswordRequest {

@@ -9,6 +9,7 @@ serde_json.workspace = true
 fileflow-domain = { path = "../fileflow-domain" }
 fileflow-formats = { path = "../fileflow-formats" }
 fileflow-output = { path = "../fileflow-output" }
+fileflow-planner = { path = "../fileflow-planner" }
 fileflow-scheduler = { path = "../fileflow-scheduler" }
 chrono.workspace = true
 serde.workspace = true

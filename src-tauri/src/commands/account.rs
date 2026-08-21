@@ -11,6 +11,7 @@ use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
 const SESSION_HOURS: i64 = 12;
+const TRUSTED_SESSION_DAYS: i64 = 30;
 const MAX_AVATAR_BYTES: u64 = 4 * 1024 * 1024;
 const LOGIN_FAILURES_BEFORE_DELAY: u32 = 5;
 const MAX_LOGIN_DELAY_SECONDS: i64 = 15 * 60;
@@ -19,6 +20,8 @@ const MAX_LOGIN_DELAY_SECONDS: i64 = 15 * 60;
 #[serde(rename_all = "camelCase")]
 pub struct AccountBootstrap {
     pub has_account: bool,
+    pub known_accounts: Vec<AccountProfile>,
+    pub restored_session: Option<AuthSessionResponse>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -29,6 +32,8 @@ pub struct CreateAccountRequest {
     pub display_name: String,
     pub first_name: String,
     pub last_name: String,
+    #[serde(default = "default_true")]
+    pub remember_device: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -36,6 +41,8 @@ pub struct CreateAccountRequest {
 pub struct LoginRequest {
     pub email: String,
     pub password: String,
+    #[serde(default = "default_true")]
+    pub remember_device: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,12 +79,44 @@ pub struct AvatarPayload {
 
 #[tauri::command]
 pub fn account_bootstrap(state: State<'_, AppState>) -> Result<AccountBootstrap, String> {
+    let now = Utc::now();
+    let _ = state.storage.purge_expired_trusted_sessions(now);
+    let known_accounts = state
+        .storage
+        .account_profiles()
+        .map_err(|error| error.to_string())?;
+
+    let restored_session = match state
+        .storage
+        .trusted_account(now)
+        .map_err(|error| error.to_string())?
+    {
+        Some((account_id, _trusted_until)) => {
+            let profile = state
+                .storage
+                .profile(account_id)
+                .map_err(|error| error.to_string())?;
+            let onboarding = state
+                .storage
+                .onboarding(account_id)
+                .map_err(|error| error.to_string())?;
+            match (profile, onboarding) {
+                (Some(profile), Some(onboarding)) => {
+                    Some(start_session(&state, profile, onboarding, true)?)
+                }
+                _ => {
+                    let _ = state.storage.clear_trusted_session(account_id);
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+
     Ok(AccountBootstrap {
-        has_account: state
-            .storage
-            .account_count()
-            .map_err(|error| error.to_string())?
-            > 0,
+        has_account: !known_accounts.is_empty(),
+        known_accounts,
+        restored_session,
     })
 }
 
@@ -123,7 +162,12 @@ pub async fn create_account(
         .storage
         .create_account(&profile, &password_hash, &onboarding)
         .map_err(|error| error.to_string())?;
-    Ok(start_session(&state, profile, onboarding))
+    start_session(
+        &state,
+        profile,
+        onboarding,
+        request.remember_device,
+    )
 }
 
 #[tauri::command]
@@ -159,7 +203,12 @@ pub async fn login(
         return Err("Adresse e-mail ou mot de passe incorrect.".into());
     }
     state.login_attempts.remove(&email);
-    Ok(start_session(&state, profile, onboarding))
+    start_session(
+        &state,
+        profile,
+        onboarding,
+        request.remember_device,
+    )
 }
 
 #[tauri::command]
@@ -208,18 +257,20 @@ pub async fn change_password(
         .change_password_hash(account_id, &new_hash)
         .map_err(|error| error.to_string())?;
 
-    Ok(start_session(&state, profile, onboarding))
+    start_session(&state, profile, onboarding, true)
 }
 
 #[tauri::command]
 pub fn logout(state: State<'_, AppState>, token: String) -> bool {
     let mut session = state.session.write();
-    let matches = session
+    let account_id = session
         .as_ref()
-        .is_some_and(|current| current.token == token);
-    if matches {
+        .filter(|current| current.token == token)
+        .map(|current| current.account_id);
+    if let Some(account_id) = account_id {
         *session = None;
         drop(session);
+        let _ = state.storage.clear_trusted_session(account_id);
         clear_session_runtime(&state);
         return true;
     }
@@ -413,20 +464,40 @@ fn start_session(
     state: &AppState,
     profile: AccountProfile,
     onboarding: OnboardingPreferences,
-) -> AuthSessionResponse {
-    let expires_at = Utc::now() + Duration::hours(SESSION_HOURS);
+    remember_device: bool,
+) -> Result<AuthSessionResponse, String> {
+    let now = Utc::now();
+    let expires_at = now + Duration::hours(SESSION_HOURS);
     let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     *state.session.write() = Some(SessionRecord {
         token: token.clone(),
         account_id: profile.id,
         expires_at,
     });
-    AuthSessionResponse {
+
+    if remember_device {
+        state
+            .storage
+            .remember_session(profile.id, now + Duration::days(TRUSTED_SESSION_DAYS))
+            .map_err(|error| error.to_string())?;
+    } else {
+        state
+            .storage
+            .touch_account(profile.id, now)
+            .map_err(|error| error.to_string())?;
+        let _ = state.storage.clear_trusted_session(profile.id);
+    }
+
+    Ok(AuthSessionResponse {
         token,
         expires_at,
         profile,
         onboarding,
-    }
+    })
+}
+
+fn default_true() -> bool {
+    true
 }
 
 pub(crate) fn require_active_session(state: &AppState) -> Result<Uuid, String> {

@@ -8,10 +8,11 @@ use chrono::Utc;
 use fileflow_domain::{FormatFamily, JobId, JobState, OutputPolicy, ResourceProfile};
 use fileflow_formats::FormatRegistry;
 use fileflow_output::{OutputPlan, OutputRequest, OutputResolver};
+use fileflow_planner::{CapabilityCatalog, ConversionStep};
 use fileflow_scheduler::ResourceScheduler;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ffi::OsString,
     path::{Path, PathBuf},
     process::Stdio,
@@ -19,7 +20,7 @@ use std::{
     time::Instant,
 };
 use thiserror::Error;
-use tokio::{process::Command, sync::mpsc, task::JoinSet};
+use tokio::{io::AsyncReadExt, process::Command, sync::mpsc, task::JoinSet};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -763,6 +764,25 @@ async fn execute_item_inner(
             )
             .await
         }
+        "pdf-protect" => {
+            run_pdf_protect(
+                engine,
+                input,
+                &plan.temporary_path,
+                parameters,
+                &cancellation,
+            )
+            .await
+        }
+        "text-to-pdf" => {
+            run_text_to_pdf(
+                engines,
+                input,
+                &plan.temporary_path,
+                &cancellation,
+            )
+            .await
+        }
         "pdf-compress" => {
             run_pdf_compress(engine, input, &plan.temporary_path, quality, &cancellation).await
         }
@@ -830,6 +850,9 @@ async fn execute_collective_action(
     resolver: OutputResolver,
 ) -> Result<Option<PathBuf>, ExecutionError> {
     match request.action_id.as_str() {
+        "smart-to-pdf" | "collection-to-pdf" => {
+            execute_smart_pdf(request, engines, scheduler, cancellation, resolver).await
+        }
         "images-to-pdf" => {
             let engine = engines.get("img2pdf")?;
             let _lease = scheduler
@@ -958,6 +981,738 @@ async fn execute_collective_action(
         }
         _ => Err(ExecutionError::UnsupportedAction(request.action_id.clone())),
     }
+}
+
+#[derive(Debug)]
+struct TemporaryJobWorkspace {
+    root: PathBuf,
+}
+
+impl TemporaryJobWorkspace {
+    async fn create() -> Result<Self, ExecutionError> {
+        let root = std::env::temp_dir()
+            .join("fileflow-jobs")
+            .join(Uuid::new_v4().simple().to_string());
+        tokio::fs::create_dir_all(&root).await?;
+        Ok(Self { root })
+    }
+
+    fn path(&self, name: impl AsRef<Path>) -> PathBuf {
+        self.root.join(name)
+    }
+}
+
+impl Drop for TemporaryJobWorkspace {
+    fn drop(&mut self) {
+        // The result is promoted outside this directory before Drop. Everything
+        // else is an implementation detail and must disappear after the job.
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+async fn execute_smart_pdf(
+    request: &ExecutionRequest,
+    engines: &EnginePaths,
+    scheduler: Arc<ResourceScheduler>,
+    cancellation: CancellationToken,
+    resolver: OutputResolver,
+) -> Result<Option<PathBuf>, ExecutionError> {
+    let first = &request.inputs[0].path;
+    let suffix = if request.action_id == "collection-to-pdf" {
+        "dossier"
+    } else {
+        "pdf"
+    };
+    let plan = resolver.plan(&OutputRequest {
+        source: first.clone(),
+        source_root: request.inputs[0].source_root.clone(),
+        desired_extension: Some("pdf".into()),
+        operation_suffix: Some(suffix.into()),
+        policy: fileflow_domain::OutputPolicy {
+            naming: fileflow_domain::NamingStrategy::OperationSuffix,
+            preserve_tree: false,
+            ..request.output_policy.clone()
+        },
+    })?;
+    if plan.skipped {
+        return Ok(Some(plan.final_path));
+    }
+    resolver.prepare(&plan).await?;
+
+    let job = TemporaryJobWorkspace::create().await?;
+    let expanded_root = job.path("expanded");
+    tokio::fs::create_dir_all(&expanded_root).await?;
+    let mut inputs = Vec::<PathBuf>::new();
+
+    for (index, input) in request.inputs.iter().enumerate() {
+        if cancellation.is_cancelled() {
+            return Err(ExecutionError::Cancelled);
+        }
+        if input.path.is_dir() {
+            collect_regular_files(&input.path, &mut inputs)?;
+            continue;
+        }
+        let detected = detect_path(&input.path).await?;
+        if detected.family == FormatFamily::Archive {
+            if engines.get("archive").is_err() {
+                inputs.push(input.path.clone());
+                continue;
+            }
+            let archive_destination = expanded_root.join(format!("archive-{index}"));
+            tokio::fs::create_dir_all(&archive_destination).await?;
+            let temporary_policy = fileflow_domain::OutputPolicy {
+                destination: fileflow_domain::DestinationPolicy::CustomFolder,
+                custom_directory: Some(archive_destination),
+                subfolder_name: "extracted".into(),
+                preserve_tree: false,
+                conflict: fileflow_domain::ConflictStrategy::Increment,
+                naming: fileflow_domain::NamingStrategy::Original,
+                overwrite_original: false,
+            };
+            let (folder, _) = execute_archive_extract(
+                &input.path,
+                None,
+                &temporary_policy,
+                engines,
+                scheduler.clone(),
+                cancellation.clone(),
+            )
+            .await?;
+            collect_regular_files(&folder, &mut inputs)?;
+        } else if input.path.is_file() {
+            inputs.push(input.path.clone());
+        }
+    }
+
+    deduplicate_paths(&mut inputs);
+    sort_pdf_inputs(
+        &mut inputs,
+        parameter_optional_string(&request.parameters, "collectionOrder", 24).as_deref(),
+    );
+    if inputs.is_empty() {
+        return Err(ExecutionError::InvalidInput(
+            "Aucun fichier exploitable n’a été trouvé dans cette sélection.".into(),
+        ));
+    }
+    if inputs.len() > 2_000 {
+        return Err(ExecutionError::InvalidInput(
+            "Ce dossier contient plus de 2 000 fichiers. Découpez-le en plusieurs lots.".into(),
+        ));
+    }
+
+    let available = engines.paths.keys().cloned().collect::<HashSet<_>>();
+    let catalog = CapabilityCatalog::default();
+    let parts_root = job.path("parts");
+    tokio::fs::create_dir_all(&parts_root).await?;
+    let mut pdf_parts = Vec::new();
+
+    for (index, input) in inputs.iter().enumerate() {
+        if cancellation.is_cancelled() {
+            return Err(ExecutionError::Cancelled);
+        }
+        match convert_component_to_pdf(
+            input,
+            index,
+            &parts_root,
+            &catalog,
+            &available,
+            engines,
+            scheduler.clone(),
+            &cancellation,
+        )
+        .await
+        {
+            Ok(path) => pdf_parts.push(path),
+            Err(error) => {
+                // A mixed administrative folder should not become unusable because
+                // one exotic file cannot be represented faithfully. Insert a
+                // transparent note page instead, when the document engine exists.
+                if engines.get("office").is_ok() {
+                    let note = make_note_pdf(
+                        &parts_root,
+                        index,
+                        input,
+                        &format!("Ce fichier n’a pas pu être converti automatiquement : {error}"),
+                        engines,
+                        scheduler.clone(),
+                        &cancellation,
+                    )
+                    .await?;
+                    pdf_parts.push(note);
+                } else {
+                    return Err(error);
+                }
+            }
+        }
+    }
+
+    let mut current = job.path("assembled.pdf");
+    if pdf_parts.len() == 1 {
+        tokio::fs::copy(&pdf_parts[0], &current).await?;
+    } else {
+        merge_pdf_files(
+            &pdf_parts,
+            &current,
+            engines,
+            scheduler.clone(),
+            &cancellation,
+        )
+        .await?;
+    }
+
+    if let Some(signature) = parameter_optional_string(&request.parameters, "signatureText", 180)
+        && !signature.trim().is_empty()
+    {
+        let signature_pdf = make_signature_page(
+            &job,
+            &signature,
+            engines,
+            scheduler.clone(),
+            &cancellation,
+        )
+        .await?;
+        let signed = job.path("signed.pdf");
+        merge_pdf_files(
+            &[current.clone(), signature_pdf],
+            &signed,
+            engines,
+            scheduler.clone(),
+            &cancellation,
+        )
+        .await?;
+        current = signed;
+    }
+
+    if parameter_bool(&request.parameters, "improve", false)
+        && let Ok(ocr) = engines.get("ocr")
+    {
+        let improved = job.path("improved.pdf");
+        let _lease = scheduler
+            .acquire("ocr", ResourceProfile::PDF, &cancellation)
+            .await?;
+        run_pdf_ocr(ocr, &current, &improved, &cancellation).await?;
+        current = improved;
+    }
+
+    let compression = parameter_optional_string(&request.parameters, "finalCompression", 24)
+        .unwrap_or_else(|| request.quality.clone().unwrap_or_else(|| "balanced".into()));
+    let target_size_mb = parameter_number(&request.parameters, "targetSizeMb", 0.0, 0.0, 4096.0);
+    let current_size = tokio::fs::metadata(&current).await.map(|m| m.len()).unwrap_or(0);
+    let target_exceeded = target_size_mb > 0.0
+        && current_size > (target_size_mb * 1024.0 * 1024.0) as u64;
+    if (compression != "keep" || target_exceeded)
+        && let Ok(ghostscript) = engines.get("ghostscript")
+    {
+        let compressed = job.path("compressed.pdf");
+        let quality = if target_exceeded {
+            Some("small")
+        } else {
+            Some(compression.as_str())
+        };
+        let _lease = scheduler
+            .acquire("ghostscript", ResourceProfile::PDF, &cancellation)
+            .await?;
+        run_pdf_compress(ghostscript, &current, &compressed, quality, &cancellation).await?;
+        current = compressed;
+    }
+
+    if parameter_bool(&request.parameters, "stripMetadata", false)
+        && let Ok(metadata) = engines.get("metadata")
+    {
+        let private = job.path("private.pdf");
+        let _lease = scheduler
+            .acquire("metadata", ResourceProfile::LIGHT, &cancellation)
+            .await?;
+        run_exiftool_strip(metadata, &current, &private, &cancellation).await?;
+        current = private;
+    }
+
+    if parameter_optional_string(&request.parameters, "password", 256)
+        .is_some_and(|password| !password.trim().is_empty())
+    {
+        let qpdf = engines.get("qpdf")?;
+        let protected = job.path("protected.pdf");
+        let _lease = scheduler
+            .acquire("qpdf", ResourceProfile::PDF, &cancellation)
+            .await?;
+        run_pdf_protect(qpdf, &current, &protected, &request.parameters, &cancellation).await?;
+        current = protected;
+    }
+
+    validate_pdf_output(&current, engines, scheduler.clone(), &cancellation).await?;
+    tokio::fs::copy(&current, &plan.temporary_path).await?;
+    if let Err(error) = validate_pdf_output(
+        &plan.temporary_path,
+        engines,
+        scheduler,
+        &cancellation,
+    )
+    .await
+    {
+        resolver.cleanup(&plan).await;
+        return Err(error);
+    }
+    resolver.finalize(&plan).await?;
+    Ok(Some(plan.final_path))
+}
+
+async fn detect_path(path: &Path) -> Result<fileflow_domain::DetectedFormat, ExecutionError> {
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut sample = vec![0_u8; 64 * 1024];
+    let read = file.read(&mut sample).await?;
+    sample.truncate(read);
+    Ok(FormatRegistry.detect(path, &sample))
+}
+
+fn deduplicate_paths(paths: &mut Vec<PathBuf>) {
+    let mut seen = HashSet::new();
+    paths.retain(|path| seen.insert(path.clone()));
+}
+
+fn sort_pdf_inputs(paths: &mut [PathBuf], order: Option<&str>) {
+    match order.unwrap_or("name") {
+        "selection" => {}
+        "date" => paths.sort_by(|left, right| {
+            let left_time = std::fs::metadata(left).and_then(|meta| meta.modified()).ok();
+            let right_time = std::fs::metadata(right).and_then(|meta| meta.modified()).ok();
+            left_time
+                .cmp(&right_time)
+                .then_with(|| left.to_string_lossy().to_ascii_lowercase().cmp(&right.to_string_lossy().to_ascii_lowercase()))
+        }),
+        _ => paths.sort_by_key(|path| path.to_string_lossy().to_ascii_lowercase()),
+    }
+}
+
+fn collect_regular_files(root: &Path, output: &mut Vec<PathBuf>) -> Result<(), ExecutionError> {
+    fn walk(path: &Path, output: &mut Vec<PathBuf>, depth: usize) -> std::io::Result<()> {
+        if depth > 32 {
+            return Ok(());
+        }
+        for entry in std::fs::read_dir(path)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let child = entry.path();
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                walk(&child, output, depth + 1)?;
+            } else if file_type.is_file() {
+                output.push(child);
+            }
+        }
+        Ok(())
+    }
+    walk(root, output, 0)?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn convert_component_to_pdf(
+    input: &Path,
+    index: usize,
+    parts_root: &Path,
+    catalog: &CapabilityCatalog,
+    available: &HashSet<String>,
+    engines: &EnginePaths,
+    scheduler: Arc<ResourceScheduler>,
+    cancellation: &CancellationToken,
+) -> Result<PathBuf, ExecutionError> {
+    let detected = detect_path(input).await?;
+    if detected.family == FormatFamily::Pdf {
+        let output = parts_root.join(format!("{index:05}.pdf"));
+        tokio::fs::copy(input, &output).await?;
+        return Ok(output);
+    }
+
+    if detected.family == FormatFamily::Video {
+        let ffmpeg = engines.get("ffmpeg")?;
+        let thumbnail = parts_root.join(format!("{index:05}-preview.jpg"));
+        let _lease = scheduler
+            .acquire("ffmpeg", profile_for("ffmpeg"), cancellation)
+            .await?;
+        run_ffmpeg(
+            ffmpeg,
+            "video-thumbnail",
+            input,
+            &thumbnail,
+            Some("balanced"),
+            &HashMap::new(),
+            scheduler.budget().cpu_tokens.max(1),
+            cancellation,
+        )
+        .await?;
+        return image_file_to_pdf(
+            &thumbnail,
+            &parts_root.join(format!("{index:05}.pdf")),
+            engines,
+            scheduler,
+            cancellation,
+        )
+        .await;
+    }
+
+    if detected.family == FormatFamily::Audio {
+        return make_note_pdf(
+            parts_root,
+            index,
+            input,
+            "Fichier audio : FileFlow conserve le média original et ajoute cette fiche au dossier PDF.",
+            engines,
+            scheduler,
+            cancellation,
+        )
+        .await;
+    }
+
+    let plan = catalog
+        .conversion_plan_with_engines(&detected.id, "pdf", available)
+        .or_else(|| {
+            // Extension-specific text files are intentionally normalized to the
+            // generic text node instead of pretending every structured syntax has
+            // a native PDF renderer.
+            (detected.family == FormatFamily::Text)
+                .then(|| catalog.conversion_plan_with_engines("text", "pdf", available))
+                .flatten()
+        })
+        .ok_or_else(|| {
+            ExecutionError::InvalidInput(format!(
+                "Aucun chemin de conversion fiable vers PDF pour {} ({})",
+                input.display(),
+                detected.id
+            ))
+        })?;
+
+    let mut current = input.to_path_buf();
+    for (step_index, step) in plan.steps.iter().enumerate() {
+        let extension = safe_conversion_extension(&step.to).ok_or_else(|| {
+            ExecutionError::InvalidInput(format!(
+                "Format intermédiaire non autorisé dans le plan de conversion : {}",
+                step.to
+            ))
+        })?;
+        let output = parts_root.join(format!(
+            "{index:05}-step-{step_index:02}.{extension}"
+        ));
+        execute_conversion_step(
+            &current,
+            &output,
+            step,
+            engines,
+            scheduler.clone(),
+            cancellation,
+        )
+        .await?;
+        current = output;
+    }
+
+    if current.extension().and_then(|value| value.to_str()) != Some("pdf") {
+        return Err(ExecutionError::InvalidInput(
+            "Le plan de conversion n’a pas produit de PDF.".into(),
+        ));
+    }
+    let final_part = parts_root.join(format!("{index:05}.pdf"));
+    if current != final_part {
+        tokio::fs::copy(&current, &final_part).await?;
+    }
+    Ok(final_part)
+}
+
+async fn execute_conversion_step(
+    input: &Path,
+    output: &Path,
+    step: &ConversionStep,
+    engines: &EnginePaths,
+    scheduler: Arc<ResourceScheduler>,
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    let engine = engines.get(&step.engine_id)?;
+    let profile = profile_for(&step.engine_id);
+    let _lease = scheduler
+        .acquire(&step.engine_id, profile, cancellation)
+        .await?;
+    match step.engine_id.as_str() {
+        "vips" => {
+            run_vips_copy(
+                engine,
+                input,
+                output,
+                scheduler.budget().cpu_tokens.max(1),
+                cancellation,
+            )
+            .await
+        }
+        "imagemagick" => {
+            run_process(
+                engine,
+                &[input.as_os_str().into(), output.as_os_str().into()],
+                cancellation,
+            )
+            .await
+        }
+        "img2pdf" => {
+            run_process(
+                engine,
+                &[
+                    OsString::from("--rotation=ifvalid"),
+                    input.as_os_str().into(),
+                    OsString::from("-o"),
+                    output.as_os_str().into(),
+                ],
+                cancellation,
+            )
+            .await
+        }
+        "office" => {
+            let output_plan = transient_output_plan(output);
+            run_office_convert(engine, input, &output_plan, &step.to, cancellation).await
+        }
+        "pandoc" => run_pandoc(engine, input, output, cancellation).await,
+        other => Err(ExecutionError::InvalidInput(format!(
+            "Le moteur {other} n’est pas encore autorisé comme intermédiaire PDF."
+        ))),
+    }
+}
+
+fn transient_output_plan(output: &Path) -> OutputPlan {
+    OutputPlan {
+        destination_directory: output.parent().unwrap_or_else(|| Path::new(".")).to_path_buf(),
+        final_path: output.to_path_buf(),
+        temporary_path: output.to_path_buf(),
+        replaces_existing: false,
+        skipped: false,
+    }
+}
+
+async fn image_file_to_pdf(
+    input: &Path,
+    output: &Path,
+    engines: &EnginePaths,
+    scheduler: Arc<ResourceScheduler>,
+    cancellation: &CancellationToken,
+) -> Result<PathBuf, ExecutionError> {
+    let img2pdf = engines.get("img2pdf")?;
+    let _lease = scheduler
+        .acquire("img2pdf", ResourceProfile::PDF, cancellation)
+        .await?;
+    run_process(
+        img2pdf,
+        &[
+            OsString::from("--rotation=ifvalid"),
+            input.as_os_str().into(),
+            OsString::from("-o"),
+            output.as_os_str().into(),
+        ],
+        cancellation,
+    )
+    .await?;
+    Ok(output.to_path_buf())
+}
+
+async fn merge_pdf_files(
+    inputs: &[PathBuf],
+    output: &Path,
+    engines: &EnginePaths,
+    scheduler: Arc<ResourceScheduler>,
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    let qpdf = engines.get("qpdf")?;
+    let _lease = scheduler
+        .acquire("qpdf", ResourceProfile::PDF, cancellation)
+        .await?;
+    let mut args = vec![OsString::from("--empty"), OsString::from("--pages")];
+    for input in inputs {
+        args.push(input.as_os_str().into());
+    }
+    args.extend([OsString::from("--"), output.as_os_str().into()]);
+    run_process(qpdf, &args, cancellation).await
+}
+
+async fn validate_pdf_output(
+    path: &Path,
+    engines: &EnginePaths,
+    scheduler: Arc<ResourceScheduler>,
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    let metadata = tokio::fs::metadata(path).await?;
+    if metadata.len() < 8 {
+        return Err(ExecutionError::InvalidInput(
+            "Le PDF généré est vide ou incomplet.".into(),
+        ));
+    }
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut signature = [0_u8; 5];
+    file.read_exact(&mut signature).await?;
+    if &signature != b"%PDF-" {
+        return Err(ExecutionError::InvalidInput(
+            "Le résultat ne possède pas une signature PDF valide.".into(),
+        ));
+    }
+    if let Ok(qpdf) = engines.get("qpdf") {
+        let _lease = scheduler
+            .acquire("qpdf", ResourceProfile::PDF, cancellation)
+            .await?;
+        run_process(
+            qpdf,
+            &[
+                OsString::from("--warning-exit-0"),
+                OsString::from("--check"),
+                path.as_os_str().into(),
+            ],
+            cancellation,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn make_note_pdf(
+    root: &Path,
+    index: usize,
+    input: &Path,
+    note: &str,
+    engines: &EnginePaths,
+    scheduler: Arc<ResourceScheduler>,
+    cancellation: &CancellationToken,
+) -> Result<PathBuf, ExecutionError> {
+    let html = root.join(format!("{index:05}-note.html"));
+    let output = root.join(format!("{index:05}-note.pdf"));
+    let title = input
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("Fichier");
+    let body = format!(
+        "<!doctype html><meta charset=\"utf-8\"><style>body{{font-family:Arial,sans-serif;margin:64px;color:#151827}}h1{{font-size:28px}}p{{font-size:16px;line-height:1.55;color:#555b70}}</style><h1>{}</h1><p>{}</p>",
+        escape_html(title),
+        escape_html(note)
+    );
+    tokio::fs::write(&html, body).await?;
+    let office = engines.get("office")?;
+    let _lease = scheduler
+        .acquire("office", ResourceProfile::OFFICE, cancellation)
+        .await?;
+    run_office_convert(office, &html, &transient_output_plan(&output), "pdf", cancellation).await?;
+    Ok(output)
+}
+
+async fn make_signature_page(
+    job: &TemporaryJobWorkspace,
+    signature: &str,
+    engines: &EnginePaths,
+    scheduler: Arc<ResourceScheduler>,
+    cancellation: &CancellationToken,
+) -> Result<PathBuf, ExecutionError> {
+    let input = job.path("signature.html");
+    let output = job.path("signature.pdf");
+    let body = format!(
+        "<!doctype html><meta charset=\"utf-8\"><style>body{{font-family:Arial,sans-serif;margin:72px;color:#171a29}}.box{{margin-top:55vh;border-top:1px solid #d8dbea;padding-top:22px}}.sig{{font-family:cursive;font-size:38px;color:#25316d}}.hint{{font-size:13px;color:#73798f}}</style><div class=\"box\"><div class=\"hint\">Signature ajoutée par FileFlow</div><div class=\"sig\">{}</div></div>",
+        escape_html(signature)
+    );
+    tokio::fs::write(&input, body).await?;
+    let office = engines.get("office")?;
+    let _lease = scheduler
+        .acquire("office", ResourceProfile::OFFICE, cancellation)
+        .await?;
+    run_office_convert(office, &input, &transient_output_plan(&output), "pdf", cancellation).await?;
+    Ok(output)
+}
+
+async fn run_text_to_pdf(
+    engines: &EnginePaths,
+    input: &Path,
+    output: &Path,
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    let pandoc = engines.get("pandoc")?;
+    let office = engines.get("office")?;
+    let parent = output.parent().unwrap_or_else(|| Path::new("."));
+    let docx = parent.join(format!(".fileflow-text-{}.docx", Uuid::new_v4().simple()));
+    let result = async {
+        run_pandoc(pandoc, input, &docx, cancellation).await?;
+        run_office_convert(office, &docx, &transient_output_plan(output), "pdf", cancellation).await
+    }
+    .await;
+    let _ = tokio::fs::remove_file(&docx).await;
+    result
+}
+
+async fn run_pdf_protect(
+    engine: &Path,
+    input: &Path,
+    output: &Path,
+    parameters: &HashMap<String, serde_json::Value>,
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    let password = parameter_optional_string(parameters, "password", 256)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ExecutionError::InvalidInput("Un mot de passe est nécessaire.".into()))?;
+    run_process(
+        engine,
+        &[
+            OsString::from("--encrypt"),
+            OsString::from(&password),
+            OsString::from(&password),
+            OsString::from("256"),
+            OsString::from("--"),
+            input.as_os_str().into(),
+            output.as_os_str().into(),
+        ],
+        cancellation,
+    )
+    .await
+}
+
+fn parameter_optional_string(
+    parameters: &HashMap<String, serde_json::Value>,
+    key: &str,
+    max_len: usize,
+) -> Option<String> {
+    parameters
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(max_len).collect())
+}
+
+fn parameter_bool(
+    parameters: &HashMap<String, serde_json::Value>,
+    key: &str,
+    fallback: bool,
+) -> bool {
+    parameters
+        .get(key)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(fallback)
+}
+
+fn safe_conversion_extension(format: &str) -> Option<&'static str> {
+    match format.to_ascii_lowercase().as_str() {
+        "jpeg" | "jpg" => Some("jpg"),
+        "png" => Some("png"),
+        "webp" => Some("webp"),
+        "avif" => Some("avif"),
+        "tiff" | "tif" => Some("tiff"),
+        "bmp" => Some("bmp"),
+        "gif" => Some("gif"),
+        "docx" => Some("docx"),
+        "odt" => Some("odt"),
+        "rtf" => Some("rtf"),
+        "html" => Some("html"),
+        "epub" => Some("epub"),
+        "text" | "txt" => Some("txt"),
+        "pdf" => Some("pdf"),
+        _ => None,
+    }
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 async fn execute_archive_package(
@@ -1243,6 +1998,8 @@ fn item_output<'a>(
         "pdf-repair" => ("qpdf", Some("pdf"), Some("repare")),
         "pdf-flatten-rotation" => ("qpdf", Some("pdf"), Some("rotation-aplatie")),
         "pdf-flatten-annotations" => ("qpdf", Some("pdf"), Some("annotations-aplaties")),
+        "pdf-protect" => ("qpdf", Some("pdf"), Some("protege")),
+        "text-to-pdf" => ("pandoc", Some("pdf"), Some("pdf")),
         "pdf-compress" => ("ghostscript", Some("pdf"), Some("leger")),
         "pdf-extract-text" => ("poppler", Some("txt"), Some("texte")),
         "pdf-ocr" => ("ocr", Some("pdf"), Some("ocr")),
@@ -3121,6 +3878,8 @@ fn normalize_quality(quality: Option<&str>) -> Option<String> {
 }
 
 pub const EXECUTABLE_ACTIONS: &[&str] = &[
+    "smart-to-pdf",
+    "collection-to-pdf",
     "images-to-pdf",
     "image-convert",
     "image-batch-convert",
@@ -3170,6 +3929,7 @@ pub const EXECUTABLE_ACTIONS: &[&str] = &[
     "pdf-repair",
     "pdf-flatten-rotation",
     "pdf-flatten-annotations",
+    "pdf-protect",
     "pdf-compress",
     "pdf-to-images",
     "pdf-extract-text",
@@ -3198,6 +3958,7 @@ pub const EXECUTABLE_ACTIONS: &[&str] = &[
     "audio-convert",
     "extract-audio",
     "video-to-gif",
+    "text-to-pdf",
     "text-convert",
     "ebook-convert",
 ];
@@ -3213,7 +3974,9 @@ pub fn is_supported(action_id: &str) -> bool {
 fn is_collective(action_id: &str) -> bool {
     matches!(
         action_id,
-        "images-to-pdf"
+        "smart-to-pdf"
+            | "collection-to-pdf"
+            | "images-to-pdf"
             | "pdf-merge"
             | "archive-create"
             | "archive-package"
@@ -3325,6 +4088,37 @@ mod tests {
             "dataset.csv"
         );
         assert_eq!(lz4_decompressed_name(Path::new("backup.lz4")), "backup");
+    }
+
+    #[test]
+    fn smart_pdf_helpers_accept_only_safe_intermediate_extensions() {
+        assert_eq!(safe_conversion_extension("jpeg"), Some("jpg"));
+        assert_eq!(safe_conversion_extension("tiff"), Some("tiff"));
+        assert_eq!(safe_conversion_extension("docx"), Some("docx"));
+        assert_eq!(safe_conversion_extension("../../escape"), None);
+    }
+
+    #[test]
+    fn smart_pdf_ordering_preserves_selection_or_sorts_by_name() {
+        let original = vec![PathBuf::from("z.pdf"), PathBuf::from("A.pdf")];
+        let mut selected = original.clone();
+        sort_pdf_inputs(&mut selected, Some("selection"));
+        assert_eq!(selected, original);
+
+        let mut named = original;
+        sort_pdf_inputs(&mut named, Some("name"));
+        assert_eq!(named, vec![PathBuf::from("A.pdf"), PathBuf::from("z.pdf")]);
+    }
+
+    #[test]
+    fn smart_pdf_actions_are_executable_and_collective_when_expected() {
+        assert!(is_supported("smart-to-pdf"));
+        assert!(is_supported("collection-to-pdf"));
+        assert!(is_supported("pdf-protect"));
+        assert!(is_supported("text-to-pdf"));
+        assert!(is_collective("smart-to-pdf"));
+        assert!(is_collective("collection-to-pdf"));
+        assert!(!is_collective("pdf-protect"));
     }
 
     #[test]

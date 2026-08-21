@@ -1269,6 +1269,7 @@ dependencies = [
  "fileflow-domain",
  "fileflow-formats",
  "fileflow-output",
+ "fileflow-planner",
  "fileflow-scheduler",
  "serde",
  "serde_json",

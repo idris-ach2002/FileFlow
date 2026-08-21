@@ -38,6 +38,8 @@ pub struct ConversionPlan {
     pub input: String,
     pub output: String,
     pub total_cost: u16,
+    pub lossy_steps: usize,
+    pub intermediates: Vec<String>,
     pub steps: Vec<ConversionStep>,
 }
 
@@ -103,11 +105,36 @@ impl CapabilityCatalog {
     }
 
     pub fn conversion_plan(&self, input: &str, output: &str) -> Option<ConversionPlan> {
+        self.conversion_plan_filtered(input, output, |_| true)
+    }
+
+    pub fn conversion_plan_with_engines(
+        &self,
+        input: &str,
+        output: &str,
+        available_engines: &HashSet<String>,
+    ) -> Option<ConversionPlan> {
+        self.conversion_plan_filtered(input, output, |edge| {
+            available_engines.contains(&edge.engine_id)
+        })
+    }
+
+    fn conversion_plan_filtered<F>(
+        &self,
+        input: &str,
+        output: &str,
+        allowed: F,
+    ) -> Option<ConversionPlan>
+    where
+        F: Fn(&ConversionEdge) -> bool,
+    {
         if input.eq_ignore_ascii_case(output) {
             return Some(ConversionPlan {
                 input: input.to_ascii_lowercase(),
                 output: output.to_ascii_lowercase(),
                 total_cost: 0,
+                lossy_steps: 0,
+                intermediates: Vec::new(),
                 steps: Vec::new(),
             });
         }
@@ -133,9 +160,17 @@ impl CapabilityCatalog {
                 .conversions
                 .iter()
                 .enumerate()
-                .filter(|(_, edge)| edge.from == current)
+                .filter(|(_, edge)| edge.from == current && allowed(edge))
             {
-                let next_cost = cost.saturating_add(edge.cost);
+                // FileFlow prefers fidelity over a superficially shorter path. A
+                // lossy intermediate is deliberately expensive, and every extra
+                // intermediate adds a small stability/latency cost.
+                let fidelity_penalty = if edge.lossy { 24 } else { 0 };
+                let intermediate_penalty = if edge.to == output { 0 } else { 2 };
+                let next_cost = cost
+                    .saturating_add(edge.cost)
+                    .saturating_add(fidelity_penalty)
+                    .saturating_add(intermediate_penalty);
                 let should_update = distances
                     .get(&edge.to)
                     .is_none_or(|known| next_cost < *known);
@@ -162,11 +197,19 @@ impl CapabilityCatalog {
             cursor = prior;
         }
         steps.reverse();
+        let lossy_steps = steps.iter().filter(|step| step.lossy).count();
+        let intermediates = steps
+            .iter()
+            .take(steps.len().saturating_sub(1))
+            .map(|step| step.to.clone())
+            .collect();
 
         Some(ConversionPlan {
             input,
             output,
             total_cost,
+            lossy_steps,
+            intermediates,
             steps,
         })
     }
@@ -370,6 +413,42 @@ fn default_actions() -> Vec<ActionDescriptor> {
 
     vec![
         action(
+            "smart-to-pdf",
+            "Créer un PDF",
+            "Trouver automatiquement le meilleur chemin vers PDF, même en plusieurs étapes.",
+            OperationCategory::Pdf,
+            &[],
+            &[],
+            Some("pdf"),
+            true,
+            false,
+            true,
+        ),
+        action(
+            "collection-to-pdf",
+            "Faire un dossier PDF",
+            "Regrouper fichiers, dossier ou ZIP dans un seul PDF ordonné.",
+            OperationCategory::Pdf,
+            &[],
+            &[],
+            Some("pdf"),
+            true,
+            false,
+            true,
+        ),
+        action(
+            "pdf-protect",
+            "Protéger un PDF",
+            "Créer une copie protégée par mot de passe sans modifier l’original.",
+            OperationCategory::Privacy,
+            &[Pdf],
+            &["qpdf"],
+            Some("pdf"),
+            true,
+            false,
+            true,
+        ),
+        action(
             "images-to-pdf",
             "Images vers PDF",
             "Assembler plusieurs images dans un seul PDF.",
@@ -411,11 +490,11 @@ fn default_actions() -> Vec<ActionDescriptor> {
             "Transformer texte, Markdown ou HTML en PDF.",
             OperationCategory::Pdf,
             &[Text],
-            &["pandoc"],
+            &["pandoc", "office"],
             Some("pdf"),
             true,
             false,
-            false,
+            true,
         ),
         action(
             "pdf-merge",
@@ -2038,40 +2117,48 @@ fn format_profile(
 fn default_conversion_edges() -> Vec<ConversionEdge> {
     let mut edges = Vec::new();
 
+    // Lossless / minimally destructive image intermediates. JPEG/WebP are
+    // penalised as intermediate formats because they can introduce generation
+    // loss; PNG/TIFF are preferred when a direct PDF route is unavailable.
     for from in [
         "jpeg", "png", "webp", "heic", "heif", "avif", "jxl", "tiff", "bmp", "gif", "raw",
+        "svg", "photoshop", "eps",
     ] {
-        for to in ["jpeg", "png", "webp", "avif", "jxl", "tiff"] {
+        for to in ["jpeg", "png", "webp", "avif", "tiff"] {
             if from != to {
                 edges.push(edge(
                     from,
                     to,
-                    "vips",
-                    if to == "jpeg" || to == "webp" { 2 } else { 1 },
-                    to == "jpeg",
+                    if matches!(from, "eps" | "photoshop") { "imagemagick" } else { "vips" },
+                    if matches!(to, "jpeg" | "webp") { 3 } else { 1 },
+                    matches!(to, "jpeg" | "webp"),
                 ));
             }
         }
-        edges.push(edge(from, "pdf", "vips", 2, false));
+    }
+    for from in ["jpeg", "png", "tiff"] {
+        edges.push(edge(from, "pdf", "img2pdf", 1, false));
     }
 
     for from in [
-        "doc", "docx", "odt", "rtf", "pages", "wpd", "xls", "xlsx", "ods", "numbers", "ppt",
-        "pptx", "odp", "keynote",
+        "doc", "docx", "odt", "rtf", "wpd", "xls", "xlsx", "ods", "csv", "tsv",
+        "ppt", "pptx", "odp",
     ] {
         edges.push(edge(from, "pdf", "office", 1, false));
     }
 
-    for from in ["txt", "text", "md", "html", "rst", "markdown"] {
+    for from in ["txt", "text", "md", "html", "rst", "markdown", "tex"] {
+        edges.push(edge(from, "docx", "pandoc", 1, false));
         edges.push(edge(from, "html", "pandoc", 1, false));
-        edges.push(edge(from, "md", "pandoc", 1, false));
-        edges.push(edge(from, "docx", "pandoc", 2, false));
         edges.push(edge(from, "epub", "pandoc", 2, false));
+    }
+    for from in ["epub", "fb2"] {
+        edges.push(edge(from, "docx", "pandoc", 2, false));
     }
 
     edges.extend([
-        edge("pdf", "png", "poppler", 2, true),
-        edge("pdf", "jpeg", "poppler", 3, true),
+        edge("pdf", "png", "poppler", 3, true),
+        edge("pdf", "jpeg", "poppler", 4, true),
         edge("mov", "mp4", "ffmpeg", 2, true),
         edge("mkv", "mp4", "ffmpeg", 2, true),
         edge("avi", "mp4", "ffmpeg", 3, true),
@@ -2114,7 +2201,7 @@ mod tests {
         };
 
         let plan = catalog.conversion_plan("docx", "png").unwrap();
-        assert_eq!(plan.total_cost, 3);
+        assert_eq!(plan.total_cost, 29);
         assert_eq!(plan.steps.len(), 2);
         assert_eq!(plan.steps[0].engine_id, "office");
         assert_eq!(plan.steps[1].engine_id, "poppler");
@@ -2168,4 +2255,32 @@ mod tests {
                 .any(|item| item.action_id == "pdf-merge" && item.ready)
         );
     }
+    #[test]
+    fn planner_prefers_lossless_intermediate_over_shorter_lossy_route() {
+        let catalog = CapabilityCatalog {
+            actions: Vec::new(),
+            conversions: vec![
+                edge("xyz", "jpeg", "image", 1, true),
+                edge("jpeg", "pdf", "pdf", 1, false),
+                edge("xyz", "png", "image", 2, false),
+                edge("png", "pdf", "pdf", 2, false),
+            ],
+            formats: Vec::new(),
+        };
+        let plan = catalog.conversion_plan("xyz", "pdf").expect("route");
+        assert_eq!(plan.intermediates, vec!["png"]);
+        assert_eq!(plan.lossy_steps, 0);
+    }
+
+    #[test]
+    fn planner_can_filter_routes_by_installed_engines() {
+        let catalog = CapabilityCatalog::default();
+        let engines = HashSet::from(["pandoc".to_string(), "office".to_string()]);
+        let plan = catalog
+            .conversion_plan_with_engines("md", "pdf", &engines)
+            .expect("Markdown should route via DOCX");
+        assert_eq!(plan.intermediates, vec!["docx"]);
+        assert_eq!(plan.steps.len(), 2);
+    }
+
 }

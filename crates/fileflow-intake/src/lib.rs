@@ -14,7 +14,7 @@ use thiserror::Error;
 use tokio::{fs, io::AsyncReadExt, sync::mpsc};
 
 const DEFAULT_BATCH_SIZE: usize = 64;
-const DEFAULT_SAMPLE_BYTES: usize = 16 * 1024;
+const DEFAULT_SAMPLE_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]

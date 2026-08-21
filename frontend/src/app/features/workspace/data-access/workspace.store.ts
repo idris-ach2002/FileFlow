@@ -2,6 +2,7 @@ import { computed, inject, Injectable, signal } from '@angular/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { TauriBridgeService } from '../../../core/ipc/tauri-bridge.service';
 import { PreferencesService } from '../../../core/preferences/preferences.service';
+import { UiMemoryService } from '../../../core/state/ui-memory.service';
 import {
   ActionRecommendation,
   ArchiveInspection,
@@ -40,6 +41,7 @@ const PAGE_SIZE = 200;
 export class WorkspaceStore {
   private readonly bridge = inject(TauriBridgeService);
   private readonly preferences = inject(PreferencesService);
+  private readonly uiMemory = inject(UiMemoryService);
   private queryGeneration = 0;
   private intakeFlushScheduled = false;
   private executionFlushScheduled = false;
@@ -141,6 +143,7 @@ export class WorkspaceStore {
         warnings: this.warnings().length,
       });
       this.phase.set('ready');
+      this.uiMemory.saveWorkspaceRoots(snapshot.roots);
       await Promise.all([this.loadInitialPage(), this.loadWorkspaceDetails()]);
       if (this.pendingActionId()) {
         this.activeActionId.set(this.pendingActionId());
@@ -152,6 +155,13 @@ export class WorkspaceStore {
       this.phase.set('error');
       return false;
     }
+  }
+
+  async restoreRememberedWorkspace(): Promise<boolean> {
+    if (this.hasWorkspace() || this.busy()) return this.hasWorkspace();
+    const roots = this.uiMemory.workspaceRoots();
+    if (!roots.length) return false;
+    return this.start(roots);
   }
 
   setPendingAction(actionId: string | null): void {
@@ -249,6 +259,16 @@ export class WorkspaceStore {
     } finally {
       this.runningJobId.set(null);
     }
+  }
+
+  resetExecutionResult(): void {
+    if (this.executing()) return;
+    this.executionSummary.set(null);
+    this.executionError.set(null);
+    this.executionFailures.set([]);
+    this.outputActionMessage.set(null);
+    this.executionCompleted.set(0);
+    this.executionTotal.set(0);
   }
 
   async refreshAfterMutation(): Promise<void> {

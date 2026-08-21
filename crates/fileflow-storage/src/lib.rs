@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use auth::{AccountProfile, OnboardingPreferences, PasswordHash};
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -118,6 +118,108 @@ impl Storage {
         Ok(count.max(0) as u64)
     }
 
+    /// Profiles known by this local installation, ordered like an account chooser.
+    /// Password hashes never leave the storage layer.
+    pub fn account_profiles(&self) -> Result<Vec<AccountProfile>, StorageError> {
+        let connection = self.connection.lock();
+        let mut statement = connection.prepare(
+            "SELECT a.id, a.email, a.created_at, a.updated_at, p.display_name, p.first_name, p.last_name, p.avatar_path \
+             FROM accounts a JOIN profiles p ON p.account_id = a.id \
+             LEFT JOIN account_usage u ON u.account_id = a.id \
+             ORDER BY (u.last_used_at IS NULL) ASC, u.last_used_at DESC, a.created_at ASC",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, Option<String>>(7)?,
+            ))
+        })?;
+        rows.map(|row| profile_tuple(row?))
+            .collect::<Result<Vec<_>, StorageError>>()
+    }
+
+    pub fn touch_account(&self, account_id: Uuid, at: DateTime<Utc>) -> Result<(), StorageError> {
+        self.connection.lock().execute(
+            "INSERT INTO account_usage(account_id, last_used_at) VALUES (?1, ?2) \
+             ON CONFLICT(account_id) DO UPDATE SET last_used_at=excluded.last_used_at",
+            params![account_id.to_string(), at.to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn remember_session(
+        &self,
+        account_id: Uuid,
+        expires_at: DateTime<Utc>,
+    ) -> Result<(), StorageError> {
+        let now = Utc::now();
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO trusted_sessions(account_id, expires_at, last_used_at) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(account_id) DO UPDATE SET expires_at=excluded.expires_at, last_used_at=excluded.last_used_at",
+            params![
+                account_id.to_string(),
+                expires_at.to_rfc3339(),
+                now.to_rfc3339()
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO account_usage(account_id, last_used_at) VALUES (?1, ?2) \
+             ON CONFLICT(account_id) DO UPDATE SET last_used_at=excluded.last_used_at",
+            params![account_id.to_string(), now.to_rfc3339()],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn trusted_account(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Option<(Uuid, DateTime<Utc>)>, StorageError> {
+        let connection = self.connection.lock();
+        let row = connection
+            .query_row(
+                "SELECT account_id, expires_at FROM trusted_sessions \
+                 WHERE expires_at > ?1 ORDER BY last_used_at DESC LIMIT 1",
+                params![now.to_rfc3339()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        Ok(row.and_then(|(account_id, expires_at)| {
+            let account_id = Uuid::parse_str(&account_id).ok()?;
+            let expires_at = DateTime::parse_from_rfc3339(&expires_at)
+                .ok()?
+                .with_timezone(&Utc);
+            Some((account_id, expires_at))
+        }))
+    }
+
+    pub fn clear_trusted_session(&self, account_id: Uuid) -> Result<(), StorageError> {
+        self.connection.lock().execute(
+            "DELETE FROM trusted_sessions WHERE account_id = ?1",
+            params![account_id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    pub fn purge_expired_trusted_sessions(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<usize, StorageError> {
+        let removed = self.connection.lock().execute(
+            "DELETE FROM trusted_sessions WHERE expires_at <= ?1",
+            params![now.to_rfc3339()],
+        )?;
+        Ok(removed)
+    }
+
     pub fn create_account(
         &self,
         profile: &AccountProfile,
@@ -166,6 +268,10 @@ impl Storage {
                 onboarding.created_at.to_rfc3339(),
                 onboarding.updated_at.to_rfc3339(),
             ],
+        )?;
+        transaction.execute(
+            "INSERT OR REPLACE INTO account_usage(account_id, last_used_at) VALUES (?1, ?2)",
+            params![profile.id.to_string(), profile.updated_at.to_rfc3339()],
         )?;
         if existing_accounts == 0 {
             let account_id = profile.id.to_string();
@@ -843,7 +949,7 @@ fn migrate(connection: &Connection) -> rusqlite::Result<()> {
          CREATE TABLE IF NOT EXISTS settings(\n           key TEXT PRIMARY KEY,\n           value_json TEXT NOT NULL,\n           updated_at TEXT NOT NULL\n         );\n
          CREATE TABLE IF NOT EXISTS favorites(\n           action_id TEXT PRIMARY KEY,\n           created_at TEXT NOT NULL\n         );\n
          CREATE TABLE IF NOT EXISTS history(\n           id TEXT PRIMARY KEY,\n           action_id TEXT NOT NULL,\n           input_count INTEGER NOT NULL,\n           output_count INTEGER NOT NULL,\n           input_bytes INTEGER NOT NULL,\n           output_bytes INTEGER NOT NULL,\n           destination TEXT,\n           status TEXT NOT NULL,\n           duration_ms INTEGER NOT NULL,\n           created_at TEXT NOT NULL\n         );\n         CREATE INDEX IF NOT EXISTS history_created_at ON history(created_at DESC);\n
-         CREATE TABLE IF NOT EXISTS recipes(\n           id TEXT PRIMARY KEY,\n           name TEXT NOT NULL,\n           description TEXT NOT NULL,\n           icon TEXT NOT NULL,\n           steps_json TEXT NOT NULL,\n           enabled INTEGER NOT NULL DEFAULT 1,\n           created_at TEXT NOT NULL,\n           updated_at TEXT NOT NULL\n         );\n\n         CREATE TABLE IF NOT EXISTS accounts(\n           id TEXT PRIMARY KEY,\n           email TEXT NOT NULL UNIQUE COLLATE NOCASE,\n           password_hash_json TEXT NOT NULL,\n           created_at TEXT NOT NULL,\n           updated_at TEXT NOT NULL\n         );\n\n         CREATE TABLE IF NOT EXISTS profiles(\n           account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,\n           display_name TEXT NOT NULL,\n           first_name TEXT NOT NULL,\n           last_name TEXT NOT NULL,\n           avatar_path TEXT,\n           updated_at TEXT NOT NULL\n         );\n\n         CREATE TABLE IF NOT EXISTS onboarding(\n           account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,\n           completed INTEGER NOT NULL DEFAULT 0,\n           storage_directory TEXT,\n           language TEXT NOT NULL DEFAULT 'fr',\n           beginner_mode INTEGER NOT NULL DEFAULT 1,\n           preserve_originals INTEGER NOT NULL DEFAULT 1,\n           notifications INTEGER NOT NULL DEFAULT 1,\n           confirm_destructive_actions INTEGER NOT NULL DEFAULT 1,\n           created_at TEXT NOT NULL,\n           updated_at TEXT NOT NULL\n         );\n\n         CREATE TABLE IF NOT EXISTS account_favorites(\n           account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,\n           action_id TEXT NOT NULL,\n           created_at TEXT NOT NULL,\n           PRIMARY KEY(account_id, action_id)\n         );\n\n         CREATE TABLE IF NOT EXISTS account_history(\n           account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,\n           id TEXT NOT NULL,\n           action_id TEXT NOT NULL,\n           input_count INTEGER NOT NULL,\n           output_count INTEGER NOT NULL,\n           input_bytes INTEGER NOT NULL,\n           output_bytes INTEGER NOT NULL,\n           destination TEXT,\n           status TEXT NOT NULL,\n           duration_ms INTEGER NOT NULL,\n           created_at TEXT NOT NULL,\n           PRIMARY KEY(account_id, id)\n         );\n         CREATE INDEX IF NOT EXISTS account_history_created_at ON account_history(account_id, created_at DESC);\n\n         CREATE TABLE IF NOT EXISTS account_recipes(\n           account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,\n           id TEXT NOT NULL,\n           name TEXT NOT NULL,\n           description TEXT NOT NULL,\n           icon TEXT NOT NULL,\n           steps_json TEXT NOT NULL,\n           enabled INTEGER NOT NULL DEFAULT 1,\n           created_at TEXT NOT NULL,\n           updated_at TEXT NOT NULL,\n           PRIMARY KEY(account_id, id)\n         );\n\n         CREATE TABLE IF NOT EXISTS automation_jobs(\n           account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,\n           id TEXT NOT NULL,\n           recipe_id TEXT,\n           status TEXT NOT NULL,\n           current_step INTEGER NOT NULL DEFAULT 0,\n           total_steps INTEGER NOT NULL DEFAULT 0,\n           input_paths_json TEXT NOT NULL,\n           outputs_json TEXT NOT NULL DEFAULT '{}',\n           error TEXT,\n           created_at TEXT NOT NULL,\n           updated_at TEXT NOT NULL,\n           PRIMARY KEY(account_id, id)\n         );\n         CREATE INDEX IF NOT EXISTS automation_jobs_status ON automation_jobs(account_id, status, updated_at DESC);\n\n         CREATE TABLE IF NOT EXISTS watched_folders(\n           account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,\n           id TEXT NOT NULL,\n           path TEXT NOT NULL,\n           recipe_id TEXT NOT NULL,\n           enabled INTEGER NOT NULL DEFAULT 1,\n           recursive INTEGER NOT NULL DEFAULT 0,\n           extensions_json TEXT NOT NULL DEFAULT '[]',\n           stability_seconds INTEGER NOT NULL DEFAULT 3,\n           last_scan_at TEXT,\n           created_at TEXT NOT NULL,\n           updated_at TEXT NOT NULL,\n           PRIMARY KEY(account_id, id)\n         );\n\n         CREATE TABLE IF NOT EXISTS watched_seen(\n           account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,\n           watch_id TEXT NOT NULL,\n           path TEXT NOT NULL,\n           signature TEXT NOT NULL,\n           processed_at TEXT NOT NULL,\n           PRIMARY KEY(account_id, watch_id, path)\n         );",
+         CREATE TABLE IF NOT EXISTS recipes(\n           id TEXT PRIMARY KEY,\n           name TEXT NOT NULL,\n           description TEXT NOT NULL,\n           icon TEXT NOT NULL,\n           steps_json TEXT NOT NULL,\n           enabled INTEGER NOT NULL DEFAULT 1,\n           created_at TEXT NOT NULL,\n           updated_at TEXT NOT NULL\n         );\n\n         CREATE TABLE IF NOT EXISTS accounts(\n           id TEXT PRIMARY KEY,\n           email TEXT NOT NULL UNIQUE COLLATE NOCASE,\n           password_hash_json TEXT NOT NULL,\n           created_at TEXT NOT NULL,\n           updated_at TEXT NOT NULL\n         );\n\n         CREATE TABLE IF NOT EXISTS account_usage(\n           account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,\n           last_used_at TEXT NOT NULL\n         );\n\n         CREATE TABLE IF NOT EXISTS trusted_sessions(\n           account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,\n           expires_at TEXT NOT NULL,\n           last_used_at TEXT NOT NULL\n         );\n         CREATE INDEX IF NOT EXISTS trusted_sessions_expiry ON trusted_sessions(expires_at);\n\n         CREATE TABLE IF NOT EXISTS profiles(\n           account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,\n           display_name TEXT NOT NULL,\n           first_name TEXT NOT NULL,\n           last_name TEXT NOT NULL,\n           avatar_path TEXT,\n           updated_at TEXT NOT NULL\n         );\n\n         CREATE TABLE IF NOT EXISTS onboarding(\n           account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,\n           completed INTEGER NOT NULL DEFAULT 0,\n           storage_directory TEXT,\n           language TEXT NOT NULL DEFAULT 'fr',\n           beginner_mode INTEGER NOT NULL DEFAULT 1,\n           preserve_originals INTEGER NOT NULL DEFAULT 1,\n           notifications INTEGER NOT NULL DEFAULT 1,\n           confirm_destructive_actions INTEGER NOT NULL DEFAULT 1,\n           created_at TEXT NOT NULL,\n           updated_at TEXT NOT NULL\n         );\n\n         CREATE TABLE IF NOT EXISTS account_favorites(\n           account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,\n           action_id TEXT NOT NULL,\n           created_at TEXT NOT NULL,\n           PRIMARY KEY(account_id, action_id)\n         );\n\n         CREATE TABLE IF NOT EXISTS account_history(\n           account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,\n           id TEXT NOT NULL,\n           action_id TEXT NOT NULL,\n           input_count INTEGER NOT NULL,\n           output_count INTEGER NOT NULL,\n           input_bytes INTEGER NOT NULL,\n           output_bytes INTEGER NOT NULL,\n           destination TEXT,\n           status TEXT NOT NULL,\n           duration_ms INTEGER NOT NULL,\n           created_at TEXT NOT NULL,\n           PRIMARY KEY(account_id, id)\n         );\n         CREATE INDEX IF NOT EXISTS account_history_created_at ON account_history(account_id, created_at DESC);\n\n         CREATE TABLE IF NOT EXISTS account_recipes(\n           account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,\n           id TEXT NOT NULL,\n           name TEXT NOT NULL,\n           description TEXT NOT NULL,\n           icon TEXT NOT NULL,\n           steps_json TEXT NOT NULL,\n           enabled INTEGER NOT NULL DEFAULT 1,\n           created_at TEXT NOT NULL,\n           updated_at TEXT NOT NULL,\n           PRIMARY KEY(account_id, id)\n         );\n\n         CREATE TABLE IF NOT EXISTS automation_jobs(\n           account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,\n           id TEXT NOT NULL,\n           recipe_id TEXT,\n           status TEXT NOT NULL,\n           current_step INTEGER NOT NULL DEFAULT 0,\n           total_steps INTEGER NOT NULL DEFAULT 0,\n           input_paths_json TEXT NOT NULL,\n           outputs_json TEXT NOT NULL DEFAULT '{}',\n           error TEXT,\n           created_at TEXT NOT NULL,\n           updated_at TEXT NOT NULL,\n           PRIMARY KEY(account_id, id)\n         );\n         CREATE INDEX IF NOT EXISTS automation_jobs_status ON automation_jobs(account_id, status, updated_at DESC);\n\n         CREATE TABLE IF NOT EXISTS watched_folders(\n           account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,\n           id TEXT NOT NULL,\n           path TEXT NOT NULL,\n           recipe_id TEXT NOT NULL,\n           enabled INTEGER NOT NULL DEFAULT 1,\n           recursive INTEGER NOT NULL DEFAULT 0,\n           extensions_json TEXT NOT NULL DEFAULT '[]',\n           stability_seconds INTEGER NOT NULL DEFAULT 3,\n           last_scan_at TEXT,\n           created_at TEXT NOT NULL,\n           updated_at TEXT NOT NULL,\n           PRIMARY KEY(account_id, id)\n         );\n\n         CREATE TABLE IF NOT EXISTS watched_seen(\n           account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,\n           watch_id TEXT NOT NULL,\n           path TEXT NOT NULL,\n           signature TEXT NOT NULL,\n           processed_at TEXT NOT NULL,\n           PRIMARY KEY(account_id, watch_id, path)\n         );",
     )?;
     connection.execute(
         "UPDATE schema_meta SET version = ?1",
@@ -1053,6 +1159,58 @@ mod tests {
         ));
         assert_eq!(loaded_onboarding.account_id, id);
         assert_eq!(storage.account_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn remembers_known_accounts_and_restores_only_unexpired_trusted_session() {
+        let storage = Storage::in_memory().unwrap();
+        let now = Utc::now();
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+
+        for (id, email, offset) in [
+            (first, "first@example.test", 0_i64),
+            (second, "second@example.test", 1_i64),
+        ] {
+            let created = now + chrono::Duration::seconds(offset);
+            let profile = AccountProfile {
+                id,
+                email: email.into(),
+                display_name: email.into(),
+                first_name: String::new(),
+                last_name: String::new(),
+                avatar_path: None,
+                created_at: created,
+                updated_at: created,
+            };
+            storage
+                .create_account(
+                    &profile,
+                    &auth::hash_password("a sufficiently long password").unwrap(),
+                    &OnboardingPreferences::new(id),
+                )
+                .unwrap();
+        }
+
+        storage.touch_account(first, now + chrono::Duration::minutes(2)).unwrap();
+        storage
+            .remember_session(first, now + chrono::Duration::days(30))
+            .unwrap();
+
+        let known = storage.account_profiles().unwrap();
+        assert_eq!(known.len(), 2);
+        assert_eq!(known[0].id, first);
+
+        let trusted = storage.trusted_account(now).unwrap().expect("trusted session");
+        assert_eq!(trusted.0, first);
+        storage.clear_trusted_session(first).unwrap();
+        assert!(storage.trusted_account(now).unwrap().is_none());
+
+        storage
+            .remember_session(second, now - chrono::Duration::seconds(1))
+            .unwrap();
+        assert_eq!(storage.purge_expired_trusted_sessions(now).unwrap(), 1);
+        assert!(storage.trusted_account(now).unwrap().is_none());
     }
 
     #[test]
