@@ -125,7 +125,7 @@ function Ensure-Engine([string]$Label, [string]$Probe, [string[]]$Candidates) {
       $script:Available++
       return
     }
-    Warn "$Label: $candidate unavailable or installation failed; trying next source."
+    Warn "${Label}: $candidate unavailable or installation failed; trying next source."
   }
   Write-Warning ('[MISS] {0,-14} not installed; related features will be disabled.' -f $Label)
   $script:Missing++
