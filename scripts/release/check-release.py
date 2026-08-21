@@ -11,11 +11,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def load_json(rel: str) -> dict:
-    return json.loads((ROOT / rel).read_text())
+    return json.loads((ROOT / rel).read_text(encoding="utf-8"))
 
 
 def require_tokens(rel: str, tokens: list[str]) -> str:
-    text = (ROOT / rel).read_text()
+    text = (ROOT / rel).read_text(encoding="utf-8")
     for token in tokens:
         if token not in text:
             raise SystemExit(f"{rel} missing release invariant: {token}")
@@ -27,9 +27,9 @@ def main() -> None:
     parser.add_argument("--allow-dirty", action="store_true")
     args = parser.parse_args()
 
-    cargo_text = (ROOT / "src-tauri/Cargo.toml").read_text()
-    workspace_cargo = (ROOT / "Cargo.toml").read_text()
-    lock_text = (ROOT / "Cargo.lock").read_text()
+    cargo_text = (ROOT / "src-tauri/Cargo.toml").read_text(encoding="utf-8")
+    workspace_cargo = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
+    lock_text = (ROOT / "Cargo.lock").read_text(encoding="utf-8")
     workspace_section = workspace_cargo.split("[workspace.package]", 1)[1].split("\n[", 1)[0]
     versions = {
         "package.json": load_json("package.json")["version"],
@@ -80,7 +80,7 @@ def main() -> None:
     package = load_json("package.json")
     if package.get("engines", {}).get("node") != ">=22.22.3 <23 || >=24.15.0 <25 || >=26 <27":
         raise SystemExit("Node support range must stay aligned with Angular 22 supported majors")
-    if 'channel = "1.97.1"' not in (ROOT / "rust-toolchain.toml").read_text():
+    if 'channel = "1.97.1"' not in (ROOT / "rust-toolchain.toml").read_text(encoding="utf-8"):
         raise SystemExit("Rust toolchain must be pinned to 1.97.1")
 
     base = load_json("src-tauri/tauri.conf.json")
@@ -128,7 +128,7 @@ def main() -> None:
         ".github/workflows/native-linux.yml", ".github/workflows/native-macos.yml", ".github/workflows/native-windows.yml",
         ".github/workflows/release-linux.yml", ".github/workflows/release-macos.yml", ".github/workflows/release-windows.yml",
     ]:
-        text = (ROOT / rel).read_text()
+        text = (ROOT / rel).read_text(encoding="utf-8")
         for token in forbidden_workflow_tokens:
             if token.lower() in text.lower():
                 raise SystemExit(f"{rel} still contains legacy engine-factory token: {token}")

@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
   [ValidateSet('user', 'dev')][string]$Mode = 'user',
   [switch]$Force,

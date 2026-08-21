@@ -201,10 +201,22 @@ def collect_linux_dependencies(entry: Path, libdir: Path) -> None:
 
 
 def set_linux_rpath(path: Path, rpath: str) -> None:
+    # Shell wrappers and static ELF executables do not need an RPATH. In
+    # particular Debian/Ubuntu expose 7z through a wrapper under /usr/bin.
+    try:
+        if path.read_bytes()[:4] != b"\x7fELF":
+            return
+    except OSError:
+        return
+    if not linux_ldd(path):
+        return
     patchelf = shutil.which("patchelf")
     if not patchelf:
         raise RuntimeError("patchelf is required to build the relocatable Linux runtime")
-    run(patchelf, "--set-rpath", rpath, str(path))
+    proc = run(patchelf, "--set-rpath", rpath, str(path), check=False, capture=True)
+    if proc.returncode != 0:
+        detail = (proc.stdout or "").strip()
+        raise RuntimeError(f"patchelf failed for {path}: {detail or f'exit {proc.returncode}'}")
 
 
 def patch_linux_libdir(libdir: Path) -> None:
@@ -397,6 +409,17 @@ def copy_macos_engine_data(engine_id: str, source: Path, tool_root: Path) -> Non
                 stage_macos_closure(module, tool_root)
 
 
+
+def resolve_linux_archive_source(source: Path) -> tuple[Path, Path | None]:
+    """Resolve Debian/Ubuntu's /usr/bin/7z wrapper to its real payload."""
+    if source.name not in {"7z", "7za", "7zr"}:
+        return source, None
+    for package_root in (Path("/usr/lib/7zip"), Path("/usr/lib/p7zip")):
+        candidate = package_root / source.name
+        if candidate.is_file():
+            return candidate, package_root
+    return source, None
+
 def windows_engine_root(engine_id: str, source: Path) -> Path:
     parent = source.parent
     # Packages such as Ghostscript/Poppler/libvips/qpdf often keep DLLs in bin
@@ -420,6 +443,10 @@ def stage_native_engine(engine_id: str, source: Path, runtime: Path, family: str
         relative_inside = source.relative_to(root)
         return (Path("tools") / engine_id / relative_inside).as_posix()
 
+    archive_root: Path | None = None
+    if family == "linux" and engine_id == "archive":
+        source, archive_root = resolve_linux_archive_source(source)
+
     bindir = tools / "bin"
     bindir.mkdir(parents=True, exist_ok=True)
     dest = bindir / source.name
@@ -427,6 +454,21 @@ def stage_native_engine(engine_id: str, source: Path, runtime: Path, family: str
     chmod_exec(dest)
     if family == "linux":
         stage_linux_closure(dest, tools)
+
+        if archive_root is not None:
+            for name in ("7z.so", "7zCon.sfx"):
+                companion = archive_root / name
+                if companion.is_file():
+                    copied = bindir / name
+                    shutil.copy2(companion, copied)
+                    if name.endswith(".so"):
+                        patch_linux_module_closure(copied, tools)
+            codecs = archive_root / "Codecs"
+            if codecs.is_dir():
+                shutil.copytree(codecs, bindir / "Codecs", symlinks=False, ignore_dangling_symlinks=True)
+                for module in (bindir / "Codecs").rglob("*.so"):
+                    patch_linux_module_closure(module, tools)
+
         copy_linux_engine_data(engine_id, tools)
     else:
         stage_macos_closure(dest, tools)
