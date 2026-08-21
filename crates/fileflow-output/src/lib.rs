@@ -114,11 +114,12 @@ impl OutputResolver {
             .file_stem()
             .and_then(|value| value.to_str())
             .unwrap_or("result");
-        let token = Uuid::new_v4().simple();
-        let temporary_name = match final_path.extension().and_then(|value| value.to_str()) {
-            Some(extension) => format!(".{final_stem}.fileflow-{token}.tmp.{extension}"),
-            None => format!(".{final_stem}.fileflow-{token}.tmp"),
-        };
+        let token = Uuid::new_v4().simple().to_string();
+        let temporary_name = temporary_file_name(
+            final_stem,
+            &token,
+            final_path.extension().and_then(|value| value.to_str()),
+        );
         let temporary_path = destination_directory.join(temporary_name);
 
         Ok(OutputPlan {
@@ -178,11 +179,12 @@ impl OutputResolver {
             .file_stem()
             .and_then(|value| value.to_str())
             .unwrap_or("result");
-        let token = Uuid::new_v4().simple();
-        let temporary_name = match final_path.extension().and_then(|value| value.to_str()) {
-            Some(extension) => format!(".{final_stem}.fileflow-{token}.tmp.{extension}"),
-            None => format!(".{final_stem}.fileflow-{token}.tmp"),
-        };
+        let token = Uuid::new_v4().simple().to_string();
+        let temporary_name = temporary_file_name(
+            final_stem,
+            &token,
+            final_path.extension().and_then(|value| value.to_str()),
+        );
         let temporary_path = destination_directory.join(temporary_name);
 
         Ok(OutputPlan {
@@ -226,6 +228,34 @@ impl OutputResolver {
 
     pub async fn cleanup(&self, plan: &OutputPlan) {
         let _ = tokio::fs::remove_file(&plan.temporary_path).await;
+    }
+}
+
+fn temporary_file_name(final_stem: &str, token: &str, extension: Option<&str>) -> String {
+    temporary_file_name_for_platform(final_stem, token, extension, cfg!(windows))
+}
+
+fn temporary_file_name_for_platform(
+    final_stem: &str,
+    token: &str,
+    extension: Option<&str>,
+    windows: bool,
+) -> String {
+    // Unix benefits from hidden staging files. On Windows, native tools such
+    // as qpdf can mishandle a leading-dot staging filename and reinterpret it
+    // through the Win32 device namespace. Use a normal unique filename there.
+    //
+    // The final user-visible filename is unchanged.
+    if windows {
+        match extension {
+            Some(extension) => format!("fileflow-{token}-{final_stem}.tmp.{extension}"),
+            None => format!("fileflow-{token}-{final_stem}.tmp"),
+        }
+    } else {
+        match extension {
+            Some(extension) => format!(".{final_stem}.fileflow-{token}.tmp.{extension}"),
+            None => format!(".{final_stem}.fileflow-{token}.tmp"),
+        }
     }
 }
 
@@ -376,6 +406,35 @@ mod tests {
             PathBuf::from("/output/trip/day1/photo.jpg")
         );
     }
+
+    #[test]
+    fn windows_temporary_file_avoids_leading_dot_for_native_tools() {
+        let name = temporary_file_name_for_platform(
+            "Image (8)_pdf",
+            "d3c8198705bc48259546a2a45c629818",
+            Some("pdf"),
+            true,
+        );
+        assert_eq!(
+            name,
+            "fileflow-d3c8198705bc48259546a2a45c629818-Image (8)_pdf.tmp.pdf"
+        );
+        assert!(!name.starts_with('.'));
+        assert_eq!(
+            Path::new(&name)
+                .extension()
+                .and_then(|value| value.to_str()),
+            Some("pdf")
+        );
+    }
+
+    #[test]
+    fn unix_temporary_file_keeps_hidden_staging_name() {
+        let name = temporary_file_name_for_platform("photo", "abc123", Some("webp"), false);
+        assert_eq!(name, ".photo.fileflow-abc123.tmp.webp");
+        assert!(name.starts_with('.'));
+    }
+
     #[test]
     fn temporary_file_keeps_final_extension_for_format_aware_engines() {
         let directory =
