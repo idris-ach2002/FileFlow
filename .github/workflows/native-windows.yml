@@ -48,6 +48,12 @@ jobs:
           pnpm run release:check
           ./scripts/ci/windows-preflight.ps1
           cargo check --workspace --all-features --locked --target x86_64-pc-windows-msvc
+      - name: Stage and certify FileFlow runtime
+        shell: pwsh
+        run: |
+          ./scripts/runtime/install-dependencies.ps1
+          python scripts/runtime/stage-bundled-runtime.py --target x86_64-pc-windows-msvc --strict
+          python scripts/runtime/smoke-bundled-runtime.py --root src-tauri/runtime --strict
       - name: Generate lightweight package config
         shell: pwsh
         run: python scripts/release/generate-release-config.py --target x86_64-pc-windows-msvc

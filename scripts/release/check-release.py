@@ -49,6 +49,8 @@ def main() -> None:
         "install.sh", "install.ps1",
         "scripts/runtime/install-dependencies.sh", "scripts/runtime/install-dependencies.ps1",
         "scripts/runtime/doctor.sh", "scripts/runtime/doctor.ps1",
+        "scripts/runtime/stage-bundled-runtime.py", "scripts/runtime/smoke-bundled-runtime.py",
+        "src-tauri/runtime/runtime-manifest.json",
         "scripts/release/generate-release-config.py", "scripts/release/publish-git-payload.py",
         "scripts/release/smoke-packaged-app.mjs", "scripts/release/collect-artifacts.mjs",
         "src-tauri/tauri.windows.conf.json", "src-tauri/tauri.macos.conf.json", "src-tauri/tauri.linux.conf.json",
@@ -61,8 +63,9 @@ def main() -> None:
         if not (ROOT / rel).is_file():
             raise SystemExit(f"missing release file: {rel}")
 
-    # The old self-contained engine factory must stay gone. Reintroducing one
-    # would bring back the ABI/relocation failure class this architecture removes.
+    # Legacy engine-pack machinery remains forbidden. The new runtime is staged
+    # directly from each native runner and embedded as a Tauri resource, avoiding
+    # a second incompatible AppImage/conda loader environment.
     forbidden_paths = [
         "release/engines", ".github/workflows/engine-packs.yml",
         "scripts/release/build-native-engine-pack.py", "scripts/release/stage-engines.py",
@@ -72,7 +75,7 @@ def main() -> None:
     ]
     for rel in forbidden_paths:
         if (ROOT / rel).exists():
-            raise SystemExit(f"legacy bundled-engine infrastructure must stay removed: {rel}")
+            raise SystemExit(f"legacy engine-pack infrastructure must stay removed: {rel}")
 
     package = load_json("package.json")
     if package.get("engines", {}).get("node") != ">=22.22.3 <23 || >=24.15.0 <25 || >=26 <27":
@@ -82,7 +85,7 @@ def main() -> None:
 
     base = load_json("src-tauri/tauri.conf.json")
     if "resources" in base.get("bundle", {}):
-        raise SystemExit("base Tauri bundle must not embed conversion engines/resources")
+        raise SystemExit("base Tauri bundle keeps platform runtime resources in platform configs")
     if base.get("app", {}).get("windows", [{}])[0].get("visible") is not False:
         raise SystemExit("main window must remain hidden until auth bootstrap is resolved")
     if load_json("src-tauri/tauri.windows.conf.json").get("bundle", {}).get("targets") != ["nsis", "msi"]:
@@ -91,12 +94,16 @@ def main() -> None:
         raise SystemExit("macOS release must produce APP + DMG")
     if set(load_json("src-tauri/tauri.linux.conf.json").get("bundle", {}).get("targets", [])) != {"deb", "appimage", "rpm"}:
         raise SystemExit("Linux release must produce DEB + AppImage + RPM")
+    for rel in ["src-tauri/tauri.linux.conf.json", "src-tauri/tauri.macos.conf.json", "src-tauri/tauri.windows.conf.json"]:
+        resources = load_json(rel).get("bundle", {}).get("resources", [])
+        if "runtime/**/*" not in resources:
+            raise SystemExit(f"{rel} must embed the staged FileFlow runtime")
 
     unix_installer = require_tokens("install.sh", [
-        "install-dependencies.sh", "doctor.sh", "git fetch", "RUNTIME_MODE", "RUNTIME_MODE=system",
+        "git fetch", "RUNTIME_MODE", "bundled-first", "moteurs FileFlow embarqués",
     ])
     windows_installer = require_tokens("install.ps1", [
-        "install-dependencies.ps1", "doctor.ps1", "git fetch", "RUNTIME_MODE", "RUNTIME_MODE=system",
+        "git fetch", "RUNTIME_MODE", "bundled-first", "Runtime FileFlow",
     ])
     require_tokens("scripts/runtime/install-dependencies.sh", [
         "apt-get", "dnf", "zypper", "pacman", "brew", "pipx", "trying next source",
@@ -104,12 +111,14 @@ def main() -> None:
     require_tokens("scripts/runtime/install-dependencies.ps1", [
         "winget", "choco", "scoop", "pipx", "trying next source",
     ])
-    require_tokens("scripts/release/publish-git-payload.py", ['"RUNTIME_MODE": "system"'])
-    engine_rs = require_tokens("crates/fileflow-engine/src/lib.rs", [
-        "FILEFLOW_ENGINE_PATH", "/opt/homebrew/bin", "Microsoft/WinGet/Links", ".local/bin",
+    require_tokens("scripts/release/publish-git-payload.py", ['"RUNTIME_MODE": "bundled-first"'])
+    require_tokens("crates/fileflow-engine/src/lib.rs", [
+        "FILEFLOW_ENGINE_PATH", "set_bundled_runtime_root", "runtime-manifest.json",
+        "/opt/homebrew/bin", "Microsoft/WinGet/Links", ".local/bin",
     ])
-    if "BUNDLED_ENGINE_ROOT" in engine_rs or "set_bundled_engine_root" in engine_rs:
-        raise SystemExit("runtime must not prefer or require bundled engines")
+    require_tokens("crates/fileflow-executor/src/lib.rs", [
+        "configure_external_command", "PYTHONHOME", "LD_LIBRARY_PATH", "APPDIR",
+    ])
 
     forbidden_workflow_tokens = [
         "micromamba", "engine-certify", "stage-engines.py", "engine-pack",
@@ -125,6 +134,8 @@ def main() -> None:
                 raise SystemExit(f"{rel} still contains legacy engine-factory token: {token}")
         if "tauri build" not in text:
             raise SystemExit(f"{rel} must build the FileFlow application")
+        if "stage-bundled-runtime.py" not in text or "smoke-bundled-runtime.py" not in text:
+            raise SystemExit(f"{rel} must stage and smoke-test the native FileFlow runtime")
 
     if "ENGINE_PACK_" in unix_installer or "ENGINE_PACK_" in windows_installer:
         raise SystemExit("installer manifests must no longer depend on engine pack metadata")
@@ -134,7 +145,7 @@ def main() -> None:
         dirty = subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True).strip()
         if dirty:
             raise SystemExit("working tree is not clean")
-    print(f"release metadata OK; FileFlow {version}; runtime engines=system-managed")
+    print(f"release metadata OK; FileFlow {version}; runtime engines=bundled-first")
 
 
 if __name__ == "__main__":

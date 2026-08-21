@@ -2,8 +2,8 @@
 set -Eeuo pipefail
 
 # FileFlow permanent one-time installer.
-# The application binary is built by GitHub Actions. Conversion engines are
-# installed on the host once and discovered at runtime from system/user paths.
+# The application and its certified conversion runtime are built together by
+# native GitHub Actions. Host engines remain a sanitized fallback only.
 # After success the source clone is disposable.
 
 MODE="user"
@@ -26,9 +26,10 @@ Usage:
   ./install.sh --skip-deps
   ./install.sh --doctor
 
-Le script installe les moteurs localement sur la machine, puis installe
-l'application construite par GitHub Actions. Un dépôt de paquets indisponible
-n'arrête pas les autres installations. Après succès, le clone peut être supprimé.
+Le script installe le paquet construit par GitHub Actions. Les moteurs certifiés
+sont inclus dans le runtime FileFlow. LibreOffice et ExifTool restent des
+intégrations hôte optionnelles et sont installés en best-effort sauf --skip-deps.
+Après succès, le clone peut être supprimé.
 HELP
 }
 
@@ -86,25 +87,23 @@ cleanup(){ [ -z "${MOUNT:-}" ] || hdiutil detach "$MOUNT" >/dev/null 2>&1 || tru
 trap cleanup EXIT INT TERM
 trap 's=$?; trap - ERR; fail FF-I-999 "Une erreur système inattendue est survenue." "exit=$s line=$LINENO command=$BASH_COMMAND"' ERR
 
-# 1) Host runtime dependencies. This phase is explicitly best-effort. Every
-# engine has independent fallbacks and missing engines do not block app install.
+# 1) Core engines are part of the signed/native FileFlow package. Only the
+# heavyweight/non-relocatable integrations remain host-side fallbacks.
+STEP="runtime FileFlow"
+printf '\n== 1/2 Runtime FileFlow ==\n'
+printf 'Les moteurs cœur certifiés sont inclus dans le paquet FileFlow.\n'
 if [ "$SKIP_DEPS" -eq 0 ]; then
-  STEP="installation des moteurs locaux"
-  printf '\n== 1/3 Moteurs de conversion locaux ==\n'
-  if ! bash "$ROOT/scripts/runtime/install-dependencies.sh" 2>&1 | tee -a "$LOG"; then
-    dev "dependency helper returned non-zero; continuing by design"
+  printf 'Vérification des intégrations hôte optionnelles (LibreOffice, ExifTool)...\n'
+  if ! bash "$ROOT/scripts/runtime/install-dependencies.sh" --quiet --fallback-only >>"$LOG" 2>&1; then
+    dev "optional host dependency helper failed; bundled core remains usable"
   fi
 else
-  printf '\n== 1/3 Moteurs de conversion locaux ==\nIgnoré (--skip-deps).\n'
+  printf 'Intégrations hôte optionnelles ignorées (--skip-deps).\n'
 fi
 
-STEP="diagnostic des moteurs"
-printf '\n== 2/3 Vérification du runtime ==\n'
-bash "$ROOT/scripts/runtime/doctor.sh" 2>&1 | tee -a "$LOG" || true
-
-# 2) Fetch the lightweight application package produced by GitHub Actions.
+# 2) Fetch the application + bundled runtime produced by native GitHub Actions.
 STEP="récupération du paquet"
-printf '\n== 3/3 Installation de FileFlow ==\n'
+printf '\n== 2/2 Installation de FileFlow ==\n'
 REF="refs/fileflow/install/$TARGET"; git update-ref -d "$REF" >/dev/null 2>&1 || true
 if ! git fetch --quiet --depth=1 "$REMOTE" "refs/heads/$DIST_BRANCH:$REF"; then fail FF-I-003 "Le paquet FileFlow pour $TARGET n’est pas encore publié." "git fetch failed branch=$DIST_BRANCH"; fi
 
@@ -112,12 +111,12 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/fileflow-install.XXXXXX")"; MANIFEST="$TMP/man
 git show "$REF:manifest.env" >"$MANIFEST" || fail FF-I-004 "Le manifeste d’installation FileFlow est absent ou invalide."
 manifest(){ sed -n "s/^${1}=//p" "$MANIFEST" | head -n1; }
 VERSION="$(manifest VERSION)"; SOURCE_SHA="$(manifest SOURCE_SHA)"; PACKAGE_NAME="$(manifest PACKAGE_NAME)"; PACKAGE_SHA256="$(manifest PACKAGE_SHA256)"; PACKAGE_SIZE="$(manifest PACKAGE_SIZE)"; CHANNEL="$(manifest CHANNEL)"; RUNTIME_MODE="$(manifest RUNTIME_MODE)"
-[ -n "$VERSION" ] && [ -n "$PACKAGE_NAME" ] && [ -n "$PACKAGE_SHA256" ] && [ "$RUNTIME_MODE" = system ] || fail FF-I-004 "Le manifeste FileFlow est incomplet ou utilise l’ancien runtime embarqué."
+[ -n "$VERSION" ] && [ -n "$PACKAGE_NAME" ] && [ -n "$PACKAGE_SHA256" ] && [ "$RUNTIME_MODE" = bundled-first ] || fail FF-I-004 "Le manifeste FileFlow est incomplet ou ne contient pas le runtime embarqué attendu."
 
 installed_ok(){ [ -f "$MARKER" ] || return 1; if [ "$OS" = Linux ]; then [ -x "$HOME/.local/opt/fileflow/FileFlow.AppImage" ]; else [ -d "/Applications/FileFlow.app" ] || [ -d "$HOME/Applications/FileFlow.app" ]; fi; }
 marker_value(){ [ -f "$MARKER" ] || return 0; sed -n "s/^${1}=//p" "$MARKER" | head -n1; }
 if [ "$FORCE" -eq 0 ] && installed_ok && [ "$(marker_value PACKAGE_SHA256)" = "$PACKAGE_SHA256" ]; then
-  printf '\n✓ FileFlow %s est déjà installé.\nLes moteurs locaux ont été vérifiés/mis à jour.\nLe dépôt cloné peut être supprimé.\n' "$VERSION"
+  printf '\n✓ FileFlow %s est déjà installé.\nLe runtime FileFlow est déjà présent dans le paquet installé.\nLe dépôt cloné peut être supprimé.\n' "$VERSION"
   exit 0
 fi
 
@@ -179,9 +178,9 @@ SOURCE_SHA=$SOURCE_SHA
 TARGET=$TARGET
 CHANNEL=$CHANNEL
 PACKAGE_SHA256=$PACKAGE_SHA256
-RUNTIME_MODE=system
+RUNTIME_MODE=$RUNTIME_MODE
 INSTALLED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 APP_LOCATION=$APP_LOCATION
 MARKER
-printf '\n============================================================\n✓ FileFlow %s est installé définitivement\n============================================================\nApplication : %s\nPlateforme  : %s\nRuntime     : dépendances locales système\n\nLe dépôt cloné n’est plus nécessaire et peut être supprimé.\n' "$VERSION" "$APP_LOCATION" "$TARGET"
+printf '\n============================================================\n✓ FileFlow %s est installé définitivement\n============================================================\nApplication : %s\nPlateforme  : %s\nRuntime     : moteurs FileFlow embarqués + fallback système\n\nLe dépôt cloné n’est plus nécessaire et peut être supprimé.\n' "$VERSION" "$APP_LOCATION" "$TARGET"
 if [ "$NO_LAUNCH" -eq 0 ]; then STEP="lancement"; if [ "$OS" = Linux ]; then nohup "$HOME/.local/bin/fileflow" >/dev/null 2>&1 & else open "$APP_LOCATION"; fi; printf '✓ FileFlow a été lancé.\n'; fi

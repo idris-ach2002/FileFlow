@@ -17,6 +17,9 @@
           "English"
         ]
       }
-    }
+    },
+    "resources": [
+      "runtime/**/*"
+    ]
   }
 }

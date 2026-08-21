@@ -32,7 +32,7 @@ jobs:
       - name: Tauri packaging prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev xdg-utils libfuse2 rpm xvfb file
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev xdg-utils libfuse2 rpm xvfb file patchelf
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
@@ -58,6 +58,11 @@ jobs:
           pnpm run ci:preflight
           pnpm run release:check
           cargo check --workspace --all-features --locked --target '${{ matrix.target }}'
+      - name: Stage and certify FileFlow runtime
+        run: |
+          bash scripts/runtime/install-dependencies.sh --no-update
+          python scripts/runtime/stage-bundled-runtime.py --target '${{ matrix.target }}' --strict
+          python scripts/runtime/smoke-bundled-runtime.py --root src-tauri/runtime --strict
       - name: Generate lightweight package config
         run: python scripts/release/generate-release-config.py --target '${{ matrix.target }}'
       - name: Build FileFlow app only

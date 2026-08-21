@@ -7,17 +7,21 @@ set -u
 
 QUIET=0
 NO_UPDATE=0
+FALLBACK_ONLY=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --quiet) QUIET=1; shift ;;
     --no-update) NO_UPDATE=1; shift ;;
+    --fallback-only) FALLBACK_ONLY=1; shift ;;
     -h|--help)
       cat <<'HELP'
-Usage: scripts/runtime/install-dependencies.sh [--quiet] [--no-update]
+Usage: scripts/runtime/install-dependencies.sh [--quiet] [--no-update] [--fallback-only]
 
 Installs FileFlow conversion engines using the native package manager first,
 then safe fallbacks (Homebrew/pipx/Flatpak when already available). Failures are
-collected and reported instead of stopping the script.
+collected and reported instead of stopping the script. With --fallback-only,
+only heavyweight/non-relocatable host integrations (LibreOffice, ExifTool) are
+installed; the certified core runtime remains bundled with FileFlow.
 HELP
       exit 0
       ;;
@@ -165,12 +169,30 @@ probe_office() {
   return 1
 }
 
+probe_command_runtime() {
+  local cmd="$1" path name
+  path="$(command -v "$cmd" 2>/dev/null || true)"
+  [ -n "$path" ] || return 1
+  name="$(basename "$path")"
+  case "$name" in
+    ffmpeg) "$path" -version >/dev/null 2>&1 ;;
+    vips) "$path" --version >/dev/null 2>&1 ;;
+    magick|convert) "$path" -version >/dev/null 2>&1 ;;
+    qpdf|img2pdf|tesseract|ocrmypdf|pandoc|zstd|lz4|libreoffice|soffice) "$path" --version >/dev/null 2>&1 ;;
+    pdftoppm|pdftotext) "$path" -v >/dev/null 2>&1 ;;
+    gs) "$path" --version >/dev/null 2>&1 ;;
+    exiftool) "$path" -ver >/dev/null 2>&1 ;;
+    7zz|7z) "$path" i >/dev/null 2>&1 ;;
+    *) "$path" --version >/dev/null 2>&1 ;;
+  esac
+}
+
 probe_spec() {
   local spec="$1" cmd
   IFS='|' read -r -a cmds <<< "$spec"
   for cmd in "${cmds[@]}"; do
     [ "$cmd" = '@office' ] && { probe_office && return 0; continue; }
-    has "$cmd" && return 0
+    probe_command_runtime "$cmd" && return 0
   done
   return 1
 }
@@ -269,6 +291,37 @@ esac
 say "FileFlow runtime dependency setup — $OS / $ARCH (${PKG_MANAGER})"
 prepare_native_manager
 install_linux_app_runtime
+
+if [ "$FALLBACK_ONLY" -eq 1 ]; then
+  case "$PKG_MANAGER" in
+    apt)
+      ensure_engine LibreOffice @office native:libreoffice flatpak-lo:libreoffice
+      ensure_engine ExifTool exiftool native:libimage-exiftool-perl brew:exiftool
+      ;;
+    dnf)
+      ensure_engine LibreOffice @office native:libreoffice flatpak-lo:libreoffice
+      ensure_engine ExifTool exiftool native:perl-Image-ExifTool brew:exiftool
+      ;;
+    pacman)
+      ensure_engine LibreOffice @office native:libreoffice-fresh native:libreoffice-still flatpak-lo:libreoffice
+      ensure_engine ExifTool exiftool native:perl-image-exiftool brew:exiftool
+      ;;
+    zypper)
+      ensure_engine LibreOffice @office native:libreoffice flatpak-lo:libreoffice
+      ensure_engine ExifTool exiftool native:perl-Image-ExifTool brew:exiftool
+      ;;
+    brew)
+      if [ "$OS" = Darwin ]; then ensure_engine LibreOffice @office brew-cask:libreoffice; else ensure_engine LibreOffice @office flatpak-lo:libreoffice; fi
+      ensure_engine ExifTool exiftool brew:exiftool
+      ;;
+    none)
+      ensure_engine LibreOffice @office
+      ensure_engine ExifTool exiftool
+      ;;
+  esac
+  printf '\nFallback host dependencies: %s available, %s missing, %s warnings.\n' "$ok" "$missing" "$warnings"
+  exit 0
+fi
 
 # Each engine is installed independently. Package-name alternatives are kept in
 # order so a missing package cannot abort the remaining engine installation.

@@ -72,6 +72,32 @@ foreach ($scriptPath in @(
   }
 }
 
+# Parse every installer/runtime PowerShell script with the same parser used by
+# Windows PowerShell. This catches missing braces/try-catch syntax before a
+# distribution payload can ever be published.
+$powerShellFiles = @(
+  'install.ps1',
+  'scripts\runtime\install-dependencies.ps1',
+  'scripts\runtime\doctor.ps1'
+)
+foreach ($scriptFile in $powerShellFiles) {
+  Require-File $scriptFile
+  $tokens = $null
+  $errors = $null
+  [void][System.Management.Automation.Language.Parser]::ParseFile(
+    (Resolve-Path $scriptFile).Path,
+    [ref]$tokens,
+    [ref]$errors
+  )
+  if ($errors.Count -gt 0) {
+    foreach ($parseError in $errors) {
+      Write-Error "${scriptFile}:$($parseError.Extent.StartLineNumber): $($parseError.Message)"
+    }
+    throw "PowerShell parser rejected $scriptFile"
+  }
+  Write-Host "PowerShell syntax OK: $scriptFile"
+}
+
 # ICO header: reserved=0, type=1.
 $ico = [IO.File]::ReadAllBytes((Resolve-Path 'src-tauri\icons\icon.ico'))
 if ($ico.Length -lt 6 -or

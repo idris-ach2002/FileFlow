@@ -1,5 +1,8 @@
-[CmdletBinding()]
-param([switch]$Quiet)
+﻿[CmdletBinding()]
+param(
+  [switch]$Quiet,
+  [switch]$FallbackOnly
+)
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
@@ -46,9 +49,37 @@ function Find-LibreOffice {
   return $null
 }
 
+function Get-ProbeArgs([string]$Name) {
+  switch -Regex ($Name.ToLowerInvariant()) {
+    '^ffmpeg(\.exe)?$' { return @('-version') }
+    '^(magick|convert)(\.exe)?$' { return @('-version') }
+    '^(pdftoppm|pdftotext)(\.exe)?$' { return @('-v') }
+    '^exiftool(\.exe)?$' { return @('-ver') }
+    '^(7zz|7z)(\.exe)?$' { return @('i') }
+    default { return @('--version') }
+  }
+}
+
+function Test-EngineRuntime([string]$Path) {
+  if (-not $Path) { return $false }
+  try {
+    $args = @(Get-ProbeArgs ([IO.Path]::GetFileName($Path)))
+    & $Path @args *> $null
+    return ($LASTEXITCODE -eq 0)
+  } catch {
+    return $false
+  }
+}
+
 function Is-Available([string]$Probe) {
-  if ($Probe -eq '@office') { return [bool](Find-LibreOffice) }
-  return [bool](Find-Any ($Probe -split '\|'))
+  if ($Probe -eq '@office') {
+    return (Test-EngineRuntime (Find-LibreOffice))
+  }
+  foreach ($name in ($Probe -split '\|')) {
+    $path = Find-Any @($name)
+    if ($path -and (Test-EngineRuntime $path)) { return $true }
+  }
+  return $false
 }
 
 function Invoke-WingetInstall([string]$Id) {
@@ -133,6 +164,14 @@ function Ensure-Engine([string]$Label, [string]$Probe, [string[]]$Candidates) {
 
 Write-Host "FileFlow runtime dependency setup - Windows / $([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)"
 Refresh-Path
+
+if ($FallbackOnly) {
+  Ensure-Engine 'LibreOffice' '@office' @('winget:TheDocumentFoundation.LibreOffice','choco:libreoffice-fresh','scoop:libreoffice')
+  Ensure-Engine 'ExifTool' 'exiftool.exe|exiftool' @('winget:OliverBetz.ExifTool','choco:exiftool','scoop:exiftool')
+  Write-Host ''
+  Write-Host "Fallback host dependencies: $script:Available available, $script:Missing missing, $script:Warnings warnings."
+  exit 0
+}
 
 Ensure-Engine 'FFmpeg'       'ffmpeg.exe|ffmpeg'             @('winget:Gyan.FFmpeg','choco:ffmpeg','scoop:ffmpeg')
 Ensure-Engine 'libvips'      'vips.exe|vips'                 @('winget:libvips.libvips','choco:vips','scoop:vips')

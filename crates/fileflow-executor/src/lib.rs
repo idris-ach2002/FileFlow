@@ -3962,6 +3962,268 @@ fn sanitize_external_process_environment(command: &mut Command) {
 #[cfg(not(target_os = "linux"))]
 fn sanitize_external_process_environment(_command: &mut Command) {}
 
+fn packaged_runtime_root(engine: &Path) -> Option<PathBuf> {
+    engine.ancestors().find_map(|ancestor| {
+        ancestor
+            .join("runtime-manifest.json")
+            .is_file()
+            .then(|| ancestor.to_path_buf())
+    })
+}
+
+fn packaged_tool_root(runtime: &Path, engine: &Path) -> Option<PathBuf> {
+    let relative = engine.strip_prefix(runtime).ok()?;
+    let mut components = relative.components();
+    let first = components.next()?.as_os_str();
+    let engine_id = components.next()?.as_os_str();
+    if first != "tools" || engine_id.is_empty() {
+        return None;
+    }
+    let tool = runtime.join("tools").join(engine_id);
+    tool.is_dir().then_some(tool)
+}
+
+fn packaged_runtime_search_paths(runtime: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![runtime.join("bin")];
+    let manifest = runtime.join("runtime-manifest.json");
+    if let Ok(bytes) = std::fs::read(manifest)
+        && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes)
+        && let Some(engines) = value.get("engines").and_then(|value| value.as_object())
+    {
+        for relative in engines.values().filter_map(|value| value.as_str()) {
+            let relative_path = Path::new(relative);
+            if relative_path.is_absolute()
+                || relative_path
+                    .components()
+                    .any(|component| matches!(component, std::path::Component::ParentDir))
+            {
+                continue;
+            }
+            let path = runtime.join(relative_path);
+            if let Some(parent) = path.parent()
+                && parent.starts_with(runtime)
+            {
+                paths.push(parent.to_path_buf());
+            }
+        }
+    }
+    let mut unique = Vec::new();
+    for path in paths {
+        if !unique.contains(&path) {
+            unique.push(path);
+        }
+    }
+    unique
+}
+
+fn sanitized_host_path() -> Option<OsString> {
+    let appdir = std::env::var_os("APPDIR").map(PathBuf::from);
+    let value = std::env::var_os("PATH")?;
+    let paths = std::env::split_paths(&value)
+        .filter(|path| appdir.as_ref().is_none_or(|root| !path.starts_with(root)))
+        .collect::<Vec<_>>();
+    std::env::join_paths(paths).ok()
+}
+
+fn subdirectories_matching(root: &Path, prefix: &str) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_dir()
+                && path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|name| name.starts_with(prefix))
+        })
+        .collect()
+}
+
+fn ghostscript_library_paths(runtime: &Path) -> Vec<PathBuf> {
+    let root = runtime.join("tools/ghostscript/share/ghostscript");
+    let Ok(versions) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut paths = Vec::new();
+    for version in versions
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+    {
+        for relative in ["Resource/Init", "Resource/Font", "lib", "fonts"] {
+            let candidate = version.join(relative);
+            if candidate.is_dir() {
+                paths.push(candidate);
+            }
+        }
+    }
+    paths
+}
+
+fn configure_external_command(command: &mut Command, engine: &Path) {
+    // AppImage/AppDir launchers modify the parent environment so their own
+    // libraries win. Passing those variables to /usr/bin tools mixes two ABI
+    // worlds (for example host libcurl + bundled libnghttp2, or host Python +
+    // bundled PYTHONHOME). Every engine starts at a clean process boundary.
+    for key in [
+        "APPDIR",
+        "APPIMAGE",
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "PERLLIB",
+        "PERL5LIB",
+        "GI_TYPELIB_PATH",
+        "GIO_EXTRA_MODULES",
+        "GSETTINGS_SCHEMA_DIR",
+        "GTK_PATH",
+        "QT_PLUGIN_PATH",
+        "QML2_IMPORT_PATH",
+        "GST_PLUGIN_PATH",
+        "GST_PLUGIN_SYSTEM_PATH",
+        "GST_PLUGIN_SYSTEM_PATH_1_0",
+        "DYLD_LIBRARY_PATH",
+        "DYLD_FALLBACK_LIBRARY_PATH",
+        "MAGICK_HOME",
+        "MAGICK_CONFIGURE_PATH",
+        "MAGICK_CODER_MODULE_PATH",
+        "MAGICK_FILTER_MODULE_PATH",
+        "TESSDATA_PREFIX",
+        "VIPS_PLUGIN_PATH",
+        "GS_LIB",
+    ] {
+        command.env_remove(key);
+    }
+
+    if let Some(path) = sanitized_host_path() {
+        command.env("PATH", path);
+    }
+
+    let Some(runtime) = packaged_runtime_root(engine) else {
+        return;
+    };
+
+    // Put all bundled executables ahead of the host PATH. This also lets a
+    // Python engine such as OCRmyPDF locate the bundled qpdf/tesseract/gs
+    // binaries it launches internally.
+    let mut path_entries = packaged_runtime_search_paths(&runtime);
+    let python_bin = if cfg!(target_os = "windows") {
+        runtime.join("python")
+    } else {
+        runtime.join("python/bin")
+    };
+    if python_bin.is_dir() {
+        path_entries.push(python_bin);
+    }
+    if let Some(parent) = engine.parent() {
+        path_entries.push(parent.to_path_buf());
+    }
+    if let Some(host_path) = sanitized_host_path() {
+        path_entries.extend(std::env::split_paths(&host_path));
+    }
+    let mut unique_path_entries = Vec::new();
+    for path in path_entries {
+        if !unique_path_entries.contains(&path) {
+            unique_path_entries.push(path);
+        }
+    }
+    if let Ok(path) = std::env::join_paths(unique_path_entries) {
+        command.env("PATH", path);
+    }
+
+    // Native engines have private library closures under tools/<engine>/lib.
+    // Keeping each closure separate prevents exactly the libcurl/libnghttp2
+    // cross-engine ABI mix that triggered the original Linux failure.
+    if let Some(tool) = packaged_tool_root(&runtime, engine) {
+        let lib = tool.join("lib");
+        #[cfg(target_os = "linux")]
+        if lib.is_dir() {
+            command.env("LD_LIBRARY_PATH", &lib);
+        }
+        #[cfg(target_os = "macos")]
+        if lib.is_dir() {
+            command.env("DYLD_FALLBACK_LIBRARY_PATH", &lib);
+        }
+    }
+
+    let python = runtime.join("python");
+    let engine_name = engine
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if python.is_dir()
+        && matches!(
+            engine_name.as_str(),
+            "img2pdf" | "ocr" | "ocrmypdf" | "python" | "python3"
+        )
+    {
+        command.env("PYTHONHOME", &python);
+    }
+
+    // Data/resources needed by engines that otherwise remember build-host
+    // locations. These are safe to expose to OCRmyPDF as well because it starts
+    // qpdf/tesseract/ghostscript as child processes.
+    let tessdata = runtime.join("tools/tesseract/share/tessdata");
+    if tessdata.is_dir() {
+        command.env("TESSDATA_PREFIX", tessdata);
+    }
+
+    let gs_paths = ghostscript_library_paths(&runtime);
+    if let Ok(value) = std::env::join_paths(gs_paths)
+        && !value.is_empty()
+    {
+        command.env("GS_LIB", value);
+    }
+
+    let magick_root = runtime.join("tools/imagemagick");
+    if magick_root.is_dir() {
+        command.env("MAGICK_HOME", &magick_root);
+        let configs = subdirectories_matching(&magick_root.join("etc"), "ImageMagick-");
+        if let Ok(value) = std::env::join_paths(configs)
+            && !value.is_empty()
+        {
+            command.env("MAGICK_CONFIGURE_PATH", value);
+        }
+
+        let mut coders = Vec::new();
+        let mut filters = Vec::new();
+        for root in subdirectories_matching(&magick_root.join("lib"), "ImageMagick-") {
+            for modules in subdirectories_matching(&root, "modules-") {
+                let coder_dir = modules.join("coders");
+                let filter_dir = modules.join("filters");
+                if coder_dir.is_dir() {
+                    coders.push(coder_dir);
+                }
+                if filter_dir.is_dir() {
+                    filters.push(filter_dir);
+                }
+            }
+        }
+        if let Ok(value) = std::env::join_paths(coders)
+            && !value.is_empty()
+        {
+            command.env("MAGICK_CODER_MODULE_PATH", value);
+        }
+        if let Ok(value) = std::env::join_paths(filters)
+            && !value.is_empty()
+        {
+            command.env("MAGICK_FILTER_MODULE_PATH", value);
+        }
+    }
+
+    let vips_plugins = subdirectories_matching(&runtime.join("tools/vips/lib"), "vips-modules-");
+    if let Ok(value) = std::env::join_paths(vips_plugins)
+        && !value.is_empty()
+    {
+        command.env("VIPS_PLUGIN_PATH", value);
+    }
+}
+
 fn process_timeout(engine: &Path) -> Duration {
     let name = engine
         .file_name()
@@ -3988,6 +4250,7 @@ async fn capture_process(
         return Err(ExecutionError::Cancelled);
     }
     let mut command = Command::new(engine);
+    configure_external_command(&mut command, engine);
     sanitize_external_process_environment(&mut command);
     command
         .args(args)
@@ -4032,6 +4295,7 @@ async fn run_process_with_env(
         return Err(ExecutionError::Cancelled);
     }
     let mut command = Command::new(engine);
+    configure_external_command(&mut command, engine);
     sanitize_external_process_environment(&mut command);
     command
         .args(args)
@@ -4076,6 +4340,7 @@ async fn run_process(
         return Err(ExecutionError::Cancelled);
     }
     let mut command = Command::new(engine);
+    configure_external_command(&mut command, engine);
     sanitize_external_process_environment(&mut command);
     command
         .args(args)

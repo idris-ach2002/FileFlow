@@ -59,10 +59,10 @@ PACKAGE_NAME=...
 PACKAGE_SHA256=...
 PACKAGE_SIZE=...
 CHANNEL=...
-RUNTIME_MODE=system
+RUNTIME_MODE=bundled-first
 ```
 
-Le paquet est fragmenté uniquement pour son transport Git. Aucun moteur n'est inclus dedans.
+Le paquet est fragmenté uniquement pour son transport Git. Le runtime natif certifié est inclus dans le paquet FileFlow ; LibreOffice et ExifTool restent des fallbacks hôte.
 
 ## Releases signées
 
@@ -116,7 +116,7 @@ clone temporaire
  install.sh / install.ps1
       │
       ├── gestionnaire de paquets OS
-      │      └── moteurs locaux persistants
+      │      └── runtime FileFlow embarqué + fallback système
       │
       └── paquet FileFlow précompilé
              └── application persistante + tray/widget
@@ -135,7 +135,7 @@ Un moteur absent n'empêche pas l'application de démarrer : la capability corre
 - absence de l'ancienne infrastructure de packs moteurs ;
 - présence des installateurs runtime et de leurs fallbacks ;
 - absence de micromamba/engine-certify dans les workflows ;
-- payload `RUNTIME_MODE=system` ;
+- payload `RUNTIME_MODE=bundled-first` ;
 - `git diff --check`.
 
 ## Test du bundle

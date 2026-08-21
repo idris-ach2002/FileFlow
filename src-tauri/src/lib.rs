@@ -15,6 +15,7 @@ use std::{
 use tauri::{
     Emitter, Manager,
     menu::{Menu, MenuItem},
+    path::BaseDirectory,
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
 };
 use tokio_util::sync::CancellationToken;
@@ -217,6 +218,15 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let tray = build_tray(app)?;
+            let packaged_runtime = std::env::var_os("FILEFLOW_RUNTIME_ROOT")
+                .map(PathBuf::from)
+                .or_else(|| app.path().resolve("runtime", BaseDirectory::Resource).ok());
+            if let Some(runtime_root) = packaged_runtime
+                && runtime_root.join("runtime-manifest.json").is_file()
+                && fileflow_engine::set_bundled_runtime_root(runtime_root.clone())
+            {
+                tracing::info!(runtime = %runtime_root.display(), "packaged FileFlow runtime enabled");
+            }
             let data_dir = app.path().app_data_dir()?;
             let storage = Arc::new(Storage::open(&data_dir.join("fileflow.sqlite3"))?);
             if let Err(error) = storage.mark_running_jobs_interrupted() {
