@@ -19,7 +19,10 @@ impl EngineAdapter for Adapter {
 }
 
 fn known_paths() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
+    let paths = Vec::new();
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let mut paths = paths;
 
     #[cfg(target_os = "macos")]
     {

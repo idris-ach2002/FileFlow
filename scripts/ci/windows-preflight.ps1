@@ -60,14 +60,6 @@ if (-not $windows.bundle.windows) {
   throw 'tauri.windows.conf.json is missing bundle.windows'
 }
 
-# Tauri v2 uses bundle.windows.staticVCRuntime. The legacy bundleVCRuntime key is invalid.
-if ($null -ne $windows.bundle.windows.PSObject.Properties['bundleVCRuntime']) {
-  throw 'Unsupported Tauri field detected: bundleVCRuntime'
-}
-if ($windows.bundle.windows.staticVCRuntime -ne $true) {
-  throw 'tauri.windows.conf.json must set bundle.windows.staticVCRuntime=true'
-}
-
 $targets = @($windows.bundle.targets)
 foreach ($requiredTarget in @('nsis', 'msi')) {
   if ($targets -notcontains $requiredTarget) {

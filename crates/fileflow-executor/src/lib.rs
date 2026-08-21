@@ -12,7 +12,6 @@ use fileflow_scheduler::ResourceScheduler;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    env,
     ffi::OsString,
     path::{Path, PathBuf},
     process::Stdio,
