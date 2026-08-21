@@ -13,7 +13,7 @@ use fileflow_scheduler::ResourceScheduler;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     process::Stdio,
     sync::Arc,
@@ -62,6 +62,88 @@ fn configure_external_command(command: &mut Command) {
 
 #[cfg(not(target_os = "linux"))]
 fn configure_external_command(_command: &mut Command) {}
+
+fn normalize_external_os_str_for_platform(value: &OsStr, windows: bool) -> OsString {
+    if !windows {
+        return value.to_os_string();
+    }
+
+    let raw = value.to_string_lossy();
+
+    if let Some(rest) = raw.strip_prefix("\\\\?\\UNC\\") {
+        return OsString::from(format!("\\\\{rest}"));
+    }
+
+    if let Some(rest) = raw.strip_prefix("\\\\?\\") {
+        let bytes = rest.as_bytes();
+        let is_drive_path = bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'\\' | b'/');
+
+        if is_drive_path {
+            return OsString::from(rest);
+        }
+    }
+
+    value.to_os_string()
+}
+
+fn normalize_external_os_str(value: &OsStr) -> OsString {
+    normalize_external_os_str_for_platform(value, cfg!(windows))
+}
+
+fn normalize_external_program(program: &Path) -> PathBuf {
+    PathBuf::from(normalize_external_os_str(program.as_os_str()))
+}
+
+fn normalize_external_args(args: &[OsString]) -> Vec<OsString> {
+    args.iter()
+        .map(|arg| normalize_external_os_str(arg.as_os_str()))
+        .collect()
+}
+
+#[cfg(test)]
+mod external_windows_path_tests {
+    use super::normalize_external_os_str_for_platform;
+    use std::ffi::{OsStr, OsString};
+
+    #[test]
+    fn strips_windows_verbatim_drive_prefix_for_external_tools() {
+        let value = OsStr::new(r"\\?\C:\Users\hamin\Downloads\FileFlow\result.pdf");
+        assert_eq!(
+            normalize_external_os_str_for_platform(value, true),
+            OsString::from(r"C:\Users\hamin\Downloads\FileFlow\result.pdf")
+        );
+    }
+
+    #[test]
+    fn converts_windows_verbatim_unc_prefix_for_external_tools() {
+        let value = OsStr::new(r"\\?\UNC\server\share\FileFlow\result.pdf");
+        assert_eq!(
+            normalize_external_os_str_for_platform(value, true),
+            OsString::from(r"\\server\share\FileFlow\result.pdf")
+        );
+    }
+
+    #[test]
+    fn keeps_normal_windows_path_unchanged() {
+        let value = OsStr::new(r"C:\Users\hamin\Downloads\FileFlow\result.pdf");
+        assert_eq!(
+            normalize_external_os_str_for_platform(value, true),
+            OsString::from(r"C:\Users\hamin\Downloads\FileFlow\result.pdf")
+        );
+    }
+
+    #[test]
+    fn keeps_non_windows_argument_unchanged() {
+        let value = OsStr::new("/tmp/FileFlow/result.pdf");
+        assert_eq!(
+            normalize_external_os_str_for_platform(value, false),
+            OsString::from("/tmp/FileFlow/result.pdf")
+        );
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -3961,10 +4043,12 @@ async fn capture_process(
     if cancellation.is_cancelled() {
         return Err(ExecutionError::Cancelled);
     }
-    let mut command = Command::new(engine);
+    let normalized_engine = normalize_external_program(engine);
+    let normalized_args = normalize_external_args(args);
+    let mut command = Command::new(&normalized_engine);
     configure_external_command(&mut command);
     command
-        .args(args)
+        .args(&normalized_args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -4005,10 +4089,12 @@ async fn run_process_with_env(
     if cancellation.is_cancelled() {
         return Err(ExecutionError::Cancelled);
     }
-    let mut command = Command::new(engine);
+    let normalized_engine = normalize_external_program(engine);
+    let normalized_args = normalize_external_args(args);
+    let mut command = Command::new(&normalized_engine);
     configure_external_command(&mut command);
     command
-        .args(args)
+        .args(&normalized_args)
         .envs(env.iter().map(|(key, value)| (*key, value.as_str())))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -4049,10 +4135,12 @@ async fn run_process(
     if cancellation.is_cancelled() {
         return Err(ExecutionError::Cancelled);
     }
-    let mut command = Command::new(engine);
+    let normalized_engine = normalize_external_program(engine);
+    let normalized_args = normalize_external_args(args);
+    let mut command = Command::new(&normalized_engine);
     configure_external_command(&mut command);
     command
-        .args(args)
+        .args(&normalized_args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
