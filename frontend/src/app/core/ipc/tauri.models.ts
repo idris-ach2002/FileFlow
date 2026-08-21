@@ -213,6 +213,8 @@ export interface ConversionPlan {
   input: string;
   output: string;
   totalCost: number;
+  lossySteps: number;
+  intermediates: string[];
   steps: ConversionStep[];
 }
 
@@ -354,6 +356,7 @@ export type ExecutionEvent =
   | { event: 'itemCompleted'; data: { jobId: string; index: number; input: string; output?: string | null; skipped: boolean } }
   | { event: 'itemFailed'; data: { jobId: string; index: number; input: string; message: string } }
   | { event: 'progress'; data: { jobId: string; completed: number; total: number } }
+  | { event: 'phase'; data: { jobId: string; phase: string; completed: number; total: number } }
   | { event: 'finished'; data: { summary: ExecutionSummary } };
 
 export interface HistoryEntry {
@@ -428,10 +431,15 @@ export interface ArchiveInspection {
   totalUnpackedBytes: number;
   families: ArchiveFamilySummary[];
   samples: ArchiveEntryPreview[];
+  offset: number;
+  limit: number;
+  hasMore: boolean;
 }
 
 export interface AccountBootstrap {
   hasAccount: boolean;
+  knownAccounts: AccountProfile[];
+  restoredSession?: AuthSessionResponse | null;
 }
 
 export interface AccountProfile {
@@ -471,11 +479,13 @@ export interface CreateAccountRequest {
   displayName: string;
   firstName: string;
   lastName: string;
+  rememberDevice?: boolean;
 }
 
 export interface LoginRequest {
   email: string;
   password: string;
+  rememberDevice?: boolean;
 }
 
 export interface ChangePasswordRequest {

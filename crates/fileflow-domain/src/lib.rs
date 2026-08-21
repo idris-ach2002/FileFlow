@@ -251,7 +251,9 @@ impl ResourceProfile {
         memory_mb: 1024,
         io_weight: 2,
         internally_threaded: false,
-        max_parallel_instances: 2,
+        // LibreOffice is intentionally serialized. Parallel soffice instances
+        // are expensive and historically caused profile-lock contention.
+        max_parallel_instances: 1,
     };
 
     pub const OCR: Self = Self {

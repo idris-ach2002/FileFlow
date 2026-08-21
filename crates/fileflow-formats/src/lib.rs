@@ -20,14 +20,24 @@ impl FormatRegistry {
             .map(|value| value.to_ascii_lowercase());
 
         let by_extension = extension.as_deref().and_then(extension_descriptor);
+        let by_structure = structured_descriptor(sample, extension.as_deref());
         let by_magic =
             infer::get(sample).map(|kind| magic_descriptor(kind.mime_type(), kind.extension()));
+
+        // Container formats are the main source of false positives: DOCX/XLSX/PPTX,
+        // ODF, EPUB and iWork all look like ZIP to a generic magic detector. Inspect
+        // the container markers before falling back to the extension or infer crate.
+        if let Some(structured) = by_structure {
+            return structured;
+        }
 
         if let (Some(ext), Some(magic)) = (by_extension, by_magic.as_ref()) {
             if ext.archive_container && magic.family == FormatFamily::Archive {
                 return from_extension(extension, ext);
             }
 
+            // When content and suffix disagree, trust actual bytes. A .pdf file that
+            // contains JPEG bytes is an image, not a PDF.
             if magic.family != FormatFamily::Unknown && magic.family != ext.family {
                 return magic.clone();
             }
@@ -43,18 +53,200 @@ impl FormatRegistry {
             return from_extension(extension, ext);
         }
 
-        if looks_like_text(sample) {
-            return DetectedFormat {
-                id: "text".into(),
-                extension,
-                mime_type: Some("text/plain".into()),
-                family: FormatFamily::Text,
-                confidence: DetectionConfidence::Magic,
-            };
+        if let Some(text) = text_descriptor(sample, extension.clone()) {
+            return text;
         }
 
         DetectedFormat::unknown(extension)
     }
+}
+
+fn structured_descriptor(sample: &[u8], extension: Option<&str>) -> Option<DetectedFormat> {
+    if sample.starts_with(b"%PDF-") {
+        return Some(detected(
+            "pdf",
+            extension,
+            "application/pdf",
+            FormatFamily::Pdf,
+        ));
+    }
+    if sample.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some(detected("png", extension, "image/png", FormatFamily::Image));
+    }
+    if sample.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Some(detected(
+            "jpeg",
+            extension,
+            "image/jpeg",
+            FormatFamily::Image,
+        ));
+    }
+    if sample.starts_with(b"GIF87a") || sample.starts_with(b"GIF89a") {
+        return Some(detected("gif", extension, "image/gif", FormatFamily::Image));
+    }
+    if sample.len() >= 12 && &sample[..4] == b"RIFF" && &sample[8..12] == b"WEBP" {
+        return Some(detected(
+            "webp",
+            extension,
+            "image/webp",
+            FormatFamily::Image,
+        ));
+    }
+    if sample.len() >= 12 && &sample[4..8] == b"ftyp" {
+        let brand = &sample[8..12];
+        if matches!(brand, b"avif" | b"avis") {
+            return Some(detected(
+                "avif",
+                extension,
+                "image/avif",
+                FormatFamily::Image,
+            ));
+        }
+        if matches!(
+            brand,
+            b"heic" | b"heix" | b"hevc" | b"hevx" | b"mif1" | b"msf1"
+        ) {
+            return Some(detected(
+                "heic",
+                extension,
+                "image/heic",
+                FormatFamily::Image,
+            ));
+        }
+        if matches!(brand, b"M4A " | b"M4B " | b"M4P ") {
+            return Some(detected("m4a", extension, "audio/mp4", FormatFamily::Audio));
+        }
+        if matches!(brand, b"qt  ") {
+            return Some(detected(
+                "mov",
+                extension,
+                "video/quicktime",
+                FormatFamily::Video,
+            ));
+        }
+        if matches!(
+            brand,
+            b"isom" | b"iso2" | b"mp41" | b"mp42" | b"avc1" | b"dash"
+        ) {
+            return Some(detected("mp4", extension, "video/mp4", FormatFamily::Video));
+        }
+    }
+
+    let zip_like = sample.starts_with(b"PK\x03\x04")
+        || sample.starts_with(b"PK\x05\x06")
+        || sample.starts_with(b"PK\x07\x08");
+    if zip_like {
+        let has = |needle: &[u8]| sample.windows(needle.len()).any(|window| window == needle);
+        if has(b"word/") || has(b"word\\") {
+            return Some(detected(
+                "docx",
+                extension,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                FormatFamily::Document,
+            ));
+        }
+        if has(b"xl/") || has(b"xl\\") {
+            return Some(detected(
+                "xlsx",
+                extension,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                FormatFamily::Spreadsheet,
+            ));
+        }
+        if has(b"ppt/") || has(b"ppt\\") {
+            return Some(detected(
+                "pptx",
+                extension,
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                FormatFamily::Presentation,
+            ));
+        }
+        if has(b"application/epub+zip") {
+            return Some(detected(
+                "epub",
+                extension,
+                "application/epub+zip",
+                FormatFamily::Ebook,
+            ));
+        }
+        if has(b"application/vnd.oasis.opendocument.text") {
+            return Some(detected(
+                "odt",
+                extension,
+                "application/vnd.oasis.opendocument.text",
+                FormatFamily::Document,
+            ));
+        }
+        if has(b"application/vnd.oasis.opendocument.spreadsheet") {
+            return Some(detected(
+                "ods",
+                extension,
+                "application/vnd.oasis.opendocument.spreadsheet",
+                FormatFamily::Spreadsheet,
+            ));
+        }
+        if has(b"application/vnd.oasis.opendocument.presentation") {
+            return Some(detected(
+                "odp",
+                extension,
+                "application/vnd.oasis.opendocument.presentation",
+                FormatFamily::Presentation,
+            ));
+        }
+        // Generic ZIP remains an archive unless a known container extension can
+        // refine it (for example iWork files which are ZIP-based too).
+        if let Some(ext) = extension.and_then(extension_descriptor)
+            && ext.archive_container
+            && ext.family != FormatFamily::Archive
+        {
+            return Some(from_extension(extension.map(str::to_owned), ext));
+        }
+    }
+
+    None
+}
+
+fn detected(
+    id: &str,
+    original_extension: Option<&str>,
+    mime: &str,
+    family: FormatFamily,
+) -> DetectedFormat {
+    DetectedFormat {
+        id: id.into(),
+        extension: original_extension.map(str::to_owned),
+        mime_type: Some(mime.into()),
+        family,
+        confidence: DetectionConfidence::Magic,
+    }
+}
+
+fn text_descriptor(sample: &[u8], extension: Option<String>) -> Option<DetectedFormat> {
+    if !looks_like_text(sample) {
+        return None;
+    }
+    let text = std::str::from_utf8(sample)
+        .ok()?
+        .trim_start_matches('\u{feff}')
+        .trim_start();
+    let (id, mime) = if (text.starts_with('{') && text.contains(':')) || text.starts_with('[') {
+        ("json", "application/json")
+    } else if text.starts_with("<?xml") || (text.starts_with('<') && text.contains('>')) {
+        if text.to_ascii_lowercase().contains("<html") {
+            ("html", "text/html")
+        } else {
+            ("xml", "application/xml")
+        }
+    } else {
+        ("text", "text/plain")
+    };
+    Some(DetectedFormat {
+        id: id.into(),
+        extension,
+        mime_type: Some(mime.into()),
+        family: FormatFamily::Text,
+        confidence: DetectionConfidence::Magic,
+    })
 }
 
 fn from_extension(extension: Option<String>, descriptor: ExtensionDescriptor) -> DetectedFormat {
@@ -367,6 +559,53 @@ mod tests {
         assert_eq!(detected.family, FormatFamily::Document);
         assert_eq!(detected.id, "docx");
         assert_eq!(detected.confidence, DetectionConfidence::Extension);
+    }
+
+    #[test]
+    fn pdf_magic_beats_misleading_extension() {
+        let registry = FormatRegistry;
+        let detected = registry.detect(Path::new("invoice.jpg"), b"%PDF-1.7\n%FileFlow");
+
+        assert_eq!(detected.family, FormatFamily::Pdf);
+        assert_eq!(detected.id, "pdf");
+        assert_eq!(detected.confidence, DetectionConfidence::Magic);
+    }
+
+    #[test]
+    fn ooxml_markers_identify_docx_even_with_wrong_suffix() {
+        let registry = FormatRegistry;
+        let sample = b"PK\x03\x04........word/document.xml........[Content_Types].xml";
+        let detected = registry.detect(Path::new("mystery.zip"), sample);
+
+        assert_eq!(detected.family, FormatFamily::Document);
+        assert_eq!(detected.id, "docx");
+        assert_eq!(detected.confidence, DetectionConfidence::Magic);
+    }
+
+    #[test]
+    fn iso_bmff_brand_distinguishes_heic_from_generic_media() {
+        let registry = FormatRegistry;
+        let sample = b"\0\0\0\x18ftypheic\0\0\0\0heic";
+        let detected = registry.detect(Path::new("phone.bin"), sample);
+
+        assert_eq!(detected.family, FormatFamily::Image);
+        assert_eq!(detected.id, "heic");
+        assert_eq!(detected.confidence, DetectionConfidence::Magic);
+    }
+
+    #[test]
+    fn structured_text_identifies_json_and_html() {
+        let registry = FormatRegistry;
+        let json = registry.detect(Path::new("payload.bin"), br#"{"ok":true}"#);
+        let html = registry.detect(
+            Path::new("page.bin"),
+            b"<!doctype html><html><body>Hi</body></html>",
+        );
+
+        assert_eq!(json.id, "json");
+        assert_eq!(json.family, FormatFamily::Text);
+        assert_eq!(html.id, "html");
+        assert_eq!(html.family, FormatFamily::Text);
     }
 
     #[test]

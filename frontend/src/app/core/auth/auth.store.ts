@@ -17,6 +17,7 @@ export class AuthStore {
   private readonly bridge = inject(TauriBridgeService);
   readonly phase = signal<AuthPhase>('loading');
   readonly hasAccount = signal(false);
+  readonly knownAccounts = signal<AccountProfile[]>([]);
   readonly session = signal<AuthSessionResponse | null>(null);
   readonly error = signal<string | null>(null);
   readonly avatarUrl = signal<string | null>(null);
@@ -54,7 +55,14 @@ export class AuthStore {
     try {
       const bootstrap = await this.bridge.accountBootstrap();
       this.hasAccount.set(bootstrap.hasAccount);
-      this.phase.set('signedOut');
+      this.knownAccounts.set(bootstrap.knownAccounts ?? []);
+      if (bootstrap.restoredSession) {
+        this.session.set(bootstrap.restoredSession);
+        this.phase.set('authenticated');
+        queueMicrotask(() => void this.loadAvatar());
+      } else {
+        this.phase.set('signedOut');
+      }
     } catch (error) {
       this.error.set(this.message(error));
       this.phase.set('error');
@@ -180,6 +188,10 @@ export class AuthStore {
       const session = await operation();
       this.session.set(session);
       this.hasAccount.set(true);
+      this.knownAccounts.update((accounts) => {
+        const others = accounts.filter((account) => account.id !== session.profile.id);
+        return [session.profile, ...others];
+      });
       this.phase.set('authenticated');
       // The avatar is cosmetic and can involve an additional IPC call plus disk I/O.
       // Do not keep the login button blocked while it is loaded.

@@ -8,7 +8,7 @@ import {
   inject,
   signal,
 } from '@angular/core';
-import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
@@ -20,6 +20,8 @@ import { PreferencesService } from './core/preferences/preferences.service';
 import { WorkspaceStore } from './features/workspace/data-access/workspace.store';
 import { UpdateService } from './core/update/update.service';
 import { TauriBridgeService } from './core/ipc/tauri-bridge.service';
+import { UiMemoryService } from './core/state/ui-memory.service';
+import { filter } from 'rxjs';
 
 @Component({
   selector: 'ff-root',
@@ -32,6 +34,7 @@ export class AppComponent {
   private readonly destroyRef = inject(DestroyRef);
   private readonly router = inject(Router);
   private readonly bridge = inject(TauriBridgeService);
+  private readonly uiMemory = inject(UiMemoryService);
   protected readonly workspaceStore = inject(WorkspaceStore);
   protected readonly auth = inject(AuthStore);
   protected readonly capabilities = inject(CapabilityStore);
@@ -52,6 +55,11 @@ export class AppComponent {
   });
 
   constructor() {
+    const navigation = this.router.events
+      .pipe(filter((event): event is NavigationEnd => event instanceof NavigationEnd))
+      .subscribe((event) => this.uiMemory.saveLastRoute(event.urlAfterRedirects));
+    this.destroyRef.onDestroy(() => navigation.unsubscribe());
+
     effect(() => {
       const profileId = this.auth.profile()?.id ?? null;
       if (this.auth.authenticated() && this.auth.setupComplete() && profileId) {
@@ -70,7 +78,14 @@ export class AppComponent {
         await this.router.navigate(['/welcome']);
         return;
       }
-      if (this.router.url.startsWith('/welcome')) await this.router.navigate(['/']);
+      if (this.router.url.startsWith('/welcome')) {
+        await this.router.navigate(['/']);
+      } else if (this.router.url === '/') {
+        const rememberedRoute = this.uiMemory.lastRoute();
+        if (rememberedRoute && rememberedRoute !== '/') {
+          await this.router.navigateByUrl(rememberedRoute);
+        }
+      }
       const profileId = this.auth.profile()?.id;
       if (profileId) await this.initializeAuthenticatedContext(profileId);
     } finally {

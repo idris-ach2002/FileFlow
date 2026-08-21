@@ -1,465 +1,660 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, signal } from '@angular/core';
+import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { Router } from '@angular/router';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { AuthStore } from '../../core/auth/auth.store';
 import { CapabilityStore } from '../../core/catalog/capability.store';
-import {
-  ActionDescriptor,
-  ActionRecommendation,
-  ArchiveInspection,
-  Asset,
-  AssetSortKey,
-  FormatFamily,
-} from '../../core/ipc/tauri.models';
+import { ActionDescriptor, Asset, FormatFamily } from '../../core/ipc/tauri.models';
 import { PreferencesService } from '../../core/preferences/preferences.service';
+import { UiMemoryService } from '../../core/state/ui-memory.service';
 import { WorkspaceStore } from './data-access/workspace.store';
+
+type SimpleTask = 'convert' | 'compress' | 'extract' | 'organize' | 'rename' | 'protect';
+type Quality = 'small' | 'balanced' | 'high';
+type CompressionProfile = 'keep' | 'small' | 'balanced' | 'high';
+
+interface TaskCard {
+  id: SimpleTask;
+  title: string;
+  description: string;
+  icon: string;
+  tone: string;
+}
+
+const TASKS: TaskCard[] = [
+  { id: 'convert', title: 'Convertir', description: 'Changer le format du fichier', icon: '↻', tone: 'blue' },
+  { id: 'compress', title: 'Compresser', description: 'Réduire la taille du fichier', icon: '↓', tone: 'green' },
+  { id: 'extract', title: 'Extraire le texte', description: 'Récupérer le texte du document', icon: 'T', tone: 'violet' },
+  { id: 'organize', title: 'Organiser', description: 'Fusionner, diviser ou réorganiser', icon: '▱', tone: 'orange' },
+  { id: 'rename', title: 'Renommer', description: 'Changer le nom proprement', icon: '✎', tone: 'cyan' },
+  { id: 'protect', title: 'Protéger', description: 'Mot de passe ou vie privée', icon: '▣', tone: 'red' },
+];
 
 @Component({
   selector: 'ff-workspace-page',
   template: `
-    <div class="workspace-shell" [class.guided]="prefs.beginnerMode()">
-      <header class="workspace-header">
-        <div>
-          <p class="ff-kicker">ESPACE DE TRAVAIL</p>
-          <h1>{{ store.busy() ? 'Analyse en cours' : 'Vos fichiers sont prêts.' }}</h1>
-          <p>{{ workspaceSubtitle() }}</p>
-        </div>
-        <div class="header-actions">
-          <button class="ff-button secondary" type="button" (click)="newSelection()">＋ Ajouter</button>
-        </div>
-      </header>
+    <div class="guided-shell">
+      <nav class="flow-steps" aria-label="Progression">
+        @for (step of [1,2,3,4,5]; track step) {
+          <div class="flow-step" [class.active]="currentStep() === step" [class.done]="currentStep() > step">
+            <span>{{ currentStep() > step ? '✓' : step }}</span>
+            <strong>{{ stepLabel(step) }}</strong>
+          </div>
+          @if (step < 5) { <i aria-hidden="true">→</i> }
+        }
+      </nav>
 
       @if (store.error()) {
-        <section class="error-state ff-card"><span>!</span><div><strong>Analyse interrompue</strong><p>{{ store.error() }}</p></div><button class="ff-button" type="button" (click)="newSelection()">Nouvelle sélection</button></section>
-      } @else if (!store.hasWorkspace()) {
-        <section class="empty-state ff-card"><div class="empty-icon">▦</div><h2>Aucun espace ouvert</h2><p>Ajoutez des fichiers ou un dossier pour commencer.</p><button class="ff-button" type="button" (click)="newSelection()">Choisir des fichiers</button></section>
-      } @else {
-        <section class="summary-grid">
-          <article><span>Éléments</span><strong>{{ store.counts().assets }}</strong><small>{{ store.counts().files }} fichiers</small></article>
-          <article><span>Taille totale</span><strong>{{ formatBytes(store.counts().totalBytes) }}</strong><small>originaux préservés</small></article>
-          <article><span>Familles</span><strong>{{ store.workspace()?.families?.length ?? 0 }}</strong><small>types regroupés</small></article>
-          <article><span>Archives</span><strong>{{ store.counts().archives }}</strong><small>inspectables</small></article>
-          <article class="smart-stat"><span>Optimisation</span><strong>{{ formatBytes(store.insights()?.potentialDuplicateBytes ?? 0) }}</strong><small>doublons potentiels</small></article>
+        <section class="state-card error-state">
+          <span>!</span><div><h2>FileFlow n’a pas pu analyser cette sélection.</h2><p>{{ store.error() }}</p></div>
+          <button class="ff-button" type="button" (click)="backHome()">Recommencer</button>
         </section>
+      } @else if (!store.hasWorkspace()) {
+        <section class="state-card loading-state">
+          <span class="spinner"></span><div><h2>Récupération de votre espace…</h2><p>FileFlow reprend votre dernière sélection quand elle est encore disponible.</p></div>
+        </section>
+      } @else if (store.busy()) {
+        <section class="stage-card treatment-card">
+          <div class="stage-number">2</div>
+          <div class="processing-orb"><span>✦</span></div>
+          <h1>Je regarde vos fichiers…</h1>
+          <p>{{ store.stats().discovered }} élément(s) détecté(s) · {{ formatBytes(store.stats().totalBytes) }}</p>
+          <div class="progress indeterminate"><span></span></div>
+          <div class="privacy-note">◆ Vos fichiers restent sur cet appareil.</div>
+        </section>
+      } @else {
+        @switch (currentStep()) {
+          @case (2) {
+            <section class="stage-card action-stage">
+              <header class="stage-header">
+                <div><div class="stage-number">2</div><p class="kicker">APRÈS AJOUT DU FICHIER</p><h1>Que voulez-vous faire<br />avec {{ selectionLabel() }}&nbsp;?</h1></div>
+                <button class="quiet-button" type="button" (click)="backHome()">＋ Autres fichiers</button>
+              </header>
 
-        @if (store.busy()) {
-          <section class="scan-status ff-card">
-            <div class="scan-spinner"></div>
-            <div class="scan-copy"><strong>Analyse asynchrone</strong><span>{{ store.stats().discovered }} éléments · {{ formatBytes(store.stats().totalBytes) }}</span></div>
-            <div class="scan-track"><span></span></div>
-            <small>L’interface reste disponible pendant le scan.</small>
-          </section>
-        }
-
-        @if (prefs.beginnerMode() && !store.busy()) {
-          <section class="guided-flow ff-card" aria-label="Parcours guidé">
-            <div class="guided-step done"><span>1</span><div><strong>Vos fichiers sont ajoutés</strong><small>{{ store.counts().files + store.counts().archives }} élément(s) prêt(s). FileFlow garde les originaux.</small></div><b>✓</b></div>
-            <div class="guided-step"><span>2</span><div><strong>Que voulez-vous faire ?</strong><small>Choisissez simplement un résultat. FileFlow s’occupe du format et du moteur.</small><div class="guided-actions">@for (recommendation of guidedRecommendations(); track recommendation.actionId) {@if(actionFor(recommendation); as action){<button type="button" [class.active]="activeAction()?.id === action.id" (click)="openAction(action)"><span>{{ actionMark(action) }}</span><strong>{{ action.title }}</strong><small>{{ recommendation.reason }}</small></button>}} @empty { <div class="guided-no-action"><strong>Pas encore de suggestion automatique.</strong><small>Ouvrez l’aide : FileFlow vous indiquera quoi ajouter ou quelle action choisir.</small></div> }</div></div></div>
-            <div class="guided-step" [class.done]="activeAction()"><span>3</span><div><strong>{{ activeAction() ? 'Vérifiez puis lancez' : 'FileFlow préparera les options' }}</strong><small>{{ activeAction() ? 'Les réglages recommandés sont déjà sélectionnés. Résultat : ' + guidedDestinationLabel() : 'Après votre choix, seules les options utiles apparaîtront.' }}</small></div>@if(activeAction()){<b>↓</b>}</div>
-            <button class="guided-help" type="button" (click)="openHelp()">? Je ne sais pas quoi choisir</button>
-          </section>
-        }
-
-        <div class="workspace-layout" [class.action-open]="activeAction()">
-          <section class="files-column">
-            <div class="workspace-toolbar ff-card">
-              <label class="search-field"><span>⌕</span><input #search type="search" placeholder="Rechercher dans ce workspace…" [value]="store.searchTerm()" (input)="searchChanged(search.value)" /></label>
-              <div class="toolbar-separator"></div>
-              <button class="toolbar-button" type="button" [class.active]="store.sortBy() === 'name'" (click)="sort('name')">Nom {{ sortArrow('name') }}</button>
-              <button class="toolbar-button" type="button" [class.active]="store.sortBy() === 'size'" (click)="sort('size')">Taille {{ sortArrow('size') }}</button>
-              <button class="toolbar-button icon-only" type="button" [class.active]="!store.includeHidden()" (click)="toggleHidden()" title="Afficher ou masquer les éléments cachés">◌</button>
-            </div>
-
-            @if (store.workspace(); as workspace) {
-              <nav class="family-filters" aria-label="Filtrer les fichiers par type">
-                <button type="button" [class.active]="store.familyFilter() === null" (click)="filterFamily(null)">Tous <span>{{ workspace.counts.files + workspace.counts.archives }}</span></button>
-                @for (entry of workspace.families; track entry.family) {
-                  <button type="button" [class.active]="store.familyFilter() === entry.family" (click)="filterFamily(entry.family)">{{ familyLabel(entry.family) }} <span>{{ entry.count }}</span></button>
+              <div class="source-strip">
+                @for (asset of visibleSourceAssets(); track asset.data.id) {
+                  <button type="button" class="source-preview-card" (click)="openAssetPreview(asset)"><span class="file-badge" [attr.data-family]="assetFamily(asset)">{{ assetMark(asset) }}</span><span><strong>{{ asset.data.name }}</strong><small>{{ assetFormat(asset) }} · {{ assetSize(asset) }}</small></span><b>↗</b></button>
                 }
-              </nav>
-            }
-
-            @if (store.selectedCount() > 0) {
-              <div class="selection-bar">
-                <div><strong>{{ store.selectedCount() }} sélectionné{{ store.selectedCount() > 1 ? 's' : '' }}</strong><span>Les actions compatibles seront appliquées uniquement à cette sélection.</span></div>
-                <button class="ff-button ghost" type="button" (click)="store.clearSelection()">Effacer</button>
-                <button class="ff-button secondary" type="button" (click)="store.selectVisible()">Tout sélectionner</button>
-              </div>
-            }
-
-            <section class="asset-panel ff-card">
-              <div class="asset-panel-head">
-                <div><strong>{{ store.pageTotal() || store.assets().length }} éléments</strong><span>{{ store.searchTerm() ? 'Résultats filtrés' : 'Workspace local' }}</span></div>
-                <div class="panel-badges">@if (store.warnings().length) { <span class="ff-badge warning">{{ store.warnings().length }} avert.</span> }<span class="ff-badge success">● Local</span></div>
+                @if (sourceOverflow() > 0) { <div class="more-files">+ {{ sourceOverflow() }} autre{{ sourceOverflow() > 1 ? 's' : '' }}</div> }
               </div>
 
-              <div class="asset-list">
-                @for (asset of store.assets(); track asset.data.id) {
-                  <article class="asset-row" [class.selected]="store.isSelected(asset.data.id)" (dblclick)="toggleAsset(asset)">
-                    <label class="asset-check" title="Sélectionner"><input type="checkbox" [checked]="store.isSelected(asset.data.id)" (change)="toggleAsset(asset)" /><span></span></label>
-                    <div class="asset-icon" [attr.data-family]="assetFamily(asset)">{{ assetMark(asset) }}</div>
-                    <div class="asset-main"><strong>{{ asset.data.name }}</strong><span>{{ asset.data.relativePath }}</span></div>
-                    <div class="asset-format"><strong>{{ assetFormat(asset) }}</strong><span>{{ familyLabel(assetFamily(asset)) }}</span></div>
-                    <div class="asset-size">{{ assetSize(asset) }}</div>
-                    <button class="row-more" type="button" title="Actions pour ce fichier" (click)="selectAndSuggest(asset)">•••</button>
-                  </article>
-                } @empty {
-                  <div class="asset-empty"><span>⌕</span><strong>Aucun élément</strong><small>Modifiez la recherche ou le filtre.</small></div>
+              <div class="task-grid">
+                @for (task of tasks; track task.id) {
+                  <button type="button" class="task-card" [attr.data-tone]="task.tone" (click)="chooseTask(task.id)">
+                    <span class="task-icon">{{ task.icon }}</span>
+                    <span><strong>{{ task.title }}</strong><small>{{ task.description }}</small></span>
+                    <b>›</b>
+                  </button>
                 }
               </div>
 
-              @if (store.hasMore()) { <div class="load-more"><button class="ff-button secondary" type="button" (click)="loadMore()">Afficher 200 éléments supplémentaires</button></div> }
+              <div class="smart-suggestion">
+                <span>✦</span>
+                <div><strong>{{ smartSuggestionTitle() }}</strong><small>{{ smartSuggestionText() }}</small></div>
+                <button type="button" (click)="chooseTask(smartSuggestedTask())">Utiliser</button>
+              </div>
             </section>
-          </section>
+          }
+          @case (3) {
+            <section class="stage-card configure-stage">
+              <header class="stage-header compact">
+                <div><div class="stage-number">3</div><p class="kicker">CONFIGURER</p><h1>{{ configureTitle() }}</h1><p>{{ configureSubtitle() }}</p></div>
+                <button class="quiet-button" type="button" (click)="returnToActions()">← Changer d’action</button>
+              </header>
 
-          <aside class="intelligence-column">
-            <section class="recommendation-panel ff-card">
-              <div class="panel-title"><div><p class="ff-kicker">SUGGESTIONS</p><h2>Actions pertinentes</h2></div><span class="spark">✦</span></div>
-              <div class="recommendation-list">
-                @for (recommendation of store.recommendations().slice(0, 6); track recommendation.actionId) {
-                  @if (actionFor(recommendation); as action) {
-                    <button type="button" class="recommendation" [class.not-ready]="!recommendation.ready" (click)="openAction(action)">
-                      <span class="rec-mark" [attr.data-category]="action.category">{{ actionMark(action) }}</span>
-                      <span class="rec-copy"><strong>{{ action.title }}</strong><small>{{ recommendation.reason }}</small><em>{{ recommendation.affectedAssets }} élément{{ recommendation.affectedAssets > 1 ? 's' : '' }}</em></span>
-                      <span class="rec-arrow">›</span>
-                    </button>
+              <div class="configure-layout">
+                <div class="essential-settings">
+                  <h2>Réglages essentiels</h2>
+
+                  @if (selectedTask() === 'convert' || selectedTask() === 'organize') {
+                    <label class="setting-card">
+                      <span class="setting-icon">◎</span>
+                      <span><strong>Format cible</strong><small>FileFlow choisit le chemin le plus fiable.</small></span>
+                      <select [value]="targetFormat()" (change)="setTarget($any($event.target).value)">
+                        @for (format of targetOptions(); track format.value) { <option [value]="format.value">{{ format.label }}</option> }
+                      </select>
+                    </label>
                   }
-                } @empty {
-                  <div class="recommendation-empty">Les recommandations apparaîtront à la fin de l’analyse.</div>
-                }
-              </div>
-            </section>
 
-            @if (store.insights(); as insights) {
-              <section class="insight-panel ff-card">
-                <div class="panel-title compact"><div><p class="ff-kicker">APERÇU</p><h2>Ce que FileFlow voit</h2></div></div>
-                @if (insights.largest.length) {
-                  <div class="insight-block"><span>Plus gros fichiers</span>@for (item of insights.largest.slice(0, 3); track item.id) { <div class="insight-row"><div><strong>{{ item.name }}</strong><small>{{ familyLabel(item.family) }}</small></div><b>{{ formatBytes(item.sizeBytes) }}</b></div> }</div>
-                }
-                @if (insights.duplicateSizeCandidates.length) {
-                  <div class="duplicate-hint"><span class="duplicate-icon">≋</span><div><strong>{{ insights.duplicateSizeCandidates.length }} groupes à vérifier</strong><small>Jusqu’à {{ formatBytes(insights.potentialDuplicateBytes) }} potentiellement récupérables. Une empreinte cryptographique SHA-256 confirmera les vrais doublons.</small>@if (store.duplicateReport(); as duplicateReport) { <em>{{ duplicateReport.confirmedGroups.length }} groupe(s) confirmé(s) · {{ formatBytes(duplicateReport.reclaimableBytes) }} récupérables</em> } @else { <button type="button" [disabled]="store.duplicateScanLoading()" (click)="store.confirmDuplicates()">{{ store.duplicateScanLoading() ? 'Analyse…' : 'Confirmer les doublons' }}</button> }</div></div>
-                  @if (store.duplicateScanError()) { <div class="mini-error">{{ store.duplicateScanError() }}</div> }
-                }
-                @if (store.counts().archives > 0) {
-                  <div class="archive-inspector">
-                    <div class="archive-inspector-head"><span>ZIP</span><div><strong>Contenu des archives</strong><small>Inspecter sans extraire pour connaître les types présents.</small></div></div>
-                    @if (store.archiveInspection(); as archive) {
-                      <div class="archive-metrics"><b>{{ archive.files }} fichiers</b><span>{{ archive.directories }} dossiers</span><span>{{ formatBytes(archive.totalUnpackedBytes) }}</span></div>
-                      <div class="archive-families">@for (family of archive.families.slice(0, 6); track family.family) { <span>{{ familyLabel(family.family) }} <b>{{ family.count }}</b></span> }</div>
-                      @if (archive.samples.length) { <small class="archive-sample">Ex. {{ archiveSamplePaths(archive) }}</small> }
-                    } @else {
-                      <button type="button" [disabled]="store.archiveInspectionLoading()" (click)="store.inspectArchive()">{{ store.archiveInspectionLoading() ? 'Inspection…' : 'Inspecter la première archive' }}</button>
-                    }
+                  @if (supportsQuality()) {
+                    <label class="setting-card">
+                      <span class="setting-icon">▥</span>
+                      <span><strong>Qualité</strong><small>Équilibrée est recommandée dans la plupart des cas.</small></span>
+                      <select [value]="quality()" (change)="quality.set($any($event.target).value)">
+                        <option value="small">Petite taille</option><option value="balanced">Équilibrée (recommandée)</option><option value="high">Haute qualité</option>
+                      </select>
+                    </label>
+                  }
+
+                  <div class="setting-card destination-setting">
+                    <span class="setting-icon">▱</span>
+                    <span><strong>Destination</strong><small>{{ destinationLabel() }}</small></span>
+                    <button type="button" (click)="chooseDestination()">Changer…</button>
                   </div>
-                  @if (store.archiveInspectionError()) { <div class="mini-error">{{ store.archiveInspectionError() }}</div> }
-                }
-                <div class="extension-cloud">@for (extension of insights.extensions.slice(0, 8); track extension.extension) { <span>{{ extension.extension.toUpperCase() }} <b>{{ extension.count }}</b></span> }</div>
-              </section>
-            }
-          </aside>
 
-          @if (activeAction(); as action) {
-            <aside class="action-drawer ff-card">
-              <button class="drawer-close" type="button" (click)="store.closeAction()" aria-label="Fermer">×</button>
-              <div class="drawer-mark" [attr.data-category]="action.category">{{ actionMark(action) }}</div>
-              <p class="ff-kicker">ACTION</p><h2>{{ action.title }}</h2><p class="drawer-description">{{ action.description }}</p>
-              <div class="drawer-status" [class.warning]="capabilities.actionState(action) !== 'ready'"><span>{{ capabilities.actionState(action) === 'ready' ? '●' : '!' }}</span><div><strong>{{ actionRuntimeLabel(action) }}</strong><small>{{ engineStatus(action) }}</small></div></div>
-              @if (isImageTool(action) && previewImageUrl(); as previewUrl) {
-                <div class="image-preview-stage"><img [src]="previewUrl" alt="Aperçu avant traitement" [style.transform]="previewTransform(action)" [style.filter]="previewFilter(action)" /><span>Aperçu local · l’original reste intact</span></div>
-              }
-              <div class="drawer-section advanced-only"><label>Portée</label><div class="scope-card"><strong>{{ store.selectedCount() ? store.selectedCount() + ' sélectionné(s)' : 'Tout le groupe compatible' }}</strong><span>{{ action.batchable ? 'Traitement par lot · scheduler adaptatif' : 'Une opération à la fois' }}</span></div></div>
-              @if (targetOptions(action).length) {
-                <div class="drawer-section"><label>Format de sortie</label><div class="format-grid">@for (format of targetOptions(action); track format) { <button type="button" [class.active]="effectiveTarget(action) === format" (click)="targetFormat.set(format)">{{ format.toUpperCase() }}</button> }</div></div>
-              }
-              @if (supportsQuality(action)) {
-                <div class="drawer-section"><label>{{ isStreamCompression(action) ? 'Compression' : 'Profil' }}</label><div class="segmented"><button type="button" [class.active]="quality() === 'small'" (click)="quality.set('small')">{{ isStreamCompression(action) ? 'Plus compact' : 'Petit' }}</button><button type="button" [class.active]="quality() === 'balanced'" (click)="quality.set('balanced')">Équilibré</button><button type="button" [class.active]="quality() === 'high'" (click)="quality.set('high')">{{ isStreamCompression(action) ? 'Plus rapide' : 'Qualité' }}</button></div></div>
-              }
-              @if (action.id === 'image-rotate') { <div class="drawer-section parameter-control"><label>Angle · {{ parameterNumber('angle', 90) }}°</label><input type="range" min="-180" max="180" step="1" [value]="parameterNumber('angle', 90)" (input)="setNumberParameter('angle', $any($event.target).value)" /></div> }
-              @if (action.id === 'image-adjust') {
-                <div class="drawer-section parameter-grid"><label>Corrections</label><div><span>Lumière {{ parameterNumber('brightness',0) }}</span><input type="range" min="-100" max="100" [value]="parameterNumber('brightness',0)" (input)="setNumberParameter('brightness',$any($event.target).value)" /></div><div><span>Contraste {{ parameterNumber('contrast',0) }}</span><input type="range" min="-100" max="100" [value]="parameterNumber('contrast',0)" (input)="setNumberParameter('contrast',$any($event.target).value)" /></div><div><span>Saturation {{ parameterNumber('saturation',100) }}%</span><input type="range" min="0" max="200" [value]="parameterNumber('saturation',100)" (input)="setNumberParameter('saturation',$any($event.target).value)" /></div><div><span>Gamma {{ parameterNumber('gamma',1) }}</span><input type="range" min="0.2" max="3" step="0.1" [value]="parameterNumber('gamma',1)" (input)="setNumberParameter('gamma',$any($event.target).value)" /></div></div>
-              }
-              @if (action.id === 'image-resize-exact' || action.id === 'image-crop-center') { <div class="drawer-section parameter-grid"><label>Dimensions</label><div class="number-pair"><input type="number" min="1" max="20000" [value]="parameterNumber('width', action.id === 'image-resize-exact' ? 1920 : 1200)" (input)="setNumberParameter('width',$any($event.target).value)" /><span>×</span><input type="number" min="1" max="20000" [value]="parameterNumber('height', action.id === 'image-resize-exact' ? 1080 : 1200)" (input)="setNumberParameter('height',$any($event.target).value)" /></div>@if(action.id === 'image-resize-exact'){<div class="segmented"><button type="button" [class.active]="parameterString('fit','contain')==='contain'" (click)="setTextParameter('fit','contain')">Contenir</button><button type="button" [class.active]="parameterString('fit','contain')==='fill'" (click)="setTextParameter('fit','fill')">Remplir</button><button type="button" [class.active]="parameterString('fit','contain')==='stretch'" (click)="setTextParameter('fit','stretch')">Étirer</button></div>}</div> }
-              @if (action.id === 'image-crop-custom') { <div class="drawer-section parameter-grid"><label>Zone de recadrage</label><div class="number-pair"><input type="number" min="1" max="20000" [value]="parameterNumber('width',1200)" (input)="setNumberParameter('width',$any($event.target).value)" /><span>×</span><input type="number" min="1" max="20000" [value]="parameterNumber('height',1200)" (input)="setNumberParameter('height',$any($event.target).value)" /></div><div class="number-pair"><input type="number" min="0" max="20000" [value]="parameterNumber('x',0)" (input)="setNumberParameter('x',$any($event.target).value)" /><span>X / Y</span><input type="number" min="0" max="20000" [value]="parameterNumber('y',0)" (input)="setNumberParameter('y',$any($event.target).value)" /></div><small class="parameter-hint">Coordonnées en pixels depuis le coin supérieur gauche.</small></div> }
-              @if (action.id === 'image-canvas') { <div class="drawer-section parameter-grid"><label>Canevas</label><div class="number-pair"><input type="number" min="1" max="20000" [value]="parameterNumber('width',1920)" (input)="setNumberParameter('width',$any($event.target).value)" /><span>×</span><input type="number" min="1" max="20000" [value]="parameterNumber('height',1080)" (input)="setNumberParameter('height',$any($event.target).value)" /></div><input class="text-parameter" type="text" maxlength="32" placeholder="white, transparent, #ffffff…" [value]="parameterString('background','white')" (input)="setTextParameter('background',$any($event.target).value)" /></div> }
-              @if (action.id === 'image-contrast-stretch') { <div class="drawer-section parameter-grid"><label>Points noir / blanc</label><div><span>Noirs {{ parameterNumber('blackPoint',0.5) }}%</span><input type="range" min="0" max="20" step="0.1" [value]="parameterNumber('blackPoint',0.5)" (input)="setNumberParameter('blackPoint',$any($event.target).value)" /></div><div><span>Blancs {{ parameterNumber('whitePoint',0.5) }}%</span><input type="range" min="0" max="20" step="0.1" [value]="parameterNumber('whitePoint',0.5)" (input)="setNumberParameter('whitePoint',$any($event.target).value)" /></div></div> }
-              @if (action.id === 'image-set-dpi') { <div class="drawer-section parameter-grid"><label>Densité d’impression</label><input type="number" min="36" max="2400" [value]="parameterNumber('dpi',300)" (input)="setNumberParameter('dpi',$any($event.target).value)" /><small class="parameter-hint">Modifie la densité déclarée, pas le nombre de pixels.</small></div> }
-              @if (action.id === 'image-perspective') { <div class="drawer-section parameter-grid"><label>Perspective · quatre coins</label><div class="number-pair"><input type="number" min="0" max="20000" [value]="parameterNumber('x0',0)" (input)="setNumberParameter('x0',$any($event.target).value)" /><span>↖</span><input type="number" min="0" max="20000" [value]="parameterNumber('y0',0)" (input)="setNumberParameter('y0',$any($event.target).value)" /></div><div class="number-pair"><input type="number" min="0" max="20000" [value]="parameterNumber('x1',1200)" (input)="setNumberParameter('x1',$any($event.target).value)" /><span>↗</span><input type="number" min="0" max="20000" [value]="parameterNumber('y1',0)" (input)="setNumberParameter('y1',$any($event.target).value)" /></div><div class="number-pair"><input type="number" min="0" max="20000" [value]="parameterNumber('x2',1200)" (input)="setNumberParameter('x2',$any($event.target).value)" /><span>↘</span><input type="number" min="0" max="20000" [value]="parameterNumber('y2',1200)" (input)="setNumberParameter('y2',$any($event.target).value)" /></div><div class="number-pair"><input type="number" min="0" max="20000" [value]="parameterNumber('x3',0)" (input)="setNumberParameter('x3',$any($event.target).value)" /><span>↙</span><input type="number" min="0" max="20000" [value]="parameterNumber('y3',1200)" (input)="setNumberParameter('y3',$any($event.target).value)" /></div><div class="number-pair"><input type="number" min="1" max="20000" [value]="parameterNumber('width',1200)" (input)="setNumberParameter('width',$any($event.target).value)" /><span>sortie</span><input type="number" min="1" max="20000" [value]="parameterNumber('height',1200)" (input)="setNumberParameter('height',$any($event.target).value)" /></div></div> }
-              @if (action.id === 'image-blur' || action.id === 'image-sharpen' || action.id === 'image-vignette') { <div class="drawer-section parameter-control"><label>Intensité</label><input type="range" min="0.1" max="20" step="0.1" [value]="parameterNumber(action.id === 'image-blur' ? 'radius' : action.id === 'image-sharpen' ? 'amount' : 'radius', action.id === 'image-blur' ? 2 : action.id === 'image-sharpen' ? 1 : 12)" (input)="setNumberParameter(action.id === 'image-sharpen' ? 'amount' : 'radius',$any($event.target).value)" /></div> }
-              @if (action.id === 'image-threshold' || action.id === 'image-sepia' || action.id === 'image-pixelate') { <div class="drawer-section parameter-control"><label>Intensité</label><input type="range" min="1" max="100" [value]="parameterNumber(action.id === 'image-threshold' ? 'threshold' : action.id === 'image-sepia' ? 'strength' : 'pixelPercent', action.id === 'image-pixelate' ? 8 : action.id === 'image-sepia' ? 80 : 50)" (input)="setNumberParameter(action.id === 'image-threshold' ? 'threshold' : action.id === 'image-sepia' ? 'strength' : 'pixelPercent',$any($event.target).value)" /></div> }
-              @if (action.id === 'image-posterize') { <div class="drawer-section parameter-control"><label>Niveaux de couleur</label><input type="range" min="2" max="32" [value]="parameterNumber('levels',6)" (input)="setNumberParameter('levels',$any($event.target).value)" /></div> }
-              @if (action.id === 'image-watermark') { <div class="drawer-section parameter-grid"><label>Filigrane</label><input class="text-parameter" type="text" maxlength="120" [value]="parameterString('text','FileFlow')" (input)="setTextParameter('text',$any($event.target).value)" /><input type="range" min="8" max="96" [value]="parameterNumber('fontSize',28)" (input)="setNumberParameter('fontSize',$any($event.target).value)" /></div> }
-              @if (action.id === 'pdf-rotate-pages') { <div class="drawer-section parameter-grid"><label>Rotation PDF</label><div class="segmented"><button type="button" [class.active]="parameterNumber('angle',90)===90" (click)="setNumberParameter('angle',90)">90°</button><button type="button" [class.active]="parameterNumber('angle',90)===180" (click)="setNumberParameter('angle',180)">180°</button><button type="button" [class.active]="parameterNumber('angle',90)===-90" (click)="setNumberParameter('angle',-90)">-90°</button></div><input class="text-parameter" type="text" maxlength="128" placeholder="Pages : 1-z ou 1-3,7" [value]="parameterString('pages','1-z')" (input)="setTextParameter('pages',$any($event.target).value)" /></div> }
-              @if (action.id === 'pdf-select-pages') { <div class="drawer-section parameter-grid"><label>Pages à conserver / ordre</label><input class="text-parameter" type="text" maxlength="128" placeholder="Ex. 1-3,7,10-z" [value]="parameterString('pages','1-z')" (input)="setTextParameter('pages',$any($event.target).value)" /><small class="parameter-hint">Vous pouvez aussi réordonner : 3,1,2,5-z</small></div> }
-              @if (action.id === 'video-rotate') { <div class="drawer-section"><label>Rotation</label><div class="segmented"><button type="button" [class.active]="parameterString('direction','right')==='left'" (click)="setTextParameter('direction','left')">Gauche</button><button type="button" [class.active]="parameterString('direction','right')==='right'" (click)="setTextParameter('direction','right')">Droite</button><button type="button" [class.active]="parameterString('direction','right')==='180'" (click)="setTextParameter('direction','180')">180°</button></div></div> }
-              @if (action.id === 'video-resize') { <div class="drawer-section parameter-grid"><label>Résolution</label><div class="number-pair"><input type="number" min="16" max="7680" [value]="parameterNumber('width',1920)" (input)="setNumberParameter('width',$any($event.target).value)" /><span>×</span><input type="number" min="16" max="4320" [value]="parameterNumber('height',1080)" (input)="setNumberParameter('height',$any($event.target).value)" /></div></div> }
-              @if (action.id === 'video-thumbnail') { <div class="drawer-section parameter-control"><label>Instant · {{ parameterNumber('second',1) }} s</label><input type="number" min="0" max="86400" step="0.1" [value]="parameterNumber('second',1)" (input)="setNumberParameter('second',$any($event.target).value)" /></div> }
-              @if (action.id === 'media-trim') { <div class="drawer-section parameter-grid"><label>Extrait</label><div class="number-pair"><input type="number" min="0" step="0.1" [value]="parameterNumber('start',0)" (input)="setNumberParameter('start',$any($event.target).value)" /><span>→</span><input type="number" min="0.1" step="0.1" [value]="parameterNumber('duration',30)" (input)="setNumberParameter('duration',$any($event.target).value)" /></div><small class="parameter-hint">Début (s) → durée (s)</small></div> }
-              @if (action.id === 'audio-gain') { <div class="drawer-section parameter-control"><label>Gain · {{ parameterNumber('gainDb',0) }} dB</label><input type="range" min="-30" max="30" step="0.5" [value]="parameterNumber('gainDb',0)" (input)="setNumberParameter('gainDb',$any($event.target).value)" /></div> }
-              @if (activeFormatProfile(); as profile) { <div class="drawer-section format-capabilities"><label>Ce format permet aussi</label><div class="capability-chips">@for (candidate of relatedFormatActions(action.id); track candidate.id) { <button type="button" (click)="openAction(candidate)">{{ candidate.title }}</button> }</div></div> }
-              <div class="drawer-section advanced-only"><label>Destination du résultat</label><div class="segmented"><button type="button" [class.active]="destination() === 'subfolder'" (click)="destination.set('subfolder')">Sous-dossier</button><button type="button" [class.active]="destination() === 'same'" (click)="destination.set('same')">Même dossier</button><button type="button" [class.active]="destination() === 'choose'" (click)="chooseDestination()">Choisir</button></div>@if (customDirectory()) { <div class="destination-path">{{ customDirectory() }}</div> }</div>
-              <div class="drawer-section advanced-only"><label>Organisation</label><label class="toggle-line"><input type="checkbox" [checked]="preserveTree()" (change)="preserveTree.set(!preserveTree())" /><span>Conserver l’arborescence des dossiers</span></label></div>
-              <div class="drawer-section advanced-only"><label>Protection</label><div class="safety-list"><span><b>✓</b> Originaux conservés</span><span><b>✓</b> Conflits renommés automatiquement</span><span><b>✓</b> Temporaire + finalisation atomique</span><span><b>✓</b> Processus isolé et annulable</span></div></div>
-              @if (store.executing()) {
-                <div class="job-box"><div><strong>Traitement en cours</strong><span>{{ store.executionCompleted() }} / {{ store.executionTotal() }}</span></div><div class="job-progress"><i [style.width.%]="store.executionProgress()"></i></div><small>Le scheduler protège CPU, mémoire et E/S pendant l’opération.</small></div>
-              }
-              @if (store.executionSummary(); as summary) {
-                <div class="result-box" [class.failed]="summary.state === 'failed'">
-                  <strong>{{ summary.state === 'completed' ? 'Terminé' : summary.state === 'cancelled' ? 'Annulé' : 'Terminé avec erreurs' }}</strong>
-                  <span>{{ summary.succeeded }} réussi(s) · {{ summary.skipped }} ignoré(s) · {{ summary.failed }} échec(s)</span>
-                  @if (summary.outputs.length) {
-                    <small>{{ summary.outputs[0] }}</small>
-                    @if (summary.outputs.length > 1) { <em>+ {{ summary.outputs.length - 1 }} autre{{ summary.outputs.length > 2 ? 's' : '' }} résultat{{ summary.outputs.length > 2 ? 's' : '' }}</em> }
-                    <div class="result-actions">
-                      <button type="button" [disabled]="store.outputActionBusy()" (click)="store.openOutput()">Ouvrir</button>
-                      <button type="button" [disabled]="store.outputActionBusy()" (click)="store.revealOutput()">Afficher</button>
-                      <button type="button" [disabled]="store.outputActionBusy()" (click)="store.saveOutputCopy()">Enregistrer une copie…</button>
-                      @if (action.id === 'archive-extract') { <button type="button" [disabled]="store.outputActionBusy()" (click)="store.analyzeOutput()">Analyser le dossier extrait</button> }
+                  @if (selectedTask() === 'organize' && isSinglePdf()) {
+                    <label class="setting-card">
+                      <span class="setting-icon">⌁</span>
+                      <span><strong>Découpage</strong><small>Un fichier PDF sera créé par page.</small></span>
+                      <span class="read-only-value">1 PDF / page</span>
+                    </label>
+                  }
+
+                  @if (selectedTask() === 'organize' && !isSinglePdf()) {
+                    <label class="setting-card">
+                      <span class="setting-icon">☷</span>
+                      <span><strong>Ordre des fichiers</strong><small>Détermine l’ordre des documents dans le PDF final.</small></span>
+                      <select [value]="collectionOrder()" (change)="collectionOrder.set($any($event.target).value)">
+                        <option value="name">Alphabétique (recommandé)</option>
+                        <option value="date">Date de modification</option>
+                        <option value="selection">Ordre de sélection</option>
+                      </select>
+                    </label>
+                  }
+
+                  @if (selectedTask() === 'protect') {
+                    <label class="setting-card password-setting">
+                      <span class="setting-icon">▣</span>
+                      <span><strong>Mot de passe du PDF</strong><small>Il n’est jamais mémorisé par FileFlow.</small></span>
+                      <span class="password-wrap"><input [type]="showPdfPassword() ? 'text' : 'password'" autocomplete="new-password" [value]="pdfPassword()" (input)="pdfPassword.set($any($event.target).value)" /><button type="button" (mousedown)="$event.preventDefault()" (click)="showPdfPassword.update(v=>!v)" [attr.aria-label]="showPdfPassword() ? 'Masquer le mot de passe' : 'Afficher le mot de passe'">{{ showPdfPassword() ? '◉' : '◌' }}</button></span>
+                    </label>
+                  }
+
+                  <button class="advanced-toggle" type="button" (click)="advancedOpen.update(v=>!v)"><span>⚙</span><strong>Options avancées</strong><small>sur demande</small><b>{{ advancedOpen() ? '−' : '+' }}</b></button>
+
+                  @if (advancedOpen()) {
+                    <div class="advanced-options">
+                      @if (willProducePdf()) {
+                        <div class="advanced-group">
+                          <div><strong>Finalisation PDF</strong><small>Ces réglages sont appliqués après la conversion et avant le résultat final.</small></div>
+                          <label><span>Compression finale</span><select [value]="finalCompression()" (change)="finalCompression.set($any($event.target).value)"><option value="keep">Conserver</option><option value="small">Plus léger</option><option value="balanced">Équilibré</option><option value="high">Haute qualité</option></select></label>
+                          <label><span>Taille cible (facultatif)</span><div class="suffix-input"><input type="number" min="0" max="4096" step="1" [value]="targetSizeMb() ?? ''" (input)="setTargetSize($any($event.target).value)" placeholder="ex. 5" /><small>Mo</small></div></label>
+                          <label class="check-line"><input type="checkbox" [checked]="improve()" (change)="improve.set($any($event.target).checked)" /><span><strong>Améliorer les scans</strong><small>Redressement + OCR lorsque le moteur le permet.</small></span></label>
+                          <label class="check-line"><input type="checkbox" [checked]="stripMetadata()" (change)="stripMetadata.set($any($event.target).checked)" /><span><strong>Nettoyer les métadonnées</strong><small>Utile avant un partage.</small></span></label>
+                        </div>
+                        <div class="advanced-group signature-group">
+                          <div><strong>Signature</strong><small>La V1 ajoute une page de signature visuelle sans rasteriser le document. La signature cryptographique reste réservée au mode expert.</small></div>
+                          <label><span>Nom / signature visuelle</span><input type="text" maxlength="180" [value]="signatureText()" (input)="signatureText.set($any($event.target).value)" placeholder="Votre nom ou signature" /></label>
+                        </div>
+                      }
+                      <div class="route-info">
+                        <span>⇢</span><div><strong>{{ routeSummary() }}</strong><small>{{ routeDetail() }}</small></div>
+                      </div>
                     </div>
                   }
+
+                  <button class="launch-button" type="button" [disabled]="!canRun()" (click)="runCurrent()"><span>▶</span>{{ launchLabel() }}</button>
+                  @if (store.executionError()) { <div class="inline-error">{{ store.executionError() }}</div> }
                 </div>
-              }
-              @if (store.outputActionMessage()) { <div class="action-notice">{{ store.outputActionMessage() }}</div> }
-              @if (store.executionError()) { <div class="action-notice error">{{ store.executionError() }}</div> }
-              @if (capabilities.actionState(action) === 'planned') { <div class="action-notice">Cette action fait déjà partie du moteur de capacités, mais son exécuteur local n’est pas encore activé dans cette build.</div> }
-              <div class="drawer-footer">@if (store.executing()) { <button class="ff-button danger" type="button" (click)="store.cancelExecution()">Annuler le traitement</button> } @else { <button class="ff-button secondary" type="button" (click)="store.closeAction()">Fermer</button><button class="ff-button" type="button" [disabled]="!capabilities.isActionExecutable(action)" (click)="runAction(action)">Lancer</button> }</div>
-            </aside>
+
+                <aside class="preview-panel">
+                  <div class="preview-head"><span>APERÇU</span><strong>{{ previewTitle() }}</strong></div>
+                  @if (primaryFamily() === 'archive') {
+                    <button class="archive-preview-card" type="button" (click)="openArchiveBrowser()">
+                      <span class="archive-preview-icon">ZIP</span>
+                      <strong>{{ primaryFileName() }}</strong>
+                      <small>Afficher le contenu sous forme de cartes paginées</small>
+                      <b>Voir le contenu →</b>
+                    </button>
+                  } @else if (pdfPreviewUrl(); as url) {
+                    <button class="preview-clickable" type="button" (click)="openSourcePreview()"><iframe [src]="url" title="Aperçu du PDF" tabindex="-1"></iframe><span>Agrandir</span></button>
+                  } @else if (imagePreviewUrl(); as image) {
+                    <button class="image-preview preview-clickable" type="button" (click)="openSourcePreview()"><img [src]="image" alt="Aperçu du fichier" /><span>Agrandir</span></button>
+                  } @else {
+                    <div class="preview-placeholder"><span>{{ primaryFileMark() }}</span><strong>{{ primaryFileName() }}</strong><small>L’aperçu visuel sera disponible pour les formats compatibles. La conversion reste locale.</small></div>
+                  }
+                  <div class="preview-trust"><span>◆</span><strong>Original intact</strong><small>FileFlow travaille toujours sur une copie temporaire.</small></div>
+                </aside>
+              </div>
+            </section>
           }
+          @case (4) {
+            <section class="stage-card treatment-card">
+              <div class="stage-number">4</div>
+              <div class="processing-orb"><span>⚙</span></div>
+              <h1>Traitement en cours…</h1>
+              <p>{{ processingLabel() }}</p>
+              <div class="progress"><span [style.width.%]="Math.max(8, store.executionProgress())"></span><b>{{ store.executionProgress() }} %</b></div>
+              <div class="timeline">
+                <div [class.done]="phaseRank() > 0" [class.active]="phaseRank() === 0"><span>{{ phaseRank() > 0 ? '✓' : '' }}</span><div><strong>Préparation</strong><small>Analyse, extraction sûre et choix de la route</small></div></div>
+                <div [class.done]="phaseRank() > 1" [class.active]="phaseRank() === 1"><span>{{ phaseRank() > 1 ? '✓' : '' }}</span><div><strong>Conversion</strong><small>{{ phaseDetail() }}</small></div></div>
+                <div [class.done]="phaseRank() > 2" [class.active]="phaseRank() === 2"><span>{{ phaseRank() > 2 ? '✓' : '' }}</span><div><strong>Assemblage</strong><small>Fusion des pages dans l’ordre choisi</small></div></div>
+                <div [class.done]="phaseRank() > 3" [class.active]="phaseRank() >= 3"><span>{{ phaseRank() > 3 ? '✓' : '' }}</span><div><strong>Finalisation</strong><small>Qualité, validation puis nettoyage des intermédiaires</small></div></div>
+              </div>
+              <button class="cancel-button" type="button" (click)="store.cancelExecution()">Annuler</button>
+              <div class="privacy-note">◇ Les fichiers intermédiaires sont supprimés après validation du résultat.</div>
+            </section>
+          }
+          @case (5) {
+            <section class="stage-card result-card" [class.failed]="store.executionSummary()?.state !== 'completed'">
+              @if (store.executionSummary()?.state === 'completed') {
+                <div class="stage-number">5</div>
+                <div class="success-orb">✓</div>
+                <h1>C’est prêt&nbsp;!</h1>
+                <p>Votre fichier a été traité avec succès.</p>
+                <div class="result-layout">
+                  <button class="result-preview-card" type="button" (click)="openResultPreview()">
+                    @if (resultPdfPreviewUrl(); as resultPdf) {
+                      <iframe [src]="resultPdf" title="Aperçu du résultat" tabindex="-1"></iframe>
+                    } @else if (resultImagePreviewUrl(); as resultImage) {
+                      <img [src]="resultImage" alt="Aperçu du résultat" />
+                    } @else {
+                      <span class="result-preview-mark">{{ resultMark(store.executionSummary()?.outputs?.[0] ?? '') }}</span>
+                    }
+                    <b>Prévisualiser en grand</b>
+                  </button>
+                  <div class="result-actions">
+                    @for (output of store.executionSummary()?.outputs ?? []; track output; let index = $index) {
+                      <div class="result-file"><span>{{ resultMark(output) }}</span><div><strong>{{ fileName(output) }}</strong><small>{{ extensionLabel(output) }}</small></div><button type="button" (click)="store.openOutput(index)">↗</button></div>
+                    }
+                    <button class="open-result" type="button" (click)="store.openOutput(0)">Ouvrir <span>↗</span></button>
+                    <button class="secondary-result" type="button" (click)="store.revealOutput(0)"><span>▱</span> Afficher dans le dossier</button>
+                    <button class="secondary-result" type="button" (click)="restart()"><span>↻</span> Recommencer</button>
+                  </div>
+                </div>
+                <div class="cleanup-note"><span>✓</span> Espace temporaire nettoyé après validation.</div>
+              } @else {
+                <div class="stage-number">5</div><div class="failure-orb">!</div><h1>Le traitement n’a pas abouti.</h1><p>{{ store.executionError() || store.executionFailures()[0] || 'FileFlow a arrêté le traitement sans modifier vos originaux.' }}</p><button class="open-result" type="button" (click)="restart()">Réessayer</button><button class="secondary-result" type="button" (click)="returnToActions()">Changer d’action</button>
+              }
+            </section>
+          }
+        }
+      }
+
+      @if (archiveBrowserOpen()) {
+        <div class="viewer-backdrop" (click)="closeArchiveBrowser()">
+          <section class="archive-browser" role="dialog" aria-modal="true" aria-label="Contenu de l’archive" (click)="$event.stopPropagation()">
+            <header><div><span>CONTENU DE L’ARCHIVE</span><h2>{{ primaryFileName() }}</h2><p>{{ store.archiveInspection()?.files ?? 0 }} fichier(s) · {{ formatBytes(store.archiveInspection()?.totalUnpackedBytes ?? 0) }}</p></div><button type="button" (click)="closeArchiveBrowser()" aria-label="Fermer">×</button></header>
+            @if (store.archiveInspectionLoading()) { <div class="viewer-loading"><span class="spinner"></span>Lecture de l’archive…</div> }
+            @else if (store.archiveInspectionError()) { <div class="viewer-error">{{ store.archiveInspectionError() }}</div> }
+            @else {
+              <div class="archive-card-grid">
+                @for (entry of store.archiveInspection()?.samples ?? []; track entry.path) {
+                  <button type="button" class="archive-entry-card" (click)="previewArchiveEntry(entry.path, entry.family)">
+                    <span [attr.data-family]="entry.family">{{ familyMark(entry.family) }}</span>
+                    <strong>{{ archiveEntryName(entry.path) }}</strong>
+                    <small>{{ entry.family }} · {{ formatBytes(entry.sizeBytes) }}</small>
+                    <em>{{ entry.path }}</em>
+                  </button>
+                }
+              </div>
+              <footer class="archive-pagination"><button type="button" [disabled]="archivePage() === 0" (click)="archivePrevious()">← Précédent</button><span>Page {{ archivePage()+1 }}</span><button type="button" [disabled]="!store.archiveInspection()?.hasMore" (click)="archiveNext()">Suivant →</button></footer>
+            }
+          </section>
+        </div>
+      }
+
+      @if (fullscreenPreviewPath()) {
+        <div class="viewer-backdrop" (click)="closeFullscreenPreview()">
+          <section class="fullscreen-viewer" role="dialog" aria-modal="true" aria-label="Prévisualisation" (click)="$event.stopPropagation()">
+            <header><div><span>PRÉVISUALISATION</span><strong>{{ fullscreenPreviewTitle() }}</strong></div><button type="button" (click)="closeFullscreenPreview()" aria-label="Fermer">×</button></header>
+            <div class="fullscreen-preview-content">
+              @if (fullscreenPdfUrl(); as fullPdf) { <iframe [src]="fullPdf" title="Prévisualisation PDF"></iframe> }
+              @else if (fullscreenImageUrl(); as fullImage) { <img [src]="fullImage" alt="Prévisualisation du fichier" /> }
+              @else { <div class="preview-placeholder"><span>{{ fullscreenPreviewMark() }}</span><strong>{{ fullscreenPreviewTitle() }}</strong><small>Ce format ne possède pas encore de rendu intégré. Vous pouvez toujours l’ouvrir avec son application système.</small></div> }
+            </div>
+          </section>
         </div>
       }
     </div>
   `,
   styles: [`
-    :host{display:block}.workspace-shell{max-width:1460px;margin:0 auto}.workspace-header{display:flex;justify-content:space-between;gap:24px;align-items:flex-end}.workspace-header h1{margin:0;color:var(--text-strong);font-size:clamp(34px,4.5vw,52px);letter-spacing:-.05em}.workspace-header>div>p:last-child{max-width:760px;margin:10px 0 0;color:var(--text-muted);font-size:13px;line-height:1.6}.header-actions{display:flex;gap:8px}.summary-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:9px;margin-top:28px}.summary-grid article{min-height:92px;display:grid;align-content:center;gap:4px;padding:15px 16px;border:1px solid var(--border);border-radius:14px;background:var(--surface-1);box-shadow:var(--shadow-sm)}.summary-grid span,.summary-grid small{color:var(--text-muted);font-size:10px}.summary-grid strong{color:var(--text-strong);font-size:21px;letter-spacing:-.035em}.smart-stat{background:linear-gradient(145deg,var(--surface-1),var(--success-soft))!important}.scan-status{margin-top:12px;display:grid;grid-template-columns:auto minmax(0,1fr) 180px auto;align-items:center;gap:12px;padding:11px 14px}.scan-spinner{width:20px;height:20px;border:2px solid var(--border-strong);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.scan-copy strong,.scan-copy span{display:block}.scan-copy strong{font-size:11px}.scan-copy span,.scan-status small{margin-top:2px;color:var(--text-muted);font-size:11px}.scan-track{height:4px;overflow:hidden;border-radius:99px;background:var(--surface-3)}.scan-track span{display:block;width:42%;height:100%;border-radius:inherit;background:var(--accent);animation:scan 1.1s ease-in-out infinite alternate}@keyframes scan{to{transform:translateX(138%)}}
-.guided-flow{position:relative;display:grid;gap:0;margin:16px 0 18px;padding:8px 18px}.guided-step{display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:12px;align-items:start;padding:15px 0;border-bottom:1px solid var(--border)}.guided-step:last-of-type{border-bottom:0}.guided-step>span{width:32px;height:32px;display:grid;place-items:center;border-radius:50%;background:var(--surface-2);color:var(--text-muted);font-weight:900}.guided-step.done>span{background:var(--success-soft);color:var(--success)}.guided-step strong,.guided-step small{display:block}.guided-step strong{font-size:15px}.guided-step small{margin-top:4px;color:var(--text-muted);font-size:12px;line-height:1.45}.guided-step>b{align-self:center;color:var(--success);font-size:18px}.guided-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:12px}.guided-actions button{display:grid;grid-template-columns:42px minmax(0,1fr);column-gap:10px;padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--bg-elevated);color:var(--text);text-align:left}.guided-actions button:hover:not(:disabled),.guided-actions button.active{border-color:var(--accent);background:var(--accent-soft)}.guided-actions button>span{grid-row:1/3;width:40px;height:40px;display:grid;place-items:center;border-radius:10px;background:var(--surface-2);color:var(--accent);font-size:11px;font-weight:900}.guided-actions button strong{font-size:13px}.guided-actions button small{font-size:11px}.guided-no-action{grid-column:1/-1;padding:14px;border:1px dashed var(--border);border-radius:12px;background:var(--surface-1)}.guided-no-action strong,.guided-no-action small{display:block}.guided-no-action strong{font-size:12px}.guided-no-action small{margin-top:4px;color:var(--text-muted);font-size:11px;line-height:1.45}.guided-actions button:disabled{opacity:.5}.guided-help{justify-self:start;margin:12px 0 4px;padding:7px 10px;border:0;background:transparent;color:var(--accent);font-size:12px;font-weight:800}
-    .workspace-layout{margin-top:20px;display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:14px;align-items:start}.workspace-layout.action-open{grid-template-columns:minmax(0,1fr) 300px 340px}.files-column{min-width:0}.workspace-toolbar{min-height:50px;display:flex;align-items:center;gap:6px;padding:6px}.search-field{min-width:190px;flex:1;display:flex;align-items:center;gap:7px;padding:0 8px;color:var(--text-faint)}.search-field input{width:100%;min-height:36px;border:0;outline:0;background:transparent;color:var(--text);font-size:11px}.toolbar-separator{width:1px;height:24px;background:var(--border)}.toolbar-button{min-height:35px;padding:0 10px;border:0;border-radius:8px;background:transparent;color:var(--text-muted);font-size:10px;font-weight:750}.toolbar-button:hover,.toolbar-button.active{background:var(--surface-2);color:var(--text)}.toolbar-button.icon-only{width:35px;padding:0}.family-filters{display:flex;gap:6px;overflow:auto;padding:10px 1px 8px;scrollbar-width:none}.family-filters button{flex:none;min-height:31px;padding:0 10px;border:1px solid var(--border);border-radius:999px;background:var(--surface-1);color:var(--text-muted);font-size:10px;font-weight:750}.family-filters button span{margin-left:5px;color:var(--text-faint)}.family-filters button.active{border-color:color-mix(in srgb,var(--accent) 35%,var(--border));background:var(--accent-soft);color:var(--accent-strong)}.selection-bar{min-height:52px;display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:7px 9px 7px 13px;border:1px solid color-mix(in srgb,var(--accent) 28%,var(--border));border-radius:12px;background:var(--accent-soft)}.selection-bar>div{flex:1}.selection-bar strong,.selection-bar span{display:block}.selection-bar strong{font-size:11px}.selection-bar span{margin-top:2px;color:var(--text-muted);font-size:11px}.selection-bar .ff-button{min-height:32px;font-size:10px}
-    .asset-panel{overflow:hidden}.asset-panel-head{min-height:54px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 13px;border-bottom:1px solid var(--border)}.asset-panel-head strong,.asset-panel-head span{display:block}.asset-panel-head strong{font-size:11px}.asset-panel-head div>span{margin-top:2px;color:var(--text-muted);font-size:11px}.panel-badges{display:flex!important;gap:5px}.asset-list{display:grid}.asset-row{min-height:62px;content-visibility:auto;contain:layout style paint;contain-intrinsic-size:62px;display:grid;grid-template-columns:25px 38px minmax(120px,1fr) 100px 76px 30px;align-items:center;gap:9px;padding:7px 10px;border-bottom:1px solid var(--border);transition:background var(--transition)}.asset-row:hover{background:var(--bg-elevated)}.asset-row.selected{background:var(--accent-soft)}.asset-check{width:22px;height:22px;display:grid;place-items:center;cursor:pointer}.asset-check input{position:absolute;opacity:0;pointer-events:none}.asset-check span{width:14px;height:14px;border:1.5px solid var(--border-strong);border-radius:4px;background:var(--surface-1)}.asset-check input:checked+span{border-color:var(--accent);background:var(--accent);box-shadow:inset 0 0 0 3px var(--surface-1)}.asset-icon{width:36px;height:36px;display:grid;place-items:center;border-radius:10px;background:var(--surface-2);color:var(--text-muted);font-size:11px;font-weight:900;text-transform:uppercase}.asset-icon[data-family='image']{background:#eaf6ff;color:#2875bb}.asset-icon[data-family='pdf']{background:#fff0ef;color:#c14f46}.asset-icon[data-family='archive']{background:var(--warning-soft);color:var(--warning)}.asset-icon[data-family='video'],.asset-icon[data-family='audio']{background:#f2ecff;color:#7450b6}.asset-main,.asset-format{min-width:0}.asset-main strong,.asset-main span,.asset-format strong,.asset-format span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.asset-main strong{font-size:11px}.asset-main span,.asset-format span{margin-top:3px;color:var(--text-faint);font-size:11px}.asset-format strong{font-size:11px;text-transform:uppercase}.asset-size{color:var(--text-muted);font-size:10px;text-align:right}.row-more{width:30px;height:30px;border:0;border-radius:8px;background:transparent;color:var(--text-faint);font-size:11px}.row-more:hover{background:var(--surface-2);color:var(--text)}.asset-empty{min-height:210px;display:grid;place-items:center;align-content:center;gap:5px;color:var(--text-faint)}.asset-empty>span{font-size:24px}.asset-empty strong{color:var(--text-muted);font-size:12px}.asset-empty small{font-size:10px}.load-more{display:flex;justify-content:center;padding:10px;border-top:1px solid var(--border)}.load-more .ff-button{min-height:34px;font-size:10px}
-    .intelligence-column{display:grid;gap:10px;position:sticky;top:24px}.recommendation-panel,.insight-panel{overflow:hidden;padding:14px}.panel-title{display:flex;justify-content:space-between;align-items:flex-start;padding:2px 2px 11px}.panel-title h2{margin:0;font-size:16px;letter-spacing:-.03em}.panel-title.compact{padding-bottom:5px}.spark{width:29px;height:29px;display:grid;place-items:center;border-radius:9px;background:var(--accent-soft);color:var(--accent)}.recommendation-list{display:grid;gap:4px}.recommendation{width:100%;min-height:66px;display:grid;grid-template-columns:35px minmax(0,1fr) 14px;align-items:center;gap:9px;padding:7px;border:0;border-radius:10px;background:transparent;color:var(--text);text-align:left}.recommendation:hover{background:var(--surface-2)}.recommendation.not-ready{opacity:.63}.rec-mark{width:34px;height:34px;display:grid;place-items:center;border-radius:9px;background:var(--accent-soft);color:var(--accent);font-size:11px;font-weight:900}.rec-copy{min-width:0}.rec-copy strong,.rec-copy small,.rec-copy em{display:block}.rec-copy strong{font-size:10px}.rec-copy small{margin-top:3px;display:-webkit-box;overflow:hidden;color:var(--text-muted);font-size:11px;line-height:1.35;-webkit-box-orient:vertical;-webkit-line-clamp:2}.rec-copy em{margin-top:4px;color:var(--text-faint);font-size:10px;font-style:normal}.rec-arrow{color:var(--text-faint);font-size:18px}.recommendation-empty{padding:24px 10px;color:var(--text-muted);font-size:10px;line-height:1.5;text-align:center}.insight-block{margin-top:4px;padding-top:10px;border-top:1px solid var(--border)}.insight-block>span{color:var(--text-faint);font-size:11px;font-weight:800;text-transform:uppercase}.insight-row{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)}.insight-row div{min-width:0}.insight-row strong,.insight-row small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.insight-row strong{font-size:11px}.insight-row small{margin-top:2px;color:var(--text-faint);font-size:10px}.insight-row b{flex:none;color:var(--text-muted);font-size:11px}.duplicate-hint{display:flex;gap:9px;margin-top:10px;padding:10px;border-radius:10px;background:var(--warning-soft)}.duplicate-icon{width:28px;height:28px;display:grid;place-items:center;flex:none;border-radius:8px;background:color-mix(in srgb,var(--warning) 12%,transparent);color:var(--warning)}.duplicate-hint strong,.duplicate-hint small,.duplicate-hint em{display:block}.duplicate-hint strong{font-size:11px}.duplicate-hint small{margin-top:3px;color:var(--text-muted);font-size:10px;line-height:1.4}.duplicate-hint button{margin-top:7px;padding:5px 7px;border:0;border-radius:6px;background:color-mix(in srgb,var(--warning) 15%,transparent);color:var(--warning);font-size:10px;font-weight:800}.duplicate-hint button:disabled{opacity:.6}.duplicate-hint em{margin-top:6px;color:var(--success);font-size:10px;font-style:normal;font-weight:800}.mini-error{margin-top:6px;color:var(--danger);font-size:10px}.archive-inspector{margin-top:10px;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--bg-elevated)}.archive-inspector-head{display:flex;gap:9px;align-items:flex-start}.archive-inspector-head>span{width:31px;height:31px;display:grid;place-items:center;flex:none;border-radius:8px;background:var(--warning-soft);color:var(--warning);font-size:10px;font-weight:900}.archive-inspector-head strong,.archive-inspector-head small{display:block}.archive-inspector-head strong{font-size:11px}.archive-inspector-head small{margin-top:3px;color:var(--text-muted);font-size:10px;line-height:1.35}.archive-inspector>button{margin-top:9px;padding:6px 9px;border:0;border-radius:7px;background:var(--accent-soft);color:var(--accent);font-size:10px;font-weight:800}.archive-metrics{display:flex;flex-wrap:wrap;gap:8px;margin-top:9px;color:var(--text-muted);font-size:10px}.archive-metrics b{color:var(--text)}.archive-families{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}.archive-families span{padding:4px 6px;border-radius:6px;background:var(--surface-2);color:var(--text-muted);font-size:10px}.archive-families b{color:var(--text)}.archive-sample{display:block;margin-top:8px;color:var(--text-faint);font-size:10px;line-height:1.45;overflow-wrap:anywhere}.extension-cloud{display:flex;flex-wrap:wrap;gap:4px;margin-top:10px}.extension-cloud span{padding:4px 6px;border-radius:6px;background:var(--surface-2);color:var(--text-muted);font-size:10px;font-weight:750}.extension-cloud b{color:var(--text-faint)}
-    .action-drawer{position:sticky;top:24px;padding:18px}.drawer-close{position:absolute;top:10px;right:10px;width:30px;height:30px;border:0;border-radius:8px;background:transparent;color:var(--text-muted);font-size:20px}.drawer-close:hover{background:var(--surface-2)}.drawer-mark{width:46px;height:46px;display:grid;place-items:center;margin-bottom:18px;border-radius:14px;background:var(--accent-soft);color:var(--accent);font-size:11px;font-weight:900}.action-drawer h2{margin:0;font-size:24px;letter-spacing:-.04em}.drawer-description{margin:8px 0 0;color:var(--text-muted);font-size:11px;line-height:1.55}.drawer-status{display:flex;gap:9px;margin-top:16px;padding:10px;border-radius:10px;background:var(--success-soft);color:var(--success)}.drawer-status.warning{background:var(--warning-soft);color:var(--warning)}.drawer-status>span{font-size:11px}.drawer-status strong,.drawer-status small{display:block}.drawer-status strong{font-size:11px}.drawer-status small{margin-top:2px;color:var(--text-muted);font-size:10px}.drawer-section{margin-top:18px}.drawer-section>label{display:block;margin-bottom:7px;color:var(--text-faint);font-size:10px;font-weight:850;text-transform:uppercase;letter-spacing:.08em}.scope-card{padding:10px;border:1px solid var(--border);border-radius:9px;background:var(--bg-elevated)}.scope-card strong,.scope-card span{display:block}.scope-card strong{font-size:10px}.scope-card span{margin-top:3px;color:var(--text-muted);font-size:10px}.segmented{display:grid;grid-template-columns:repeat(3,1fr);padding:3px;border-radius:9px;background:var(--surface-2)}.segmented button{min-height:30px;border:0;border-radius:7px;background:transparent;color:var(--text-muted);font-size:10px;font-weight:750}.segmented button.active{background:var(--surface-1);color:var(--text);box-shadow:var(--shadow-sm)}.safety-list{display:grid;gap:6px;color:var(--text-muted);font-size:11px}.safety-list b{margin-right:5px;color:var(--success)}.format-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}.format-grid button{min-height:31px;border:1px solid var(--border);border-radius:8px;background:var(--bg-elevated);color:var(--text-muted);font-size:10px;font-weight:850}.format-grid button.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}.destination-path{margin-top:7px;padding:7px 8px;border-radius:7px;background:var(--surface-2);color:var(--text-muted);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.toggle-line{display:flex;align-items:center;gap:8px;color:var(--text-muted);font-size:11px}.toggle-line input{accent-color:var(--accent)}.job-box,.result-box{margin-top:12px;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2)}.job-box>div:first-child{display:flex;justify-content:space-between;gap:8px}.job-box strong,.job-box span,.job-box small,.result-box strong,.result-box span,.result-box small,.result-box em{display:block}.job-box strong,.result-box strong{font-size:11px}.job-box span,.result-box span{color:var(--text-muted);font-size:10px}.job-box small,.result-box small{margin-top:7px;color:var(--text-faint);font-size:10px;line-height:1.4;overflow-wrap:anywhere}.result-box em{margin-top:4px;color:var(--text-muted);font-size:10px;font-style:normal}.result-actions{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}.result-actions button{min-height:28px;padding:0 8px;border:1px solid color-mix(in srgb,var(--success) 22%,transparent);border-radius:7px;background:var(--bg-elevated);color:var(--text);font-size:10px;font-weight:800}.result-actions button:hover{border-color:var(--success)}.result-actions button:disabled{opacity:.5}.job-progress{height:5px;margin-top:8px;overflow:hidden;border-radius:99px;background:var(--border)}.job-progress i{display:block;height:100%;border-radius:inherit;background:var(--accent);transition:width .2s ease}.result-box{background:var(--success-soft);border-color:transparent;color:var(--success)}.result-box.failed{background:var(--danger-soft);color:var(--danger)}.action-notice.error{background:var(--danger-soft);color:var(--danger)}.ff-button.danger{background:var(--danger);color:white}.drawer-footer{display:flex;gap:7px;margin-top:22px}.drawer-footer .ff-button{flex:1;min-height:36px;padding-inline:8px;font-size:11px}.action-notice{margin-top:8px;padding:8px;border-radius:8px;background:var(--accent-soft);color:var(--accent-strong);font-size:10px;line-height:1.4}.error-state{display:flex;align-items:center;gap:13px;margin-top:50px;padding:18px}.error-state>span{width:36px;height:36px;display:grid;place-items:center;border-radius:10px;background:var(--danger-soft);color:var(--danger);font-weight:900}.error-state div{flex:1}.error-state strong,.error-state p{display:block}.error-state p{margin:3px 0 0;color:var(--text-muted);font-size:10px}.empty-state{max-width:620px;margin:80px auto 0;display:grid;justify-items:center;gap:8px;padding:46px;text-align:center}.empty-state h2{margin:4px 0 0}.empty-state p{margin:0 0 8px;color:var(--text-muted);font-size:11px}.empty-icon{width:50px;height:50px;display:grid;place-items:center;border-radius:15px;background:var(--accent-soft);color:var(--accent);font-size:22px}
-.image-preview-stage{position:relative;height:190px;margin-top:14px;display:grid;place-items:center;overflow:hidden;border:1px solid var(--border);border-radius:12px;background:linear-gradient(45deg,var(--surface-2) 25%,transparent 25%),linear-gradient(-45deg,var(--surface-2) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,var(--surface-2) 75%),linear-gradient(-45deg,transparent 75%,var(--surface-2) 75%);background-size:18px 18px;background-position:0 0,0 9px,9px -9px,-9px 0}.image-preview-stage img{max-width:86%;max-height:148px;object-fit:contain;transition:transform .16s ease-out,filter .16s ease-out}.image-preview-stage>span{position:absolute;left:8px;bottom:7px;padding:3px 6px;border-radius:6px;background:color-mix(in srgb,var(--surface-1) 90%,transparent);color:var(--text-faint);font-size:9px}.parameter-control input[type=range],.parameter-grid input[type=range]{width:100%;accent-color:var(--accent)}.parameter-grid{display:grid;gap:8px}.parameter-grid>label{margin-bottom:0!important}.parameter-grid>div>span{display:block;margin-bottom:3px;color:var(--text-muted);font-size:10px}.number-pair{display:grid!important;grid-template-columns:1fr auto 1fr;align-items:center;gap:6px}.number-pair input,.text-parameter{min-width:0;height:32px;padding:0 8px;border:1px solid var(--border);border-radius:8px;background:var(--bg-elevated);color:var(--text);font-size:11px}.capability-chips{display:flex;flex-wrap:wrap;gap:5px}.capability-chips button{min-height:27px;padding:0 8px;border:1px solid var(--border);border-radius:999px;background:var(--surface-2);color:var(--text-muted);font-size:9px;font-weight:700}.capability-chips button:hover{border-color:var(--accent);color:var(--accent)}.parameter-hint{color:var(--text-faint);font-size:9px;line-height:1.4}
-.workspace-shell.guided .intelligence-column,.workspace-shell.guided .workspace-toolbar,.workspace-shell.guided .family-filters,.workspace-shell.guided .advanced-only{display:none}.workspace-shell.guided .workspace-layout,.workspace-shell.guided .workspace-layout.action-open{grid-template-columns:minmax(0,1fr) minmax(300px,380px)}.workspace-shell.guided .summary-grid article:nth-child(n+3){display:none}.workspace-shell.guided .summary-grid{grid-template-columns:repeat(2,minmax(0,1fr));max-width:650px}.workspace-shell.guided .drawer-status small{display:none}.workspace-shell.guided .action-drawer{position:sticky}.workspace-shell.guided .asset-panel-head span:last-child{display:none}
-    @media(max-width:1320px){.workspace-layout,.workspace-layout.action-open{grid-template-columns:minmax(0,1fr) 300px}.action-drawer{grid-column:1/-1;position:relative;top:0;display:grid;grid-template-columns:80px minmax(0,1fr) 300px;gap:8px 16px}.action-drawer>.drawer-mark{grid-row:1/5}.action-drawer>.ff-kicker,.action-drawer>h2,.action-drawer>.drawer-description{grid-column:2}.drawer-status{grid-column:3;grid-row:1/3;margin-top:0}.drawer-section,.drawer-footer,.action-notice{grid-column:2/-1}.intelligence-column{position:static}}@media(max-width:1000px){.summary-grid{grid-template-columns:repeat(3,1fr)}.workspace-layout,.workspace-layout.action-open{grid-template-columns:1fr}.intelligence-column{grid-template-columns:repeat(2,1fr)}.asset-row{grid-template-columns:25px 38px minmax(100px,1fr) 70px 28px}.asset-format{display:none}.action-drawer{display:block}.action-drawer>.drawer-mark{margin-bottom:16px}.drawer-status{margin-top:16px}}@media(max-width:680px){.guided-actions{grid-template-columns:1fr}.guided-flow{padding:6px 12px}.guided-step{grid-template-columns:34px minmax(0,1fr) auto}.workspace-header{align-items:flex-start}.workspace-header h1{font-size:34px}.summary-grid{grid-template-columns:repeat(2,1fr)}.summary-grid article:last-child{display:none}.scan-status{grid-template-columns:auto 1fr}.scan-track,.scan-status>small{display:none}.intelligence-column{grid-template-columns:1fr}.workspace-toolbar{flex-wrap:wrap}.search-field{flex-basis:100%}.toolbar-separator{display:none}.asset-row{grid-template-columns:22px 36px minmax(0,1fr) 28px}.asset-size{display:none}.selection-bar{flex-wrap:wrap}.selection-bar>div{flex-basis:100%}}
+    :host{display:block}.guided-shell{max-width:1120px;margin:0 auto;padding:4px 0 32px}.flow-steps{display:grid;grid-template-columns:auto 20px auto 20px auto 20px auto 20px auto;align-items:center;justify-content:center;gap:7px;margin:3px auto 25px}.flow-step{display:flex;align-items:center;gap:7px;color:var(--text-faint);font-size:10px;font-weight:760}.flow-step span{width:25px;height:25px;display:grid;place-items:center;border-radius:50%;background:var(--surface-2);border:1px solid var(--border);font-size:10px}.flow-step.active{color:var(--text)}.flow-step.active span{background:var(--accent);border-color:var(--accent);color:white;box-shadow:0 5px 16px color-mix(in srgb,var(--accent) 25%,transparent)}.flow-step.done{color:var(--success)}.flow-step.done span{background:var(--success-soft);border-color:transparent}.flow-steps>i{color:var(--border-strong);font-style:normal}.stage-card,.state-card{position:relative;border:1px solid var(--border);border-radius:28px;background:var(--surface-1);box-shadow:var(--shadow-sm)}.stage-number{width:31px;height:31px;display:grid;place-items:center;border-radius:50%;background:var(--accent-soft);color:var(--accent);font-size:13px;font-weight:900}.stage-header{display:flex;justify-content:space-between;align-items:flex-start;gap:24px}.stage-header>div>.stage-number{display:inline-grid;margin-right:10px;vertical-align:middle}.stage-header .kicker{display:inline-block;margin:0;color:var(--text-faint);font-size:10px;font-weight:900;letter-spacing:.09em}.stage-header h1{margin:14px 0 0;font-size:42px;line-height:1.02;letter-spacing:-.055em}.stage-header p:last-child{max-width:650px;margin:9px 0 0;color:var(--text-muted);font-size:13px;line-height:1.55}.stage-header.compact h1{font-size:38px}.quiet-button{min-height:38px;padding:0 13px;border:1px solid var(--border);border-radius:11px;background:var(--surface-2);color:var(--text-muted);font-size:11px;font-weight:750}.quiet-button:hover{border-color:var(--border-strong);color:var(--text)}.action-stage,.configure-stage{padding:27px}.source-strip{display:flex;align-items:center;gap:8px;margin:24px 0 20px;padding:9px;border:1px solid var(--border);border-radius:15px;background:var(--surface-2);overflow:hidden}.source-strip article,.source-strip .source-preview-card{min-width:0;display:grid;grid-template-columns:38px minmax(0,1fr);align-items:center;gap:9px;padding:4px 7px}.source-strip article>div,.source-strip .source-preview-card>span:nth-child(2){min-width:0}.source-strip strong,.source-strip small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.source-strip strong{font-size:11px}.source-strip small{margin-top:2px;color:var(--text-muted);font-size:9px}.file-badge{width:36px;height:36px;display:grid;place-items:center;border-radius:10px;background:var(--accent-soft);color:var(--accent);font-size:9px;font-weight:900}.file-badge[data-family=pdf]{background:var(--danger-soft);color:var(--danger)}.file-badge[data-family=image]{background:var(--success-soft);color:var(--success)}.more-files{margin-left:auto;flex:none;padding:6px 9px;border-radius:999px;background:var(--surface-1);color:var(--text-muted);font-size:10px;font-weight:800}.source-preview-card{border:0;background:transparent;color:var(--text);text-align:left}.source-preview-card>b{color:var(--accent);font-size:12px}.source-preview-card:hover{background:var(--surface-1);border-radius:11px}.task-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.task-card{min-height:105px;display:grid;grid-template-columns:48px minmax(0,1fr) auto;align-items:center;gap:13px;padding:13px 15px;border:1px solid var(--border);border-radius:17px;background:var(--surface-1);color:var(--text);text-align:left;transition:var(--transition)}.task-card:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--accent) 24%,var(--border));box-shadow:var(--shadow-md)}.task-icon{width:45px;height:45px;display:grid;place-items:center;border-radius:13px;background:var(--accent-soft);color:var(--accent);font-size:21px;font-weight:800}.task-card[data-tone=green] .task-icon{background:var(--success-soft);color:var(--success)}.task-card[data-tone=violet] .task-icon{background:color-mix(in srgb,var(--violet) 12%,var(--surface-1));color:var(--violet)}.task-card[data-tone=orange] .task-icon{background:var(--warning-soft);color:var(--warning)}.task-card[data-tone=cyan] .task-icon{background:color-mix(in srgb,#16a7c8 12%,var(--surface-1));color:#1688a4}.task-card[data-tone=red] .task-icon{background:var(--danger-soft);color:var(--danger)}.task-card strong,.task-card small{display:block}.task-card strong{font-size:15px}.task-card small{margin-top:4px;color:var(--text-muted);font-size:11px}.task-card>b{color:var(--text-faint);font-size:23px}.smart-suggestion{display:grid;grid-template-columns:38px minmax(0,1fr) auto;align-items:center;gap:10px;margin-top:12px;padding:12px 14px;border-radius:15px;background:var(--accent-soft);color:var(--accent-strong)}.smart-suggestion>span{font-size:20px}.smart-suggestion strong,.smart-suggestion small{display:block}.smart-suggestion strong{font-size:11px}.smart-suggestion small{margin-top:2px;color:var(--text-muted);font-size:10px}.smart-suggestion button{padding:7px 10px;border:0;border-radius:9px;background:var(--surface-1);color:var(--accent);font-size:10px;font-weight:850}.configure-layout{display:grid;grid-template-columns:minmax(0,1.02fr) minmax(330px,.98fr);gap:15px;margin-top:22px}.essential-settings,.preview-panel{padding:18px;border:1px solid var(--border);border-radius:20px;background:var(--surface-2)}.essential-settings>h2{margin:0 0 12px;font-size:14px}.setting-card{min-height:78px;display:grid;grid-template-columns:42px minmax(0,1fr) minmax(145px,210px);align-items:center;gap:11px;padding:10px 12px;border:1px solid var(--border);border-radius:14px;background:var(--surface-1);color:var(--text)}.setting-card+.setting-card{margin-top:8px}.setting-icon{width:38px;height:38px;display:grid;place-items:center;border-radius:11px;background:var(--accent-soft);color:var(--accent);font-size:16px}.setting-card strong,.setting-card small{display:block}.setting-card strong{font-size:12px}.setting-card small{margin-top:3px;color:var(--text-muted);font-size:9.5px;line-height:1.4}.setting-card select,.setting-card input,.advanced-options select,.advanced-options input{width:100%;height:38px;padding:0 10px;border:1px solid var(--border-strong);border-radius:10px;background:var(--surface-2);color:var(--text);font:inherit;font-size:11px;outline:none}.setting-card select:focus,.setting-card input:focus,.advanced-options select:focus,.advanced-options input:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 12%,transparent)}.destination-setting button{height:37px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);color:var(--text);font-size:10px;font-weight:780}.read-only-value{justify-self:end;color:var(--text-muted);font-size:10px;font-weight:800}.password-wrap{position:relative}.password-wrap input{padding-right:38px}.password-wrap button{position:absolute;right:3px;top:3px;width:32px;height:32px;border:0;border-radius:8px;background:transparent;color:var(--text-muted);font-size:16px}.advanced-toggle{width:100%;min-height:50px;display:grid;grid-template-columns:28px minmax(0,1fr) auto auto;align-items:center;gap:7px;margin-top:10px;padding:0 11px;border:0;border-radius:12px;background:transparent;color:var(--accent);text-align:left}.advanced-toggle:hover{background:var(--accent-soft)}.advanced-toggle strong{font-size:11px}.advanced-toggle small{color:var(--text-faint);font-size:9px}.advanced-toggle b{font-size:17px}.advanced-options{display:grid;gap:9px;margin-top:4px;padding:12px;border:1px dashed color-mix(in srgb,var(--accent) 24%,var(--border));border-radius:14px;background:color-mix(in srgb,var(--accent-soft) 35%,var(--surface-1))}.advanced-group{display:grid;grid-template-columns:1fr 1fr;gap:9px;padding-bottom:10px;border-bottom:1px solid var(--border)}.advanced-group>div{grid-column:1/-1}.advanced-group strong,.advanced-group small{display:block}.advanced-group strong{font-size:11px}.advanced-group small{margin-top:3px;color:var(--text-muted);font-size:9px;line-height:1.45}.advanced-group label{display:grid;gap:4px;color:var(--text-muted);font-size:9px;font-weight:750}.check-line{grid-template-columns:auto 1fr!important;align-items:start}.check-line input{width:15px!important;height:15px!important;margin-top:2px;accent-color:var(--accent)}.suffix-input{position:relative}.suffix-input input{padding-right:34px}.suffix-input small{position:absolute;right:10px;top:11px}.signature-group{grid-template-columns:1fr}.route-info{display:grid;grid-template-columns:28px 1fr;gap:8px;align-items:center;padding:9px;border-radius:10px;background:var(--surface-1)}.route-info>span{color:var(--accent);font-size:18px}.route-info strong,.route-info small{display:block}.route-info strong{font-size:10px}.route-info small{margin-top:2px;color:var(--text-muted);font-size:9px}.launch-button{width:100%;min-height:50px;display:flex;align-items:center;justify-content:center;gap:9px;margin-top:13px;border:0;border-radius:13px;background:linear-gradient(135deg,var(--accent),var(--violet));color:white;font-size:13px;font-weight:850;box-shadow:0 12px 28px color-mix(in srgb,var(--accent) 22%,transparent)}.launch-button:disabled{opacity:.42;box-shadow:none}.inline-error{margin-top:8px;padding:9px 10px;border-radius:9px;background:var(--danger-soft);color:var(--danger);font-size:10px}.preview-panel{display:flex;flex-direction:column;min-height:520px;background:var(--surface-1)}.preview-head{display:flex;justify-content:space-between;align-items:center;padding-bottom:10px;border-bottom:1px solid var(--border)}.preview-head span{color:var(--text-faint);font-size:9px;font-weight:900;letter-spacing:.08em}.preview-head strong{font-size:11px}.preview-panel iframe{width:100%;flex:1;min-height:390px;margin-top:11px;border:1px solid var(--border);border-radius:12px;background:white}.image-preview{flex:1;display:grid;place-items:center;margin-top:11px;overflow:hidden;border:1px solid var(--border);border-radius:12px;background:linear-gradient(45deg,var(--surface-2) 25%,transparent 25%),linear-gradient(-45deg,var(--surface-2) 25%,transparent 25%);background-size:18px 18px}.image-preview img{max-width:90%;max-height:420px;object-fit:contain}.preview-placeholder{flex:1;display:grid;place-items:center;align-content:center;text-align:center;padding:28px}.preview-placeholder>span{width:68px;height:68px;display:grid;place-items:center;border-radius:18px;background:var(--accent-soft);color:var(--accent);font-size:20px;font-weight:900}.preview-placeholder strong{margin-top:12px;font-size:13px}.preview-placeholder small{max-width:330px;margin-top:6px;color:var(--text-muted);font-size:10px;line-height:1.5}.preview-trust{display:grid;grid-template-columns:26px 1fr;gap:6px;margin-top:10px;padding:10px;border-radius:11px;background:var(--success-soft);color:var(--success)}.preview-trust strong,.preview-trust small{display:block}.preview-trust strong{font-size:10px}.preview-trust small{margin-top:2px;color:var(--text-muted);font-size:9px}.treatment-card,.result-card{max-width:610px;min-height:610px;margin:0 auto;padding:34px;display:flex;flex-direction:column;align-items:center;text-align:center}.processing-orb,.success-orb,.failure-orb{width:92px;height:92px;display:grid;place-items:center;margin:44px 0 18px;border-radius:50%;font-size:37px}.processing-orb{background:var(--accent-soft);color:var(--accent);animation:softPulse 1.4s infinite alternate}.success-orb{background:var(--success-soft);color:var(--success)}.failure-orb{background:var(--danger-soft);color:var(--danger)}@keyframes softPulse{to{transform:scale(.96);opacity:.72}}.treatment-card h1,.result-card h1{margin:0;font-size:32px;letter-spacing:-.045em}.treatment-card>p,.result-card>p{margin:7px 0 0;color:var(--text-muted);font-size:12px}.progress{position:relative;width:100%;height:9px;margin-top:28px;border-radius:99px;background:var(--surface-3)}.progress>span{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--accent),var(--violet));transition:width .2s}.progress>b{position:absolute;left:calc(100% + 9px);top:-4px;color:var(--text-muted);font-size:10px}.progress.indeterminate span{width:34%;animation:slide 1.2s infinite alternate}@keyframes slide{to{margin-left:66%}}.timeline{width:100%;display:grid;gap:15px;margin-top:32px;text-align:left}.timeline>div{display:grid;grid-template-columns:28px 1fr;gap:9px;align-items:center;color:var(--text-faint)}.timeline>div>span{width:24px;height:24px;display:grid;place-items:center;border:2px solid var(--border-strong);border-radius:50%;font-size:10px}.timeline .done{color:var(--success)}.timeline .done>span{border-color:var(--success);background:var(--success);color:white}.timeline .active{color:var(--accent)}.timeline .active>span{border-color:var(--accent);box-shadow:inset 0 0 0 5px var(--surface-1),0 0 0 3px var(--accent-soft);background:var(--accent)}.timeline strong,.timeline small{display:block}.timeline strong{font-size:11px}.timeline small{margin-top:2px;color:var(--text-muted);font-size:9px}.cancel-button{margin-top:24px;padding:8px 14px;border:1px solid var(--border);border-radius:10px;background:transparent;color:var(--text-muted);font-size:10px}.privacy-note{margin-top:auto;padding:10px 12px;border-radius:11px;background:var(--accent-soft);color:var(--text-muted);font-size:9px}.result-file{width:100%;display:grid;grid-template-columns:42px minmax(0,1fr) 34px;align-items:center;gap:10px;margin-top:24px;padding:11px;border:1px solid var(--border);border-radius:13px;background:var(--surface-2);text-align:left}.result-file>span{width:39px;height:39px;display:grid;place-items:center;border-radius:10px;background:var(--accent-soft);color:var(--accent);font-size:10px;font-weight:900}.result-file strong,.result-file small{display:block}.result-file strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}.result-file small{margin-top:2px;color:var(--text-muted);font-size:9px}.result-file button{width:32px;height:32px;border:0;border-radius:9px;background:var(--surface-1);color:var(--accent)}.open-result,.secondary-result{width:100%;min-height:48px;margin-top:10px;border-radius:12px;font-size:11px;font-weight:820}.open-result{display:flex;align-items:center;justify-content:center;gap:8px;border:0;background:linear-gradient(135deg,var(--accent),var(--violet));color:white}.secondary-result{border:1px solid var(--border);background:var(--surface-1);color:var(--text)}.cleanup-note{margin-top:auto;color:var(--success);font-size:9px}.state-card{max-width:650px;margin:80px auto;padding:25px;display:grid;grid-template-columns:48px minmax(0,1fr) auto;align-items:center;gap:14px}.state-card>span{width:44px;height:44px;display:grid;place-items:center;border-radius:13px;background:var(--accent-soft);color:var(--accent)}.error-state>span{background:var(--danger-soft);color:var(--danger)}.state-card h2{margin:0;font-size:16px}.state-card p{margin:4px 0 0;color:var(--text-muted);font-size:10px}.spinner{border:3px solid var(--border)!important;border-top-color:var(--accent)!important;border-radius:50%!important;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(1turn)}}
+.preview-clickable{position:relative;width:100%;flex:1;min-height:0;margin-top:11px;padding:0;overflow:hidden;border:1px solid var(--border);border-radius:12px;background:var(--surface-1);cursor:zoom-in}.preview-clickable iframe{pointer-events:none;margin:0;border:0;border-radius:0}.preview-clickable>span{position:absolute;right:10px;bottom:10px;padding:6px 9px;border-radius:999px;background:rgb(20 24 39 / 76%);color:white;font-size:9px;font-weight:800;backdrop-filter:blur(7px)}.image-preview.preview-clickable{display:grid;place-items:center}.image-preview.preview-clickable img{max-width:100%;max-height:100%;object-fit:contain}.archive-preview-card{width:100%;flex:1;min-height:280px;display:grid;place-content:center;justify-items:center;gap:8px;margin-top:11px;padding:24px;border:1px dashed color-mix(in srgb,var(--accent) 35%,var(--border));border-radius:14px;background:linear-gradient(145deg,var(--surface-2),var(--accent-soft));color:var(--text);text-align:center}.archive-preview-icon{width:62px;height:62px;display:grid;place-items:center;border-radius:18px;background:var(--accent);color:white;font-size:12px;font-weight:900}.archive-preview-card strong{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.archive-preview-card small{color:var(--text-muted);font-size:10px}.archive-preview-card b{margin-top:5px;color:var(--accent);font-size:10px}.result-layout{width:100%;display:grid;grid-template-columns:minmax(220px,.9fr) minmax(260px,1.1fr);gap:14px;margin-top:22px}.result-preview-card{min-height:270px;display:grid;place-items:center;position:relative;overflow:hidden;border:1px solid var(--border);border-radius:15px;background:var(--surface-2);color:var(--text);cursor:zoom-in}.result-preview-card iframe,.result-preview-card img{width:100%;height:100%;min-height:270px;border:0;object-fit:contain;pointer-events:none}.result-preview-card>b{position:absolute;bottom:10px;padding:6px 10px;border-radius:999px;background:rgb(20 24 39 / 76%);color:#fff;font-size:9px}.result-preview-mark{width:72px;height:72px;display:grid;place-items:center;border-radius:20px;background:var(--accent-soft);color:var(--accent);font-size:15px;font-weight:900}.result-actions{min-width:0}.viewer-backdrop{position:fixed;inset:0;z-index:1600;display:grid;place-items:center;padding:clamp(12px,3vw,36px);background:rgb(11 14 25 / 64%);backdrop-filter:blur(12px)}.fullscreen-viewer,.archive-browser{width:min(1180px,100%);max-height:calc(100vh - 40px);display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--border-strong);border-radius:24px;background:var(--surface-1);box-shadow:var(--shadow-lg)}.fullscreen-viewer>header,.archive-browser>header{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:15px 18px;border-bottom:1px solid var(--border)}.fullscreen-viewer header div,.archive-browser header div{min-width:0}.fullscreen-viewer header span,.archive-browser header span{display:block;color:var(--text-faint);font-size:9px;font-weight:900;letter-spacing:.08em}.fullscreen-viewer header strong,.archive-browser header h2{display:block;margin:3px 0 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px}.archive-browser header p{margin:3px 0 0;color:var(--text-muted);font-size:10px}.fullscreen-viewer header button,.archive-browser header button{width:38px;height:38px;flex:none;border:0;border-radius:11px;background:var(--surface-2);color:var(--text);font-size:22px}.fullscreen-preview-content{min-height:0;flex:1;display:grid;place-items:center;overflow:auto;padding:14px;background:var(--surface-2)}.fullscreen-preview-content iframe{width:100%;height:min(76vh,850px);border:0;border-radius:12px;background:white}.fullscreen-preview-content img{max-width:100%;max-height:76vh;object-fit:contain;border-radius:10px}.archive-browser{height:min(820px,calc(100vh - 40px))}.archive-card-grid{min-height:0;flex:1;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));align-content:start;gap:10px;padding:14px}.archive-entry-card{min-width:0;min-height:150px;display:flex;flex-direction:column;align-items:flex-start;padding:13px;border:1px solid var(--border);border-radius:14px;background:var(--surface-2);color:var(--text);text-align:left}.archive-entry-card>span{width:38px;height:38px;display:grid;place-items:center;margin-bottom:11px;border-radius:11px;background:var(--accent-soft);color:var(--accent);font-size:9px;font-weight:900}.archive-entry-card strong{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}.archive-entry-card small{margin-top:3px;color:var(--text-muted);font-size:9px}.archive-entry-card em{max-width:100%;margin-top:auto;overflow:hidden;color:var(--text-faint);font-size:8px;font-style:normal;text-overflow:ellipsis;white-space:nowrap}.archive-pagination{display:flex;justify-content:center;align-items:center;gap:12px;padding:11px;border-top:1px solid var(--border)}.archive-pagination button{min-height:34px;padding:0 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);color:var(--text);font-size:10px}.archive-pagination button:disabled{opacity:.4}.archive-pagination span{color:var(--text-muted);font-size:10px}.viewer-loading,.viewer-error{min-height:260px;display:grid;place-items:center;align-content:center;gap:10px;color:var(--text-muted);font-size:11px}.viewer-error{color:var(--danger)}
+@media(max-width:1180px){.guided-shell{max-width:none}.configure-layout{grid-template-columns:minmax(0,1fr) minmax(280px,.85fr)}.stage-header h1{font-size:clamp(32px,4vw,40px)}}
+@media(max-width:980px){.configure-layout{grid-template-columns:1fr}.preview-panel{min-height:390px}.result-layout{grid-template-columns:1fr}.result-preview-card{min-height:240px}.setting-card{grid-template-columns:42px minmax(0,1fr) minmax(130px,190px)}}
+@media(max-width:900px){.flow-step strong{display:none}.flow-steps{grid-template-columns:auto 12px auto 12px auto 12px auto 12px auto}.task-grid{grid-template-columns:1fr}.advanced-group{grid-template-columns:1fr}.advanced-group>div{grid-column:auto}.source-strip{overflow:auto}.stage-card{border-radius:22px}}@media(max-width:620px){.guided-shell{padding-top:0}.flow-steps{width:100%;justify-content:space-between;gap:3px;margin-bottom:14px}.flow-steps>i{font-size:9px}.flow-step span{width:23px;height:23px}.action-stage,.configure-stage{padding:15px;border-radius:18px}.stage-header{display:block}.quiet-button{width:100%;margin-top:12px}.stage-header h1,.stage-header.compact h1{font-size:clamp(27px,9vw,32px)}.source-strip article:nth-child(n+2),.source-strip .source-preview-card:nth-child(n+2){display:none}.setting-card{grid-template-columns:38px minmax(0,1fr);padding:10px}.setting-card>select,.setting-card>button,.setting-card>.password-wrap,.setting-card>.read-only-value{grid-column:1/-1}.essential-settings,.preview-panel{padding:12px;border-radius:16px}.preview-panel{min-height:320px}.task-card{min-height:88px;grid-template-columns:42px minmax(0,1fr) auto;padding:10px}.task-icon{width:40px;height:40px}.treatment-card,.result-card{min-height:0;padding:20px 15px}.treatment-card{max-width:none}.processing-orb,.success-orb,.failure-orb{transform:scale(.82)}.timeline{width:100%}.result-layout{gap:10px}.result-preview-card{min-height:200px}.viewer-backdrop{padding:0}.fullscreen-viewer,.archive-browser{width:100%;height:100%;max-height:none;border:0;border-radius:0}.fullscreen-preview-content iframe{height:calc(100vh - 74px)}.archive-card-grid{grid-template-columns:repeat(2,minmax(0,1fr));padding:10px}.archive-entry-card{min-height:130px;padding:10px}.smart-suggestion{grid-template-columns:32px minmax(0,1fr)}.smart-suggestion button{grid-column:1/-1;width:100%}}
   `],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class WorkspacePage {
+  protected readonly Math = Math;
   protected readonly store = inject(WorkspaceStore);
   protected readonly capabilities = inject(CapabilityStore);
   protected readonly prefs = inject(PreferencesService);
   private readonly auth = inject(AuthStore);
   private readonly router = inject(Router);
-  protected readonly destination = signal<'subfolder' | 'same' | 'choose'>(
-    this.prefs.destination() === 'sameFolder' ? 'same' : this.prefs.destination() === 'ask' ? 'choose' : 'subfolder',
-  );
-  protected readonly customDirectory = signal<string | null>(null);
-  protected readonly targetFormat = signal<string | null>(null);
-  protected readonly quality = signal<'small' | 'balanced' | 'high'>('balanced');
-  protected readonly parameters = signal<Record<string, string | number | boolean | null>>({});
-  protected readonly preserveTree = signal(this.prefs.preserveTree());
-  private searchTimer?: ReturnType<typeof setTimeout>;
+  private readonly memory = inject(UiMemoryService);
+  private readonly sanitizer = inject(DomSanitizer);
 
-  protected readonly activeAction = computed(() => this.capabilities.action(this.store.activeActionId()));
-  protected readonly previewImageUrl = computed(() => {
-    const asset = this.store.selectedAssets().find((candidate) => this.assetFamily(candidate) === 'image')
-      ?? this.store.assets().find((candidate) => this.assetFamily(candidate) === 'image');
-    if (!asset || (asset.kind !== 'file' && asset.kind !== 'archive')) return null;
+  protected readonly tasks = TASKS;
+  protected readonly selectedTask = signal<SimpleTask | null>(null);
+  protected readonly targetFormat = signal('pdf');
+  protected readonly quality = signal<Quality>('balanced');
+  protected readonly destination = signal<'subfolder' | 'same' | 'choose'>('subfolder');
+  protected readonly customDirectory = signal<string | null>(null);
+  protected readonly finalCompression = signal<CompressionProfile>('balanced');
+  protected readonly improve = signal(false);
+  protected readonly stripMetadata = signal(false);
+  protected readonly targetSizeMb = signal<number | null>(null);
+  protected readonly signatureText = signal('');
+  protected readonly collectionOrder = signal<'name' | 'date' | 'selection'>('name');
+  protected readonly advancedOpen = signal(false);
+  protected readonly pdfPassword = signal('');
+  protected readonly showPdfPassword = signal(false);
+  protected readonly archiveBrowserOpen = signal(false);
+  protected readonly archivePage = signal(0);
+  protected readonly archivePageSize = 24;
+  protected readonly fullscreenPreviewPath = signal<string | null>(null);
+  protected readonly fullscreenPreviewTitle = signal('Aperçu');
+  protected readonly fullscreenPreviewFamily = signal<FormatFamily>('unknown');
+
+  protected readonly firstAsset = computed(() => this.store.selectedAssets()[0] ?? this.store.assets().find(a => a.kind === 'file' || a.kind === 'archive') ?? null);
+  protected readonly primaryFamily = computed<FormatFamily>(() => this.firstAsset() ? this.assetFamily(this.firstAsset()!) : 'unknown');
+  protected readonly selectionCount = computed(() => this.store.selectedCount() || this.store.counts().files + this.store.counts().archives);
+  protected readonly isSinglePdf = computed(() => this.selectionCount() === 1 && this.primaryFamily() === 'pdf');
+  protected readonly currentStep = computed(() => {
+    if (this.store.executionSummary()) return 5;
+    if (this.store.executing()) return 4;
+    if (this.selectedTask() || this.store.activeActionId()) return 3;
+    return 2;
+  });
+  protected readonly targetOptions = computed(() => this.computeTargetOptions());
+  protected readonly resolvedActionId = computed(() => this.resolveActionId());
+  protected readonly activeAction = computed<ActionDescriptor | null>(() => this.capabilities.action(this.resolvedActionId()));
+  protected readonly willProducePdf = computed(() => this.targetFormat() === 'pdf' || ['smart-to-pdf','collection-to-pdf','pdf-compress','pdf-protect','pdf-merge','pdf-split','office-to-pdf','text-to-pdf','pdf-ocr'].includes(this.resolvedActionId() ?? ''));
+  protected readonly pdfPreviewUrl = computed<SafeResourceUrl | null>(() => {
+    const asset = this.firstAsset();
+    if (!asset || this.assetFamily(asset) !== 'pdf' || (asset.kind !== 'file' && asset.kind !== 'archive')) return null;
+    try { return this.sanitizer.bypassSecurityTrustResourceUrl(convertFileSrc(asset.data.path)); } catch { return null; }
+  });
+  protected readonly imagePreviewUrl = computed(() => {
+    const asset = this.firstAsset();
+    if (!asset || this.assetFamily(asset) !== 'image' || (asset.kind !== 'file' && asset.kind !== 'archive')) return null;
     try { return convertFileSrc(asset.data.path); } catch { return null; }
   });
-  protected readonly activeFormatProfile = computed(() => {
-    const asset = this.store.selectedAssets()[0] ?? this.store.assets()[0];
-    if (!asset || (asset.kind !== 'file' && asset.kind !== 'archive')) return null;
-    return this.capabilities.formatCapability(asset.data.format.id);
+  protected readonly resultPdfPreviewUrl = computed<SafeResourceUrl | null>(() => {
+    const path = this.store.executionSummary()?.outputs?.[0];
+    if (!path || this.pathFamily(path) !== 'pdf') return null;
+    try { return this.sanitizer.bypassSecurityTrustResourceUrl(convertFileSrc(path)); } catch { return null; }
   });
-  protected readonly guidedRecommendations = computed(() => this.store.recommendations().filter((recommendation) => {
-    if (!recommendation.ready) return false;
-    const action = this.capabilities.action(recommendation.actionId);
-    return action !== null && this.capabilities.isActionExecutable(action);
-  }).slice(0, 4));
+  protected readonly resultImagePreviewUrl = computed(() => {
+    const path = this.store.executionSummary()?.outputs?.[0];
+    if (!path || this.pathFamily(path) !== 'image') return null;
+    try { return convertFileSrc(path); } catch { return null; }
+  });
+  protected readonly fullscreenPdfUrl = computed<SafeResourceUrl | null>(() => {
+    const path = this.fullscreenPreviewPath();
+    if (!path || this.fullscreenPreviewFamily() !== 'pdf') return null;
+    try { return this.sanitizer.bypassSecurityTrustResourceUrl(convertFileSrc(path)); } catch { return null; }
+  });
+  protected readonly fullscreenImageUrl = computed(() => {
+    const path = this.fullscreenPreviewPath();
+    if (!path || this.fullscreenPreviewFamily() !== 'image') return null;
+    try { return convertFileSrc(path); } catch { return null; }
+  });
 
-  protected newSelection(): void { void this.router.navigate(['/']); }
-  protected openHelp(): void { void this.router.navigate(['/help']); }
-  protected filterFamily(family: FormatFamily | null): void { void this.store.setFamilyFilter(family); }
-  protected loadMore(): void { void this.store.loadMore(); }
-  protected sort(sort: AssetSortKey): void { void this.store.setSort(sort); }
-  protected toggleHidden(): void { void this.store.setIncludeHidden(!this.store.includeHidden()); }
-  protected toggleAsset(asset: Asset): void { this.store.toggleSelection(asset.data.id); }
-
-  protected searchChanged(value: string): void {
-    if (this.searchTimer) clearTimeout(this.searchTimer);
-    this.searchTimer = setTimeout(() => void this.store.setSearch(value), 180);
-  }
-
-  protected selectAndSuggest(asset: Asset): void {
-    if (!this.store.isSelected(asset.data.id)) this.store.toggleSelection(asset.data.id);
-    const family = this.assetFamily(asset);
-    const candidate = this.capabilities.actions().find((action) =>
-      action.accepts.includes(family) && action.featured && this.capabilities.isActionExecutable(action),
-    );
-    if (candidate) this.openAction(candidate);
-  }
-
-  protected openAction(action: ActionDescriptor): void {
-    this.targetFormat.set(defaultTarget(action));
-    this.quality.set(this.prefs.defaultQuality());
-    this.parameters.set(defaultParameters(action.id));
-    this.store.openAction(action.id);
-  }
-  protected actionFor(recommendation: ActionRecommendation): ActionDescriptor | null { return this.capabilities.action(recommendation.actionId); }
-
-  protected async chooseDestination(): Promise<void> {
-    const paths = await this.store.pickDirectories();
-    if (!paths.length) return;
-    this.customDirectory.set(paths[0]);
-    this.destination.set('choose');
-  }
-
-  protected async runAction(action: ActionDescriptor): Promise<void> {
-    const workspaceId = this.store.workspace()?.id;
-    if (!workspaceId || !this.capabilities.isActionExecutable(action)) return;
-    const guidedDirectory = this.prefs.beginnerMode()
-      ? this.auth.onboarding()?.storageDirectory?.trim() || null
-      : null;
-    if (!guidedDirectory && this.destination() === 'choose' && !this.customDirectory()) {
-      await this.chooseDestination();
-      if (!this.customDirectory()) return;
+  constructor() {
+    const draft = this.memory.guidedFlowDraft();
+    if (draft) {
+      this.targetFormat.set(draft.targetFormat ?? 'pdf');
+      this.quality.set(draft.quality ?? 'balanced');
+      this.destination.set(draft.destination ?? 'subfolder');
+      this.customDirectory.set(draft.customDirectory ?? null);
+      this.finalCompression.set(draft.finalCompression ?? 'balanced');
+      this.improve.set(draft.improve ?? false);
+      this.stripMetadata.set(draft.stripMetadata ?? false);
+      this.targetSizeMb.set(draft.targetSizeMb ?? null);
+      this.signatureText.set(draft.signatureText ?? '');
+      this.collectionOrder.set(draft.collectionOrder ?? 'name');
+      this.advancedOpen.set(draft.advancedOpen ?? false);
+      if (draft.actionId && TASKS.some(task => task.id === draft.actionId)) this.selectedTask.set(draft.actionId as SimpleTask);
     }
-    const outputDestination = guidedDirectory
-      ? { destination: 'customFolder' as const, customDirectory: guidedDirectory }
-      : {
-          destination: this.destination() === 'subfolder' ? 'subfolder' as const : this.destination() === 'same' ? 'sameFolder' as const : 'customFolder' as const,
-          customDirectory: this.destination() === 'choose' ? this.customDirectory() : null,
-        };
+    effect(() => this.memory.saveGuidedFlowDraft({
+      actionId: this.selectedTask(), targetFormat: this.targetFormat(), quality: this.quality(), destination: this.destination(), customDirectory: this.customDirectory(), finalCompression: this.finalCompression(), improve: this.improve(), stripMetadata: this.stripMetadata(), targetSizeMb: this.targetSizeMb(), signatureText: this.signatureText(), collectionOrder: this.collectionOrder(), advancedOpen: this.advancedOpen(),
+    }));
+    if (this.store.activeActionId()) this.selectedTask.set(null);
+    if (!this.store.hasWorkspace()) void this.store.restoreRememberedWorkspace();
+  }
+
+  protected openSourcePreview(): void {
+    const asset = this.firstAsset();
+    if (asset) this.openAssetPreview(asset);
+  }
+
+  protected openAssetPreview(asset: Asset): void {
+    if (asset.kind === 'archive') {
+      void this.openArchiveBrowser();
+      return;
+    }
+    if (asset.kind !== 'file') return;
+    this.fullscreenPreviewPath.set(asset.data.path);
+    this.fullscreenPreviewTitle.set(asset.data.name);
+    this.fullscreenPreviewFamily.set(this.assetFamily(asset));
+  }
+
+  protected openResultPreview(): void {
+    const path = this.store.executionSummary()?.outputs?.[0];
+    if (!path) return;
+    this.fullscreenPreviewPath.set(path);
+    this.fullscreenPreviewTitle.set(this.fileName(path));
+    this.fullscreenPreviewFamily.set(this.pathFamily(path));
+  }
+
+  protected closeFullscreenPreview(): void {
+    this.fullscreenPreviewPath.set(null);
+    this.fullscreenPreviewFamily.set('unknown');
+  }
+
+  protected async openArchiveBrowser(): Promise<void> {
+    this.archivePage.set(0);
+    this.archiveBrowserOpen.set(true);
+    await this.store.inspectArchive(0, this.archivePageSize);
+  }
+
+  protected closeArchiveBrowser(): void { this.archiveBrowserOpen.set(false); }
+
+  protected async archiveNext(): Promise<void> {
+    const next = this.archivePage() + 1;
+    this.archivePage.set(next);
+    await this.store.inspectArchive(next * this.archivePageSize, this.archivePageSize);
+  }
+
+  protected async archivePrevious(): Promise<void> {
+    const previous = Math.max(0, this.archivePage() - 1);
+    this.archivePage.set(previous);
+    await this.store.inspectArchive(previous * this.archivePageSize, this.archivePageSize);
+  }
+
+  protected async previewArchiveEntry(path: string, family: FormatFamily): Promise<void> {
+    const extracted = await this.store.previewArchiveEntry(path);
+    if (!extracted) return;
+    this.fullscreenPreviewPath.set(extracted);
+    this.fullscreenPreviewTitle.set(this.archiveEntryName(path));
+    this.fullscreenPreviewFamily.set(family);
+  }
+
+  protected archiveEntryName(path: string): string { return path.split(/[\\/]/).pop() || path; }
+  protected familyMark(family: FormatFamily): string { return family === 'pdf' ? 'PDF' : family === 'image' ? 'IMG' : family === 'document' ? 'DOC' : family === 'spreadsheet' ? 'XLS' : family === 'presentation' ? 'PPT' : family === 'archive' ? 'ZIP' : family === 'video' ? 'VID' : family === 'audio' ? 'AUD' : 'TXT'; }
+  protected fullscreenPreviewMark(): string { return this.familyMark(this.fullscreenPreviewFamily()); }
+  private pathFamily(path: string): FormatFamily {
+    const extension = (path.split('.').pop() || '').toLowerCase();
+    if (extension === 'pdf') return 'pdf';
+    if (['jpg','jpeg','png','webp','gif','bmp','tif','tiff','heic','heif','avif'].includes(extension)) return 'image';
+    return 'unknown';
+  }
+
+  protected stepLabel(step: number): string { return ['','Accueil','Action','Configurer','Traitement','Résultat'][step] ?? ''; }
+  protected selectionLabel(): string { return this.selectionCount() === 1 ? 'ce fichier' : `ces ${this.selectionCount()} fichiers`; }
+  protected visibleSourceAssets(): Asset[] { return this.store.assets().filter(a => a.kind === 'file' || a.kind === 'archive').slice(0, 3); }
+  protected sourceOverflow(): number { return Math.max(0, this.selectionCount() - this.visibleSourceAssets().length); }
+  protected chooseTask(task: SimpleTask): void {
+    this.store.resetExecutionResult();
+    this.store.closeAction();
+    this.selectedTask.set(task);
+    this.pdfPassword.set('');
+    this.signatureText.set(this.signatureText());
+    const options = this.computeTargetOptions(task);
+    if (!options.some(option => option.value === this.targetFormat())) this.targetFormat.set(options[0]?.value ?? 'pdf');
+  }
+  protected returnToActions(): void { this.store.resetExecutionResult(); this.store.closeAction(); this.selectedTask.set(null); this.pdfPassword.set(''); }
+  protected async backHome(): Promise<void> { await this.router.navigate(['/']); }
+  protected async chooseDestination(): Promise<void> { const paths = await this.store.pickDirectories(); if (paths.length) { this.customDirectory.set(paths[0]); this.destination.set('choose'); } }
+  protected setTarget(value: string): void { this.targetFormat.set(value); }
+  protected setTargetSize(value: string): void { const n = Number(value); this.targetSizeMb.set(Number.isFinite(n) && n > 0 ? n : null); }
+
+  protected configureTitle(): string {
+    if (this.store.activeActionId()) return this.capabilities.action(this.store.activeActionId())?.title ?? 'Configurer l’action';
+    const task = TASKS.find(item => item.id === this.selectedTask());
+    return task?.title ?? 'Configurer';
+  }
+  protected configureSubtitle(): string {
+    if (this.selectedTask() === 'convert') return 'Choisissez seulement le résultat souhaité. FileFlow calcule les étapes intermédiaires.';
+    if (this.selectedTask() === 'organize') return this.isSinglePdf() ? 'FileFlow peut diviser ce PDF proprement.' : 'Les fichiers seront normalisés puis regroupés dans un seul PDF.';
+    if (this.selectedTask() === 'protect') return 'FileFlow crée une nouvelle copie protégée et conserve l’original.';
+    return this.activeAction()?.description ?? 'Les réglages utiles seulement.';
+  }
+  protected destinationLabel(): string {
+    const guided = this.prefs.beginnerMode() ? this.auth.onboarding()?.storageDirectory?.trim() : '';
+    if (guided) return guided;
+    if (this.destination() === 'choose') return this.customDirectory() ?? 'Choisir un dossier';
+    if (this.destination() === 'same') return 'À côté de l’original';
+    return 'Sous-dossier FileFlow';
+  }
+  protected supportsQuality(): boolean { return ['convert','compress','organize'].includes(this.selectedTask() ?? '') || this.activeAction()?.category === 'optimize'; }
+  protected canRun(): boolean {
+    const action = this.activeAction();
+    if (this.selectedTask() === 'rename') return true;
+    if (!action || !this.capabilities.isActionExecutable(action)) return false;
+    if (this.selectedTask() === 'protect' && !this.pdfPassword().trim()) return false;
+    return true;
+  }
+  protected launchLabel(): string { if (this.selectedTask() === 'rename') return 'Ouvrir le renommage'; if (this.selectedTask() === 'organize' && this.isSinglePdf()) return 'Diviser le PDF'; if (this.willProducePdf()) return 'Créer le PDF'; return `Lancer ${this.configureTitle().toLowerCase()}`; }
+
+  protected async runCurrent(): Promise<void> {
+    if (this.selectedTask() === 'rename') { await this.router.navigate(['/organize']); return; }
+    const action = this.activeAction();
+    const workspaceId = this.store.workspace()?.id;
+    if (!action || !workspaceId || !this.capabilities.isActionExecutable(action)) return;
+    if (this.selectedTask() === 'protect' && !this.pdfPassword().trim()) return;
+
+    const guidedDirectory = this.prefs.beginnerMode() ? this.auth.onboarding()?.storageDirectory?.trim() || null : null;
+    const destination = guidedDirectory ? 'customFolder' as const : this.destination() === 'same' ? 'sameFolder' as const : this.destination() === 'choose' ? 'customFolder' as const : 'subfolder' as const;
+    const customDirectory = guidedDirectory ?? (this.destination() === 'choose' ? this.customDirectory() : null);
+    const parameters: Record<string, string | number | boolean | null> = {
+      finalCompression: this.finalCompression(), improve: this.improve(), stripMetadata: this.stripMetadata(), targetSizeMb: this.targetSizeMb(), signatureText: this.signatureText().trim() || null, collectionOrder: this.collectionOrder(),
+    };
+    if (this.selectedTask() === 'protect') parameters['password'] = this.pdfPassword();
+
     await this.store.executeAction({
       workspaceId,
       actionId: action.id,
       selectedAssetIds: [...this.store.selectedIds()],
-      targetFormat: this.effectiveTarget(action),
-      quality: this.supportsQuality(action) ? this.quality() : null,
-      parameters: this.parameters(),
-      outputPolicy: {
-        destination: outputDestination.destination,
-        customDirectory: outputDestination.customDirectory,
-        subfolderName: 'FileFlow',
-        preserveTree: this.preserveTree(),
-        conflict: 'increment',
-        naming: 'original',
-        overwriteOriginal: false,
-      },
+      targetFormat: this.actionTargetFormat(action),
+      quality: this.supportsQuality() ? this.quality() : null,
+      parameters,
+      outputPolicy: { destination, customDirectory, subfolderName: 'FileFlow', preserveTree: false, conflict: 'increment', naming: 'original', overwriteOriginal: false },
     });
+    this.pdfPassword.set('');
+    this.showPdfPassword.set(false);
   }
 
-  protected parameterNumber(key: string, fallback: number): number { const value = this.parameters()[key]; return typeof value === 'number' ? value : fallback; }
-  protected parameterString(key: string, fallback: string): string { const value = this.parameters()[key]; return typeof value === 'string' ? value : fallback; }
-  protected setNumberParameter(key: string, value: string | number): void { const parsed = Number(value); if (Number.isFinite(parsed)) this.parameters.update((current) => ({ ...current, [key]: parsed })); }
-  protected setTextParameter(key: string, value: string): void { this.parameters.update((current) => ({ ...current, [key]: value })); }
-  protected isImageTool(action: ActionDescriptor): boolean { return action.id.startsWith('image-') && !['image-convert','image-batch-convert','image-optimize'].includes(action.id); }
-  protected previewTransform(action: ActionDescriptor): string {
-    switch (action.id) {
-      case 'image-rotate-left': return 'rotate(-90deg) scale(.78)';
-      case 'image-rotate-right': return 'rotate(90deg) scale(.78)';
-      case 'image-rotate-180': return 'rotate(180deg)';
-      case 'image-rotate': return `rotate(${this.parameterNumber('angle',90)}deg) scale(.78)`;
-      case 'image-flip-horizontal': return 'scaleX(-1)';
-      case 'image-flip-vertical': return 'scaleY(-1)';
-      default: return 'none';
+  protected restart(): void { this.store.resetExecutionResult(); this.store.closeAction(); this.selectedTask.set(null); this.pdfPassword.set(''); this.memory.clearGuidedFlowDraft(); }
+  protected processingLabel(): string { return this.activeAction()?.title ?? 'FileFlow prépare votre résultat'; }
+  protected phaseRank(): number {
+    if (!this.store.executionPhaseActive()) return this.store.executionProgress() > 0 ? 1 : 0;
+    switch (this.store.executionPhase()) {
+      case 'conversion': return 1;
+      case 'assemblage': return 2;
+      case 'finalisation': return 3;
+      case 'validation': return 4;
+      default: return 0;
     }
   }
-  protected previewFilter(action: ActionDescriptor): string {
-    if (action.id === 'image-grayscale') return 'grayscale(1)';
-    if (action.id === 'image-sepia') return `sepia(${this.parameterNumber('strength',80)/100})`;
-    if (action.id === 'image-blur') return `blur(${Math.min(8,this.parameterNumber('radius',2))}px)`;
-    if (action.id === 'image-adjust') return `brightness(${1+this.parameterNumber('brightness',0)/100}) contrast(${1+this.parameterNumber('contrast',0)/100}) saturate(${this.parameterNumber('saturation',100)/100})`;
-    if (action.id === 'image-auto-gamma') return 'brightness(1.06) contrast(1.04)';
-    if (action.id === 'image-contrast-stretch') return `contrast(${1 + Math.min(0.5,(this.parameterNumber('blackPoint',0.5)+this.parameterNumber('whitePoint',0.5))/40)})`;
-    if (action.id === 'image-colorspace-srgb') return 'saturate(1.02)';
-    return 'none';
+  protected phaseDetail(): string {
+    if (!this.store.executionPhaseActive()) return `${this.store.executionCompleted()} / ${Math.max(1,this.store.executionTotal() || this.selectionCount())} fichier(s)`;
+    const completed = this.store.executionPhaseCompleted();
+    const total = this.store.executionPhaseTotal();
+    return this.store.executionPhase() === 'conversion' ? `${completed} / ${Math.max(1,total)} fichier(s)` : 'FileFlow prépare le traitement';
   }
-  protected relatedFormatActions(activeId: string): ActionDescriptor[] {
-    const profile = this.activeFormatProfile(); if (!profile) return [];
-    return profile.actions.map((id) => this.capabilities.action(id)).filter((action): action is ActionDescriptor => !!action && action.id !== activeId && this.capabilities.isActionExecutable(action)).slice(0,8);
+  protected previewTitle(): string { return this.primaryFileName(); }
+  protected primaryFileName(): string { return this.firstAsset()?.data.name ?? 'Votre sélection'; }
+  protected primaryFileMark(): string { const a = this.firstAsset(); return a ? this.assetMark(a) : 'FF'; }
+
+  protected smartSuggestedTask(): SimpleTask { return this.selectionCount() > 1 || this.store.counts().archives > 0 ? 'organize' : this.primaryFamily() === 'pdf' ? 'compress' : 'convert'; }
+  protected smartSuggestionTitle(): string { const task = this.smartSuggestedTask(); return task === 'organize' ? 'Créer un seul PDF à partir de toute cette sélection' : task === 'compress' ? 'Ce PDF peut être préparé pour le partage' : 'Créer un PDF compatible en un clic'; }
+  protected smartSuggestionText(): string { return this.smartSuggestedTask() === 'organize' ? 'Dossier ou ZIP : FileFlow convertit les éléments, les fusionne puis nettoie les intermédiaires.' : 'FileFlow choisit automatiquement la route la plus fidèle disponible sur cette machine.'; }
+
+  protected routeSummary(): string {
+    if (this.willProducePdf()) return 'Route PDF intelligente activée';
+    return 'Conversion directe privilégiée';
+  }
+  protected routeDetail(): string {
+    if (this.willProducePdf()) return 'Si aucune conversion directe fiable n’existe, FileFlow utilise un intermédiaire non destructif (PNG/TIFF/DOCX), valide le PDF final puis supprime le workspace temporaire.';
+    return 'Les moteurs et formats intermédiaires restent invisibles dans le mode simple.';
   }
 
-  protected targetOptions(action: ActionDescriptor): string[] { return TARGET_OPTIONS[action.id] ?? []; }
-  protected effectiveTarget(action: ActionDescriptor): string | null { return this.targetFormat() ?? defaultTarget(action); }
-  protected supportsQuality(action: ActionDescriptor): boolean { return QUALITY_ACTIONS.has(action.id); }
-  protected isStreamCompression(action: ActionDescriptor): boolean { return action.id === 'zstd-compress' || action.id === 'lz4-compress'; }
-  protected actionRuntimeLabel(action: ActionDescriptor): string {
-    const state = this.capabilities.actionState(action);
-    return state === 'ready' ? 'Exécution locale prête' : state === 'missing-engine' ? 'Dépendance manquante' : 'Pipeline planifié';
+  private resolveActionId(): string | null {
+    if (this.store.activeActionId()) return this.store.activeActionId();
+    const task = this.selectedTask();
+    const family = this.primaryFamily();
+    const target = this.targetFormat();
+    if (!task) return null;
+    if (task === 'convert') {
+      if (target === 'pdf') return 'smart-to-pdf';
+      if (family === 'image') return 'image-convert';
+      if (['document','spreadsheet','presentation'].includes(family)) return 'office-convert';
+      if (family === 'audio') return 'audio-convert';
+      if (family === 'video') return target === 'gif' ? 'video-to-gif' : 'video-convert';
+      if (family === 'text') return target === 'pdf' ? 'text-to-pdf' : 'text-convert';
+      if (family === 'ebook') return target === 'pdf' ? 'smart-to-pdf' : 'ebook-convert';
+      if (family === 'pdf') return target === 'txt' ? 'pdf-extract-text' : target === 'pdf' ? 'smart-to-pdf' : 'pdf-to-images';
+      return 'smart-to-pdf';
+    }
+    if (task === 'compress') {
+      if (family === 'pdf') return 'pdf-compress';
+      if (family === 'image') return 'image-optimize';
+      if (family === 'audio' || family === 'video') return 'media-compress';
+      if (family === 'archive') return 'archive-package';
+      return 'smart-to-pdf';
+    }
+    if (task === 'extract') {
+      if (family === 'pdf') return 'pdf-extract-text';
+      if (family === 'image') return 'ocr-image';
+      if (family === 'archive') return 'archive-extract';
+      if (family === 'video') return 'extract-audio';
+      return 'smart-to-pdf';
+    }
+    if (task === 'organize') return this.isSinglePdf() ? 'pdf-split' : 'collection-to-pdf';
+    if (task === 'protect') return family === 'pdf' ? 'pdf-protect' : 'smart-to-pdf';
+    return null;
   }
 
-  protected engineStatus(action: ActionDescriptor): string {
-    const missing = this.capabilities.missingEngines(action);
-    if (!missing.length) return action.requiredEngines.length ? action.requiredEngines.join(' · ') : 'Fonction native FileFlow';
-    return `Manquant : ${missing.join(', ')}`;
+  private actionTargetFormat(action: ActionDescriptor): string | null {
+    if (['smart-to-pdf','collection-to-pdf','pdf-compress','pdf-protect','pdf-split','pdf-extract-text','ocr-image','archive-extract'].includes(action.id)) return null;
+    if (action.id === 'archive-package') return 'zip';
+    if (action.id === 'pdf-to-images') return this.targetFormat() === 'txt' ? null : this.targetFormat();
+    return this.targetFormat();
   }
 
-  protected sortArrow(key: AssetSortKey): string { return this.store.sortBy() === key ? (this.store.sortDirection() === 'ascending' ? '↑' : '↓') : ''; }
-  protected guidedDestinationLabel(): string {
-    const path = this.auth.onboarding()?.storageDirectory;
-    if (!path) return 'dossier FileFlow';
-    const normalized = path.replace(/\\/g, '/').replace(/\/$/, '');
-    return normalized.split('/').pop() || 'dossier FileFlow';
+  private computeTargetOptions(task = this.selectedTask()): { value: string; label: string }[] {
+    if (task === 'organize') return [{ value: 'pdf', label: 'PDF unique' }];
+    if (task === 'protect') return [{ value: 'pdf', label: 'PDF protégé' }];
+    if (task !== 'convert') return [{ value: this.targetFormat() || 'pdf', label: this.targetFormat().toUpperCase() || 'PDF' }];
+    if (this.selectionCount() > 1 || this.store.counts().archives > 0) return [{ value: 'pdf', label: 'PDF' }];
+    switch (this.primaryFamily()) {
+      case 'image': return options(['pdf','jpg','png','webp','tiff']);
+      case 'pdf': return [{value:'pdf',label:'PDF (finaliser)'},{value:'png',label:'Images PNG'},{value:'txt',label:'Texte'}];
+      case 'document': return options(['pdf','docx','odt','rtf']);
+      case 'spreadsheet': return options(['pdf','xlsx','ods','csv']);
+      case 'presentation': return options(['pdf','pptx','odp']);
+      case 'text': return options(['pdf','docx','html','md','txt']);
+      case 'ebook': return options(['pdf','docx','html','txt','epub']);
+      case 'audio': return options(['mp3','m4a','wav','flac']);
+      case 'video': return options(['mp4','webm','mkv','mov','gif']);
+      case 'archive': return [{value:'pdf',label:'PDF unique'},{value:'zip',label:'ZIP'}];
+      default: return [{ value: 'pdf', label: 'PDF' }];
+    }
   }
-  protected workspaceSubtitle(): string { const roots = this.store.workspace()?.roots.length ?? 0; return this.store.busy() ? 'Les résultats apparaissent progressivement, sans charger tout le dossier en mémoire.' : `${roots} source${roots > 1 ? 's' : ''} analysée${roots > 1 ? 's' : ''} · recommandations calculées localement.`; }
-  protected familyLabel(family: FormatFamily): string { return FAMILY_LABELS[family]; }
+
   protected assetFamily(asset: Asset): FormatFamily { return asset.kind === 'file' || asset.kind === 'archive' ? asset.data.format.family : 'unknown'; }
-  protected assetFormat(asset: Asset): string { switch (asset.kind) { case 'directory': return 'Dossier'; case 'symlink': return 'Lien'; case 'archive': case 'file': return asset.data.format.id; } }
-  protected assetMark(asset: Asset): string { switch (asset.kind) { case 'directory': return 'DIR'; case 'symlink': return 'LNK'; case 'archive': return 'ZIP'; case 'file': return (asset.data.format.extension ?? asset.data.format.id).slice(0,4); } }
+  protected assetFormat(asset: Asset): string { return asset.kind === 'file' || asset.kind === 'archive' ? (asset.data.format.extension || asset.data.format.id).toUpperCase() : asset.kind.toUpperCase(); }
   protected assetSize(asset: Asset): string { return asset.kind === 'file' || asset.kind === 'archive' ? this.formatBytes(asset.data.sizeBytes) : '—'; }
-  protected actionMark(action: ActionDescriptor): string { return ACTION_MARKS[action.category] ?? action.title.slice(0,2).toUpperCase(); }
-  protected archiveSamplePaths(archive: ArchiveInspection): string { return archive.samples.slice(0, 3).map((sample) => sample.path).join(' · '); }
-  protected formatBytes(bytes: number): string { if (bytes < 1024) return `${bytes} o`; const units=['Ko','Mo','Go','To']; let value=bytes/1024,index=0; while(index<units.length-1&&value>=1024){value/=1024;index+=1;} return `${value>=10?value.toFixed(0):value.toFixed(1)} ${units[index]}`; }
+  protected assetMark(asset: Asset): string { const family = this.assetFamily(asset); return family === 'pdf' ? 'PDF' : family === 'image' ? 'IMG' : family === 'archive' ? 'ZIP' : family === 'video' ? 'VID' : family === 'audio' ? 'AUD' : family === 'document' ? 'DOC' : family === 'spreadsheet' ? 'XLS' : family === 'presentation' ? 'PPT' : 'TXT'; }
+  protected formatBytes(bytes: number): string { if (!bytes) return '0 o'; const units=['o','Ko','Mo','Go','To']; const i=Math.min(units.length-1,Math.floor(Math.log(bytes)/Math.log(1024))); return `${(bytes/1024**i).toFixed(i===0?0:1)} ${units[i]}`; }
+  protected fileName(path: string): string { return path.split(/[\\/]/).pop() || path; }
+  protected extensionLabel(path: string): string { const ext=this.fileName(path).split('.').pop(); return ext ? ext.toUpperCase() : 'Fichier'; }
+  protected resultMark(path: string): string { const ext=this.extensionLabel(path); return ext === 'PDF' ? 'PDF' : ext.slice(0,3); }
 }
 
-function defaultParameters(actionId: string): Record<string, string | number | boolean | null> {
-  switch (actionId) {
-    case 'image-rotate': return { angle: 90 };
-    case 'image-adjust': return { brightness: 0, contrast: 0, saturation: 100, gamma: 1 };
-    case 'image-sepia': return { strength: 80 };
-    case 'image-sharpen': return { amount: 1 };
-    case 'image-blur': return { radius: 2 };
-    case 'image-threshold': return { threshold: 50 };
-    case 'image-posterize': return { levels: 6 };
-    case 'image-pixelate': return { pixelPercent: 8 };
-    case 'image-crop-center': return { width: 1200, height: 1200 };
-    case 'image-crop-custom': return { width: 1200, height: 1200, x: 0, y: 0 };
-    case 'image-canvas': return { width: 1920, height: 1080, background: 'white' };
-    case 'image-contrast-stretch': return { blackPoint: 0.5, whitePoint: 0.5 };
-    case 'image-set-dpi': return { dpi: 300 };
-    case 'image-perspective': return { x0: 0, y0: 0, x1: 1200, y1: 0, x2: 1200, y2: 1200, x3: 0, y3: 1200, width: 1200, height: 1200 };
-    case 'image-resize-exact': return { width: 1920, height: 1080, fit: 'contain' };
-    case 'image-border': return { pixels: 16, color: 'white' };
-    case 'image-vignette': return { radius: 12 };
-    case 'image-watermark': return { text: 'FileFlow', fontSize: 28 };
-    case 'image-flatten': return { background: 'white' };
-    case 'pdf-rotate-pages': return { angle: 90, pages: '1-z' };
-    case 'pdf-select-pages': return { pages: '1-z' };
-    case 'video-rotate': return { direction: 'right' };
-    case 'video-resize': return { width: 1920, height: 1080 };
-    case 'video-thumbnail': return { second: 1 };
-    case 'media-trim': return { start: 0, duration: 30 };
-    case 'audio-gain': return { gainDb: 0 };
-    default: return {};
-  }
-}
-
-const TARGET_OPTIONS: Record<string, string[]> = {
-  'image-convert': ['jpg','png','webp','avif','heic','jxl','tiff','gif'],
-  'image-batch-convert': ['jpg','png','webp','avif','jxl','tiff'],
-  'audio-convert': ['mp3','m4a','wav','flac','ogg','opus'],
-  'extract-audio': ['m4a','mp3','wav','flac'],
-  'video-convert': ['mp4','webm','mkv','mov'],
-  'office-convert': ['pdf','docx','odt','rtf','txt','html','xlsx','ods','csv','pptx','odp'],
-  'text-convert': ['html','md','docx','epub','txt'],
-  'ebook-convert': ['html','md','docx','txt','epub'],
-  'archive-create': ['zip','7z','tar'],
-  'archive-package': ['zip','7z','tar','tar.gz','tar.xz','tar.bz2','tar.zst','tar.lz4'],
-};
-const QUALITY_ACTIONS = new Set(['image-optimize','image-resize','pdf-compress','media-compress','video-convert','zstd-compress','lz4-compress','tar-zstd-create','tar-lz4-create']);
-function defaultTarget(action: ActionDescriptor): string | null {
-  if (action.outputFormat) return action.outputFormat;
-  return TARGET_OPTIONS[action.id]?.[0] ?? null;
-}
-
-const FAMILY_LABELS: Record<FormatFamily,string> = { image:'Images',pdf:'PDF',document:'Documents',spreadsheet:'Tableurs',presentation:'Présentations',audio:'Audio',video:'Vidéos',archive:'Archives',ebook:'Livres',text:'Texte',unknown:'Autres' };
-const ACTION_MARKS: Record<string,string> = { pdf:'PDF',image:'IMG',media:'▶',archive:'ZIP',extract:'Aa',organize:'▦',privacy:'◌',optimize:'↓',convert:'↔',document:'DOC' };
+function options(values: string[]): { value: string; label: string }[] { return values.map(value => ({ value, label: value === 'jpg' ? 'JPEG / JPG' : value === 'tiff' ? 'TIFF' : value.toUpperCase() })); }

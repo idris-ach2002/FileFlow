@@ -2,6 +2,7 @@ import { computed, inject, Injectable, signal } from '@angular/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { TauriBridgeService } from '../../../core/ipc/tauri-bridge.service';
 import { PreferencesService } from '../../../core/preferences/preferences.service';
+import { UiMemoryService } from '../../../core/state/ui-memory.service';
 import {
   ActionRecommendation,
   ArchiveInspection,
@@ -40,6 +41,7 @@ const PAGE_SIZE = 200;
 export class WorkspaceStore {
   private readonly bridge = inject(TauriBridgeService);
   private readonly preferences = inject(PreferencesService);
+  private readonly uiMemory = inject(UiMemoryService);
   private queryGeneration = 0;
   private intakeFlushScheduled = false;
   private executionFlushScheduled = false;
@@ -80,14 +82,29 @@ export class WorkspaceStore {
   readonly executionCompleted = signal(0);
   readonly executionTotal = signal(0);
   readonly executionFailures = signal<string[]>([]);
+  readonly executionPhase = signal('preparation');
+  readonly executionPhaseActive = signal(false);
+  readonly executionPhaseCompleted = signal(0);
+  readonly executionPhaseTotal = signal(1);
   readonly outputActionBusy = signal(false);
   readonly outputActionMessage = signal<string | null>(null);
 
   readonly busy = computed(() => this.phase() === 'scanning');
   readonly executing = computed(() => this.runningJobId() !== null);
   readonly executionProgress = computed(() => {
-    const total = this.executionTotal();
-    return total > 0 ? Math.min(100, Math.round((this.executionCompleted() / total) * 100)) : 0;
+    if (this.executionPhaseActive()) {
+      const phase = this.executionPhase();
+      const completed = this.executionPhaseCompleted();
+      const total = Math.max(1, this.executionPhaseTotal());
+      const ratio = Math.min(1, completed / total);
+      if (phase === 'preparation') return Math.round(4 + ratio * 8);
+      if (phase === 'conversion') return Math.round(12 + ratio * 58);
+      if (phase === 'assemblage') return Math.round(72 + ratio * 12);
+      if (phase === 'finalisation') return Math.round(86 + ratio * 8);
+      if (phase === 'validation') return Math.round(94 + ratio * 5);
+    }
+    const batchTotal = this.executionTotal();
+    return batchTotal > 0 ? Math.min(100, Math.round((this.executionCompleted() / batchTotal) * 100)) : 0;
   });
   readonly hasWorkspace = computed(() => this.workspace() !== null || this.activeWorkspaceId() !== null);
   readonly hasMore = computed(() => this.assets().length < this.pageTotal());
@@ -141,6 +158,7 @@ export class WorkspaceStore {
         warnings: this.warnings().length,
       });
       this.phase.set('ready');
+      this.uiMemory.saveWorkspaceRoots(snapshot.roots);
       await Promise.all([this.loadInitialPage(), this.loadWorkspaceDetails()]);
       if (this.pendingActionId()) {
         this.activeActionId.set(this.pendingActionId());
@@ -152,6 +170,13 @@ export class WorkspaceStore {
       this.phase.set('error');
       return false;
     }
+  }
+
+  async restoreRememberedWorkspace(): Promise<boolean> {
+    if (this.hasWorkspace() || this.busy()) return this.hasWorkspace();
+    const roots = this.uiMemory.workspaceRoots();
+    if (!roots.length) return false;
+    return this.start(roots);
   }
 
   setPendingAction(actionId: string | null): void {
@@ -236,6 +261,10 @@ export class WorkspaceStore {
     this.outputActionMessage.set(null);
     this.executionCompleted.set(0);
     this.executionTotal.set(0);
+    this.executionPhase.set('preparation');
+    this.executionPhaseActive.set(false);
+    this.executionPhaseCompleted.set(0);
+    this.executionPhaseTotal.set(1);
     try {
       const summary = await this.bridge.executeAction(request, (event) => this.onExecutionEvent(event));
       this.executionSummary.set(summary);
@@ -249,6 +278,20 @@ export class WorkspaceStore {
     } finally {
       this.runningJobId.set(null);
     }
+  }
+
+  resetExecutionResult(): void {
+    if (this.executing()) return;
+    this.executionSummary.set(null);
+    this.executionError.set(null);
+    this.executionFailures.set([]);
+    this.outputActionMessage.set(null);
+    this.executionCompleted.set(0);
+    this.executionTotal.set(0);
+    this.executionPhase.set('preparation');
+    this.executionPhaseActive.set(false);
+    this.executionPhaseCompleted.set(0);
+    this.executionPhaseTotal.set(1);
   }
 
   async refreshAfterMutation(): Promise<void> {
@@ -321,6 +364,12 @@ export class WorkspaceStore {
         this.pendingExecutionProgress = { completed: event.data.completed, total: event.data.total };
         this.scheduleExecutionFlush();
         break;
+      case 'phase':
+        this.executionPhaseActive.set(true);
+        this.executionPhase.set(event.data.phase);
+        this.executionPhaseCompleted.set(event.data.completed);
+        this.executionPhaseTotal.set(Math.max(1, event.data.total));
+        break;
       case 'finished':
         this.flushExecutionProgress();
         this.executionSummary.set(event.data.summary);
@@ -372,18 +421,39 @@ export class WorkspaceStore {
     }
   }
 
-  async inspectArchive(): Promise<void> {
+  async inspectArchive(offset = 0, limit = 24): Promise<void> {
     const workspaceId = this.workspace()?.id;
     if (!workspaceId || this.archiveInspectionLoading()) return;
-    const selectedArchive = this.selectedAssets().find((asset) => asset.kind === 'archive');
+    const selectedArchive = this.selectedAssets().find((asset) => asset.kind === 'archive')
+      ?? this.assets().find((asset) => asset.kind === 'archive');
     this.archiveInspectionLoading.set(true);
     this.archiveInspectionError.set(null);
     try {
-      this.archiveInspection.set(await this.bridge.inspectArchive(workspaceId, selectedArchive?.data.id ?? null));
+      this.archiveInspection.set(await this.bridge.inspectArchive(
+        workspaceId,
+        selectedArchive?.data.id ?? null,
+        Math.max(0, offset),
+        Math.min(96, Math.max(1, limit)),
+      ));
     } catch (error) {
       this.archiveInspectionError.set(errorMessage(error));
     } finally {
       this.archiveInspectionLoading.set(false);
+    }
+  }
+
+
+  async previewArchiveEntry(entryPath: string): Promise<string | null> {
+    const workspaceId = this.workspace()?.id;
+    if (!workspaceId) return null;
+    const selectedArchive = this.selectedAssets().find((asset) => asset.kind === 'archive')
+      ?? this.assets().find((asset) => asset.kind === 'archive');
+    if (!selectedArchive || selectedArchive.kind !== 'archive') return null;
+    try {
+      return await this.bridge.previewArchiveEntry(workspaceId, entryPath, selectedArchive.data.id);
+    } catch (error) {
+      this.archiveInspectionError.set(errorMessage(error));
+      return null;
     }
   }
 
@@ -513,6 +583,10 @@ export class WorkspaceStore {
     this.runningJobId.set(null);
     this.executionCompleted.set(0);
     this.executionTotal.set(0);
+    this.executionPhase.set('preparation');
+    this.executionPhaseActive.set(false);
+    this.executionPhaseCompleted.set(0);
+    this.executionPhaseTotal.set(1);
     this.executionFailures.set([]);
     this.pendingIntakeStats = null;
     this.pendingIntakeAssets = [];
