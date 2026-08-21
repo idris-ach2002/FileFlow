@@ -283,7 +283,16 @@ export class TauriBridgeService {
     return invoke<DuplicateReport>('confirm_duplicates', { workspaceId });
   }
 
-  inspectArchive(workspaceId: string, assetId?: string | null): Promise<ArchiveInspection> {
-    return invoke<ArchiveInspection>('inspect_archive', { workspaceId, assetId: assetId ?? null });
+  inspectArchive(
+    workspaceId: string,
+    assetId?: string | null,
+    offset = 0,
+    limit = 24,
+  ): Promise<ArchiveInspection> {
+    return invoke<ArchiveInspection>('inspect_archive', { workspaceId, assetId: assetId ?? null, offset, limit });
+  }
+
+  previewArchiveEntry(workspaceId: string, entryPath: string, assetId?: string | null): Promise<string> {
+    return invoke<string>('preview_archive_entry', { workspaceId, assetId: assetId ?? null, entryPath });
   }
 }

@@ -61,77 +61,137 @@ impl FormatRegistry {
     }
 }
 
-
 fn structured_descriptor(sample: &[u8], extension: Option<&str>) -> Option<DetectedFormat> {
     if sample.starts_with(b"%PDF-") {
-        return Some(detected("pdf", extension, "application/pdf", FormatFamily::Pdf));
+        return Some(detected(
+            "pdf",
+            extension,
+            "application/pdf",
+            FormatFamily::Pdf,
+        ));
     }
     if sample.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Some(detected("png", extension, "image/png", FormatFamily::Image));
     }
     if sample.starts_with(&[0xff, 0xd8, 0xff]) {
-        return Some(detected("jpeg", extension, "image/jpeg", FormatFamily::Image));
+        return Some(detected(
+            "jpeg",
+            extension,
+            "image/jpeg",
+            FormatFamily::Image,
+        ));
     }
     if sample.starts_with(b"GIF87a") || sample.starts_with(b"GIF89a") {
         return Some(detected("gif", extension, "image/gif", FormatFamily::Image));
     }
     if sample.len() >= 12 && &sample[..4] == b"RIFF" && &sample[8..12] == b"WEBP" {
-        return Some(detected("webp", extension, "image/webp", FormatFamily::Image));
+        return Some(detected(
+            "webp",
+            extension,
+            "image/webp",
+            FormatFamily::Image,
+        ));
     }
     if sample.len() >= 12 && &sample[4..8] == b"ftyp" {
         let brand = &sample[8..12];
         if matches!(brand, b"avif" | b"avis") {
-            return Some(detected("avif", extension, "image/avif", FormatFamily::Image));
+            return Some(detected(
+                "avif",
+                extension,
+                "image/avif",
+                FormatFamily::Image,
+            ));
         }
-        if matches!(brand, b"heic" | b"heix" | b"hevc" | b"hevx" | b"mif1" | b"msf1") {
-            return Some(detected("heic", extension, "image/heic", FormatFamily::Image));
+        if matches!(
+            brand,
+            b"heic" | b"heix" | b"hevc" | b"hevx" | b"mif1" | b"msf1"
+        ) {
+            return Some(detected(
+                "heic",
+                extension,
+                "image/heic",
+                FormatFamily::Image,
+            ));
         }
         if matches!(brand, b"M4A " | b"M4B " | b"M4P ") {
             return Some(detected("m4a", extension, "audio/mp4", FormatFamily::Audio));
         }
         if matches!(brand, b"qt  ") {
-            return Some(detected("mov", extension, "video/quicktime", FormatFamily::Video));
+            return Some(detected(
+                "mov",
+                extension,
+                "video/quicktime",
+                FormatFamily::Video,
+            ));
         }
-        if matches!(brand, b"isom" | b"iso2" | b"mp41" | b"mp42" | b"avc1" | b"dash") {
+        if matches!(
+            brand,
+            b"isom" | b"iso2" | b"mp41" | b"mp42" | b"avc1" | b"dash"
+        ) {
             return Some(detected("mp4", extension, "video/mp4", FormatFamily::Video));
         }
     }
 
-    let zip_like = sample.starts_with(b"PK\x03\x04") || sample.starts_with(b"PK\x05\x06") || sample.starts_with(b"PK\x07\x08");
+    let zip_like = sample.starts_with(b"PK\x03\x04")
+        || sample.starts_with(b"PK\x05\x06")
+        || sample.starts_with(b"PK\x07\x08");
     if zip_like {
         let has = |needle: &[u8]| sample.windows(needle.len()).any(|window| window == needle);
         if has(b"word/") || has(b"word\\") {
             return Some(detected(
-                "docx", extension,
+                "docx",
+                extension,
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 FormatFamily::Document,
             ));
         }
         if has(b"xl/") || has(b"xl\\") {
             return Some(detected(
-                "xlsx", extension,
+                "xlsx",
+                extension,
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 FormatFamily::Spreadsheet,
             ));
         }
         if has(b"ppt/") || has(b"ppt\\") {
             return Some(detected(
-                "pptx", extension,
+                "pptx",
+                extension,
                 "application/vnd.openxmlformats-officedocument.presentationml.presentation",
                 FormatFamily::Presentation,
             ));
         }
         if has(b"application/epub+zip") {
-            return Some(detected("epub", extension, "application/epub+zip", FormatFamily::Ebook));
+            return Some(detected(
+                "epub",
+                extension,
+                "application/epub+zip",
+                FormatFamily::Ebook,
+            ));
         }
         if has(b"application/vnd.oasis.opendocument.text") {
-            return Some(detected("odt", extension, "application/vnd.oasis.opendocument.text", FormatFamily::Document));
+            return Some(detected(
+                "odt",
+                extension,
+                "application/vnd.oasis.opendocument.text",
+                FormatFamily::Document,
+            ));
         }
         if has(b"application/vnd.oasis.opendocument.spreadsheet") {
-            return Some(detected("ods", extension, "application/vnd.oasis.opendocument.spreadsheet", FormatFamily::Spreadsheet));
+            return Some(detected(
+                "ods",
+                extension,
+                "application/vnd.oasis.opendocument.spreadsheet",
+                FormatFamily::Spreadsheet,
+            ));
         }
         if has(b"application/vnd.oasis.opendocument.presentation") {
-            return Some(detected("odp", extension, "application/vnd.oasis.opendocument.presentation", FormatFamily::Presentation));
+            return Some(detected(
+                "odp",
+                extension,
+                "application/vnd.oasis.opendocument.presentation",
+                FormatFamily::Presentation,
+            ));
         }
         // Generic ZIP remains an archive unless a known container extension can
         // refine it (for example iWork files which are ZIP-based too).
@@ -165,7 +225,10 @@ fn text_descriptor(sample: &[u8], extension: Option<String>) -> Option<DetectedF
     if !looks_like_text(sample) {
         return None;
     }
-    let text = std::str::from_utf8(sample).ok()?.trim_start_matches('\u{feff}').trim_start();
+    let text = std::str::from_utf8(sample)
+        .ok()?
+        .trim_start_matches('\u{feff}')
+        .trim_start();
     let (id, mime) = if (text.starts_with('{') && text.contains(':')) || text.starts_with('[') {
         ("json", "application/json")
     } else if text.starts_with("<?xml") || (text.starts_with('<') && text.contains('>')) {
@@ -534,7 +597,10 @@ mod tests {
     fn structured_text_identifies_json_and_html() {
         let registry = FormatRegistry;
         let json = registry.detect(Path::new("payload.bin"), br#"{"ok":true}"#);
-        let html = registry.detect(Path::new("page.bin"), b"<!doctype html><html><body>Hi</body></html>");
+        let html = registry.detect(
+            Path::new("page.bin"),
+            b"<!doctype html><html><body>Hi</body></html>",
+        );
 
         assert_eq!(json.id, "json");
         assert_eq!(json.family, FormatFamily::Text);

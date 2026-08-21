@@ -1192,7 +1192,9 @@ mod tests {
                 .unwrap();
         }
 
-        storage.touch_account(first, now + chrono::Duration::minutes(2)).unwrap();
+        storage
+            .touch_account(first, now + chrono::Duration::minutes(2))
+            .unwrap();
         storage
             .remember_session(first, now + chrono::Duration::days(30))
             .unwrap();
@@ -1201,7 +1203,10 @@ mod tests {
         assert_eq!(known.len(), 2);
         assert_eq!(known[0].id, first);
 
-        let trusted = storage.trusted_account(now).unwrap().expect("trusted session");
+        let trusted = storage
+            .trusted_account(now)
+            .unwrap()
+            .expect("trusted session");
         assert_eq!(trusted.0, first);
         storage.clear_trusted_session(first).unwrap();
         assert!(storage.trusted_account(now).unwrap().is_none());

@@ -298,3 +298,42 @@ ff-help-page .guide-card strong,
 ff-history-page .history-row strong,
 ff-automations-page .template-card strong,
 ff-organize-page .controls strong { font-size: 13px !important; }
+
+/* Responsive safety net -----------------------------------------------------
+ * FileFlow must remain usable from a narrow desktop window down to phone-like
+ * widths. Feature pages keep their visual identity, while these rules enforce
+ * fluid containers, bounded media and predictable one-column fallbacks.
+ */
+html, body { min-width: 0; overflow-x: hidden; }
+img, video, canvas, svg, iframe { max-width: 100%; }
+button, input, select, textarea { max-width: 100%; }
+
+@media (max-width: 1180px) {
+  .automation-shell,.advanced-shell,.favorites-shell,.formats-shell,.help-shell,
+  .history-shell,.organize-shell,.settings-shell,.guided-shell { max-width: 100% !important; }
+  .template-grid,.catalog-grid,.expert-grid,.tool-grid,.budget-grid,.security-grid,
+  .status-grid,.format-grid { grid-template-columns: repeat(2,minmax(0,1fr)) !important; }
+  .settings-layout,.help-layout { grid-template-columns: minmax(0,1fr) !important; }
+}
+
+@media (max-width: 820px) {
+  .page-head,.formats-head,.history-head,.organize-head,.settings-head,.guide-head,
+  .catalog-head,.list-head,.stage-header { align-items: flex-start !important; }
+  .two-columns,.settings-layout,.help-layout,.configure-layout,.welcome-shell {
+    grid-template-columns: minmax(0,1fr) !important;
+  }
+  .template-grid,.catalog-grid,.expert-grid,.tool-grid,.budget-grid,.security-grid,
+  .status-grid,.format-grid,.tour-grid,.known-accounts {
+    grid-template-columns: repeat(2,minmax(0,1fr)) !important;
+  }
+}
+
+@media (max-width: 560px) {
+  .template-grid,.catalog-grid,.expert-grid,.tool-grid,.budget-grid,.security-grid,
+  .status-grid,.format-grid,.tour-grid,.known-accounts,.form-grid.two,.two-columns {
+    grid-template-columns: minmax(0,1fr) !important;
+  }
+  .page-head,.formats-head,.history-head,.organize-head,.settings-head,.guide-head,
+  .catalog-head,.list-head { display: block !important; }
+  .ff-card,.ff-panel { border-radius: 16px; }
+}

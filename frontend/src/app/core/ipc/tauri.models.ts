@@ -356,6 +356,7 @@ export type ExecutionEvent =
   | { event: 'itemCompleted'; data: { jobId: string; index: number; input: string; output?: string | null; skipped: boolean } }
   | { event: 'itemFailed'; data: { jobId: string; index: number; input: string; message: string } }
   | { event: 'progress'; data: { jobId: string; completed: number; total: number } }
+  | { event: 'phase'; data: { jobId: string; phase: string; completed: number; total: number } }
   | { event: 'finished'; data: { summary: ExecutionSummary } };
 
 export interface HistoryEntry {
@@ -430,6 +431,9 @@ export interface ArchiveInspection {
   totalUnpackedBytes: number;
   families: ArchiveFamilySummary[];
   samples: ArchiveEntryPreview[];
+  offset: number;
+  limit: number;
+  hasMore: boolean;
 }
 
 export interface AccountBootstrap {

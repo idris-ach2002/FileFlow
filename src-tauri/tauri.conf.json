@@ -16,8 +16,8 @@
         "title": "FileFlow",
         "width": 1360,
         "height": 860,
-        "minWidth": 720,
-        "minHeight": 600,
+        "minWidth": 360,
+        "minHeight": 520,
         "resizable": true,
         "fullscreen": false,
         "visible": false
@@ -27,7 +27,21 @@
       "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost",
       "dangerousDisableAssetCspModification": [
         "style-src"
-      ]
+      ],
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$HOME/**",
+          "$TEMP/**",
+          "$APPDATA/**",
+          "$DOCUMENT/**",
+          "$DOWNLOAD/**",
+          "$DESKTOP/**",
+          "$PICTURE/**",
+          "$VIDEO/**",
+          "$AUDIO/**"
+        ]
+      }
     }
   },
   "bundle": {

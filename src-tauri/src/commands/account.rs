@@ -162,12 +162,7 @@ pub async fn create_account(
         .storage
         .create_account(&profile, &password_hash, &onboarding)
         .map_err(|error| error.to_string())?;
-    start_session(
-        &state,
-        profile,
-        onboarding,
-        request.remember_device,
-    )
+    start_session(&state, profile, onboarding, request.remember_device)
 }
 
 #[tauri::command]
@@ -203,12 +198,7 @@ pub async fn login(
         return Err("Adresse e-mail ou mot de passe incorrect.".into());
     }
     state.login_attempts.remove(&email);
-    start_session(
-        &state,
-        profile,
-        onboarding,
-        request.remember_device,
-    )
+    start_session(&state, profile, onboarding, request.remember_device)
 }
 
 #[tauri::command]

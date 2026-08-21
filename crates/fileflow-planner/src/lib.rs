@@ -2121,15 +2121,31 @@ fn default_conversion_edges() -> Vec<ConversionEdge> {
     // penalised as intermediate formats because they can introduce generation
     // loss; PNG/TIFF are preferred when a direct PDF route is unavailable.
     for from in [
-        "jpeg", "png", "webp", "heic", "heif", "avif", "jxl", "tiff", "bmp", "gif", "raw",
-        "svg", "photoshop", "eps",
+        "jpeg",
+        "png",
+        "webp",
+        "heic",
+        "heif",
+        "avif",
+        "jxl",
+        "tiff",
+        "bmp",
+        "gif",
+        "raw",
+        "svg",
+        "photoshop",
+        "eps",
     ] {
         for to in ["jpeg", "png", "webp", "avif", "tiff"] {
             if from != to {
                 edges.push(edge(
                     from,
                     to,
-                    if matches!(from, "eps" | "photoshop") { "imagemagick" } else { "vips" },
+                    if matches!(from, "eps" | "photoshop") {
+                        "imagemagick"
+                    } else {
+                        "vips"
+                    },
                     if matches!(to, "jpeg" | "webp") { 3 } else { 1 },
                     matches!(to, "jpeg" | "webp"),
                 ));
@@ -2141,8 +2157,8 @@ fn default_conversion_edges() -> Vec<ConversionEdge> {
     }
 
     for from in [
-        "doc", "docx", "odt", "rtf", "wpd", "xls", "xlsx", "ods", "csv", "tsv",
-        "ppt", "pptx", "odp",
+        "doc", "docx", "odt", "rtf", "wpd", "xls", "xlsx", "ods", "csv", "tsv", "ppt", "pptx",
+        "odp",
     ] {
         edges.push(edge(from, "pdf", "office", 1, false));
     }
@@ -2283,4 +2299,20 @@ mod tests {
         assert_eq!(plan.steps.len(), 2);
     }
 
+    #[test]
+    fn image_pdf_routes_never_use_libreoffice() {
+        let catalog = CapabilityCatalog::default();
+        let engines = HashSet::from([
+            "img2pdf".to_string(),
+            "vips".to_string(),
+            "imagemagick".to_string(),
+            "office".to_string(),
+        ]);
+        for input in ["jpeg", "png", "tiff", "heic", "avif", "photoshop"] {
+            let plan = catalog
+                .conversion_plan_with_engines(input, "pdf", &engines)
+                .expect("image should have a PDF route");
+            assert!(plan.steps.iter().all(|step| step.engine_id != "office"));
+        }
+    }
 }

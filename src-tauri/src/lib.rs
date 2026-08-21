@@ -267,6 +267,7 @@ pub fn run() {
             commands::workspace::workspace_recommendations,
             commands::analysis::confirm_duplicates,
             commands::analysis::inspect_archive,
+            commands::analysis::preview_archive_entry,
             commands::execution::execute_action,
             commands::execution::cancel_job,
             commands::execution::open_job_output,

@@ -52,7 +52,13 @@ impl ResourceBudget {
                 }
             }
             PerformanceMode::Fast => Self {
-                cpu_tokens: logical.max(1),
+                // Even in Fast mode FileFlow leaves one logical CPU to the UI/OS
+                // on multi-core machines so progress, preview and cancellation stay responsive.
+                cpu_tokens: if logical > 2 {
+                    logical - 1
+                } else {
+                    logical.max(1)
+                },
                 memory_mb: (total_memory_mb.saturating_mul(3) / 4).max(2048),
                 io_tokens: 6,
             },

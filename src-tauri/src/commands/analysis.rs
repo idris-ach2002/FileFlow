@@ -48,6 +48,8 @@ pub async fn inspect_archive(
     state: State<'_, AppState>,
     workspace_id: WorkspaceId,
     asset_id: Option<AssetId>,
+    offset: Option<usize>,
+    limit: Option<usize>,
 ) -> Result<ArchiveInspection, String> {
     require_active_session(&state)?;
     let selected = asset_id.into_iter().collect::<Vec<_>>();
@@ -78,7 +80,59 @@ pub async fn inspect_archive(
         .acquire("archive", ResourceProfile::ARCHIVE, &cancellation)
         .await
         .map_err(|error| error.to_string())?;
-    fileflow_executor::inspect_archive(&engine, &archive, &cancellation)
+    fileflow_executor::inspect_archive(
+        &engine,
+        &archive,
+        offset.unwrap_or(0),
+        limit.unwrap_or(24).clamp(1, 96),
+        &cancellation,
+    )
+    .await
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn preview_archive_entry(
+    state: State<'_, AppState>,
+    workspace_id: WorkspaceId,
+    asset_id: Option<AssetId>,
+    entry_path: String,
+) -> Result<String, String> {
+    require_active_session(&state)?;
+    let selected = asset_id.into_iter().collect::<Vec<_>>();
+    let assets = state
+        .core
+        .workspaces
+        .select_assets(workspace_id, &selected, &[])
+        .map_err(|error| error.to_string())?;
+    let archive = assets
+        .into_iter()
+        .find_map(|asset| match asset {
+            Asset::Archive(archive) => Some(archive.common.path),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            "Aucune archive compatible n’est disponible dans ce workspace.".to_owned()
+        })?;
+    let probes = state.core.engines.probe_all().await;
+    let engine = probes
+        .into_iter()
+        .find(|probe| probe.id == "archive" && probe.available)
+        .and_then(|probe| probe.executable)
+        .ok_or_else(|| "7-Zip n’est pas disponible pour prévisualiser cette archive.".to_owned())?;
+    let cancellation = CancellationToken::new();
+    let scheduler = { state.runtime.read().scheduler.clone() };
+    let _lease = scheduler
+        .acquire("archive", ResourceProfile::ARCHIVE, &cancellation)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    let path = fileflow_executor::extract_archive_entry_preview(
+        &engine,
+        &archive,
+        &entry_path,
+        &cancellation,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
 }
