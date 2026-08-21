@@ -13,15 +13,67 @@ function Warn([string]$Message) { $script:Warnings++; Write-Warning $Message }
 function Refresh-Path {
   $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
   $user = [Environment]::GetEnvironmentVariable('Path', 'User')
+
+  $pythonScripts = @()
+  if ($env:APPDATA) {
+    $pythonScripts += @(
+      Get-ChildItem -Path "$env:APPDATA\Python\Python*\Scripts" -Directory -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty FullName
+    )
+  }
+  if ($env:LOCALAPPDATA) {
+    $pythonScripts += @(
+      Get-ChildItem -Path "$env:LOCALAPPDATA\Programs\Python\Python*\Scripts" -Directory -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty FullName
+    )
+  }
+
   $extra = @(
     "$env:LOCALAPPDATA\Microsoft\WinGet\Links",
     "$env:LOCALAPPDATA\Microsoft\WindowsApps",
     "$env:USERPROFILE\scoop\shims",
-    "$env:ChocolateyInstall\bin",
-    "$env:APPDATA\Python\Scripts",
-    "$env:LOCALAPPDATA\Programs\Python\Python312\Scripts"
-  ) | Where-Object { $_ -and (Test-Path $_) }
+    "$env:ChocolateyInstall\bin"
+  ) + $pythonScripts
+
+  $extra = @($extra | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique)
   $env:Path = (@($machine, $user) + $extra | Where-Object { $_ }) -join ';'
+}
+
+function Get-RealPythonInvocation {
+  Refresh-Path
+  $candidates = @()
+
+  $py = Get-Command py.exe -ErrorAction SilentlyContinue
+  if ($py -and $py.Source -and $py.Source -notlike '*\Microsoft\WindowsApps\*') {
+    $candidates += [pscustomobject]@{ File = $py.Source; Prefix = @('-3') }
+  }
+
+  $python = Get-Command python.exe -ErrorAction SilentlyContinue
+  if ($python -and $python.Source -and $python.Source -notlike '*\Microsoft\WindowsApps\*') {
+    $candidates += [pscustomobject]@{ File = $python.Source; Prefix = @() }
+  }
+
+  if ($env:LOCALAPPDATA) {
+    foreach ($item in @(
+      Get-ChildItem -Path "$env:LOCALAPPDATA\Programs\Python\Python*\python.exe" -File -ErrorAction SilentlyContinue |
+        Sort-Object FullName -Descending
+    )) {
+      $candidates += [pscustomobject]@{ File = $item.FullName; Prefix = @() }
+    }
+  }
+
+  foreach ($candidate in $candidates) {
+    try {
+      & $candidate.File @($candidate.Prefix) -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' *> $null
+      if ($LASTEXITCODE -eq 0) {
+        return $candidate
+      }
+    } catch {
+      # Try the next candidate.
+    }
+  }
+
+  return $null
 }
 
 function Find-Any([string[]]$Names) {
@@ -79,13 +131,22 @@ function Invoke-ScoopInstall([string]$Name) {
 function Ensure-Pipx {
   Refresh-Path
   if (Get-Command pipx.exe -ErrorAction SilentlyContinue) { return $true }
-  if (-not (Get-Command python.exe -ErrorAction SilentlyContinue) -and -not (Get-Command py.exe -ErrorAction SilentlyContinue)) {
+
+  $python = Get-RealPythonInvocation
+  if (-not $python) {
     [void](Invoke-WingetInstall 'Python.Python.3.12')
     Refresh-Path
+    $python = Get-RealPythonInvocation
   }
-  $python = if (Get-Command py.exe -ErrorAction SilentlyContinue) { 'py.exe' } elseif (Get-Command python.exe -ErrorAction SilentlyContinue) { 'python.exe' } else { $null }
-  if (-not $python) { return $false }
-  & $python -m pip install --user pipx
+
+  if (-not $python) {
+    Warn 'Python 3.10+ is unavailable after installation attempt.'
+    return $false
+  }
+
+  & $python.File @($python.Prefix) -m pip install --user pipx
+  if ($LASTEXITCODE -ne 0) { return $false }
+
   Refresh-Path
   return [bool](Get-Command pipx.exe -ErrorAction SilentlyContinue)
 }
@@ -125,7 +186,7 @@ function Ensure-Engine([string]$Label, [string]$Probe, [string[]]$Candidates) {
       $script:Available++
       return
     }
-    Warn "$Label: $candidate unavailable or installation failed; trying next source."
+    Warn "${Label}: $candidate unavailable or installation failed; trying next source."
   }
   Write-Warning ('[MISS] {0,-14} not installed; related features will be disabled.' -f $Label)
   $script:Missing++
