@@ -24,6 +24,45 @@ use tokio::{io::AsyncReadExt, process::Command, sync::mpsc, task::JoinSet};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+#[cfg(target_os = "linux")]
+fn configure_external_command(command: &mut Command) {
+    // AppImage exports its own loader/library environment to the desktop
+    // process. System-managed conversion engines must not inherit it: doing so
+    // can mix Ubuntu libraries (for example libcurl) with libraries shipped by
+    // the AppImage (for example libnghttp2), causing ABI "undefined symbol"
+    // failures even though all host dependencies are installed correctly.
+    const APPIMAGE_ENV_VARS: &[&str] = &[
+        "APPDIR",
+        "APPIMAGE",
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "GI_TYPELIB_PATH",
+        "GIO_EXTRA_MODULES",
+        "GSETTINGS_SCHEMA_DIR",
+        "GTK_PATH",
+        "QT_PLUGIN_PATH",
+        "QML2_IMPORT_PATH",
+        "GST_PLUGIN_PATH",
+        "GST_PLUGIN_SYSTEM_PATH",
+        "GST_PLUGIN_SYSTEM_PATH_1_0",
+        "MAGICK_HOME",
+        "MAGICK_CONFIGURE_PATH",
+        "MAGICK_CODER_MODULE_PATH",
+        "TESSDATA_PREFIX",
+        "VIPS_PLUGIN_PATH",
+        "GS_LIB",
+    ];
+
+    for variable in APPIMAGE_ENV_VARS {
+        command.env_remove(variable);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn configure_external_command(_command: &mut Command) {}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecutionInput {
@@ -3923,6 +3962,7 @@ async fn capture_process(
         return Err(ExecutionError::Cancelled);
     }
     let mut command = Command::new(engine);
+    configure_external_command(&mut command);
     command
         .args(args)
         .stdin(Stdio::null())
@@ -3966,6 +4006,7 @@ async fn run_process_with_env(
         return Err(ExecutionError::Cancelled);
     }
     let mut command = Command::new(engine);
+    configure_external_command(&mut command);
     command
         .args(args)
         .envs(env.iter().map(|(key, value)| (*key, value.as_str())))
@@ -4009,6 +4050,7 @@ async fn run_process(
         return Err(ExecutionError::Cancelled);
     }
     let mut command = Command::new(engine);
+    configure_external_command(&mut command);
     command
         .args(args)
         .stdin(Stdio::null())
