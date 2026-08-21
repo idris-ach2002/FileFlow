@@ -3951,10 +3951,10 @@ fn sanitize_external_process_environment(command: &mut Command) {
             }
         }
 
-        if let Some(value) = std::env::var_os("GSETTINGS_SCHEMA_DIR") {
-            if PathBuf::from(value).starts_with(appdir) {
-                command.env_remove("GSETTINGS_SCHEMA_DIR");
-            }
+        if let Some(value) = std::env::var_os("GSETTINGS_SCHEMA_DIR")
+            && PathBuf::from(value).starts_with(appdir)
+        {
+            command.env_remove("GSETTINGS_SCHEMA_DIR");
         }
     }
 }
