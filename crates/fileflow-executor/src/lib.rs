@@ -39,6 +39,7 @@ const BROWSER_PRINT_TIMEOUT: Duration = Duration::from_secs(30);
 const BROWSER_SCRIPT_TIMEOUT: Duration = Duration::from_secs(14);
 const BROWSER_STATIC_TIMEOUT: Duration = Duration::from_secs(7);
 const BROWSER_TEXT_TIMEOUT: Duration = Duration::from_secs(6);
+const PREVIEW_RENDER_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[cfg(target_os = "linux")]
 fn configure_external_command(command: &mut Command) {
@@ -1001,7 +1002,7 @@ async fn execute_collective_action(
         }
         "pdf-merge" => {
             let engine = engines.get("qpdf")?;
-            let _lease = scheduler
+            let lease = scheduler
                 .acquire("qpdf", ResourceProfile::PDF, &cancellation)
                 .await?;
             let first = &request.inputs[0].path;
@@ -1019,12 +1020,26 @@ async fn execute_collective_action(
                 return Ok(Some(plan.final_path));
             }
             resolver.prepare(&plan).await?;
-            let mut args = vec![OsString::from("--empty"), OsString::from("--pages")];
-            for input in &request.inputs {
-                args.push(input.path.as_os_str().into());
+            let args = qpdf_merge_args(
+                request.inputs.iter().map(|input| input.path.as_path()),
+                &plan.temporary_path,
+            );
+            if let Err(error) = run_process(engine, &args, &cancellation).await {
+                resolver.cleanup(&plan).await;
+                return Err(error);
             }
-            args.extend([OsString::from("--"), plan.temporary_path.as_os_str().into()]);
-            run_process(engine, &args, &cancellation).await?;
+            drop(lease);
+            if let Err(error) = validate_pdf_output(
+                &plan.temporary_path,
+                engines,
+                scheduler.clone(),
+                &cancellation,
+            )
+            .await
+            {
+                resolver.cleanup(&plan).await;
+                return Err(error);
+            }
             resolver.finalize(&plan).await?;
             Ok(Some(plan.final_path))
         }
@@ -1828,12 +1843,19 @@ async fn merge_pdf_files(
     let _lease = scheduler
         .acquire("qpdf", ResourceProfile::PDF, cancellation)
         .await?;
-    let mut args = vec![OsString::from("--empty"), OsString::from("--pages")];
-    for input in inputs {
-        args.push(input.as_os_str().into());
-    }
-    args.extend([OsString::from("--"), output.as_os_str().into()]);
+    let args = qpdf_merge_args(inputs.iter().map(PathBuf::as_path), output);
     run_process(qpdf, &args, cancellation).await
+}
+
+fn qpdf_merge_args<'a>(inputs: impl IntoIterator<Item = &'a Path>, output: &Path) -> Vec<OsString> {
+    let mut args = vec![
+        OsString::from("--warning-exit-0"),
+        OsString::from("--empty"),
+        OsString::from("--pages"),
+    ];
+    args.extend(inputs.into_iter().map(|input| input.as_os_str().into()));
+    args.extend([OsString::from("--"), output.as_os_str().into()]);
+    args
 }
 
 async fn validate_pdf_output(
@@ -2834,6 +2856,7 @@ async fn run_pdf_protect(
     run_process(
         engine,
         &[
+            OsString::from("--warning-exit-0"),
             OsString::from("--encrypt"),
             OsString::from(&password),
             OsString::from(&password),
@@ -3763,7 +3786,11 @@ async fn run_qpdf_action(
     parameters: &HashMap<String, serde_json::Value>,
     cancellation: &CancellationToken,
 ) -> Result<(), ExecutionError> {
-    let mut args = vec![input.as_os_str().into(), output.as_os_str().into()];
+    let mut args = vec![
+        OsString::from("--warning-exit-0"),
+        input.as_os_str().into(),
+        output.as_os_str().into(),
+    ];
     match action_id {
         "pdf-rotate-pages" => {
             let angle = parameter_number(parameters, "angle", 90.0, -270.0, 270.0).round() as i32;
@@ -3789,7 +3816,7 @@ async fn run_qpdf_action(
             OsString::from("--compress-streams=y"),
             OsString::from("--recompress-flate"),
         ]),
-        "pdf-repair" => args.push(OsString::from("--warning-exit-0")),
+        "pdf-repair" => {}
         "pdf-flatten-rotation" => args.push(OsString::from("--flatten-rotation")),
         "pdf-flatten-annotations" => args.push(OsString::from("--flatten-annotations=all")),
         _ => return Err(ExecutionError::UnsupportedAction(action_id.into())),
@@ -4431,6 +4458,7 @@ async fn execute_pdf_split(
     let result = run_process(
         engine,
         &[
+            OsString::from("--warning-exit-0"),
             OsString::from("--split-pages"),
             input.as_os_str().into(),
             pattern.as_os_str().into(),
@@ -4734,6 +4762,106 @@ pub async fn prepare_file_preview(
         }
     };
     Ok(result)
+}
+
+/// Prepares an extracted archive entry for the desktop viewer.
+///
+/// PDF plug-ins are not consistently available in embedded Linux webviews, so
+/// archive PDFs use a bounded first-page PNG when Poppler is present. Other
+/// supported formats reuse the normal preview pipeline. If an optional preview
+/// engine is absent or rejects the file, the caller still receives the safely
+/// extracted entry and can show an informative format placeholder.
+pub async fn prepare_archive_entry_file_preview(
+    input: &Path,
+    engines: EnginePaths,
+    scheduler: Arc<ResourceScheduler>,
+    cancellation: &CancellationToken,
+) -> Result<PreparedFilePreview, ExecutionError> {
+    let detected = detect_path(input).await?;
+    let direct = || PreparedFilePreview {
+        path: input.to_path_buf(),
+        family: detected.family,
+        generated: false,
+    };
+
+    if detected.family == FormatFamily::Pdf {
+        return match prepare_pdf_first_page_preview(input, &engines, scheduler, cancellation).await
+        {
+            Ok(preview) => Ok(preview),
+            Err(ExecutionError::Cancelled) => Err(ExecutionError::Cancelled),
+            Err(_) => Ok(direct()),
+        };
+    }
+
+    match prepare_file_preview(input, engines, scheduler, cancellation).await {
+        Ok(preview) => Ok(preview),
+        Err(ExecutionError::Cancelled) => Err(ExecutionError::Cancelled),
+        Err(_) => Ok(direct()),
+    }
+}
+
+async fn prepare_pdf_first_page_preview(
+    input: &Path,
+    engines: &EnginePaths,
+    scheduler: Arc<ResourceScheduler>,
+    cancellation: &CancellationToken,
+) -> Result<PreparedFilePreview, ExecutionError> {
+    let engine = engines.get("poppler")?;
+    let _lease = scheduler
+        .acquire("poppler-preview", ResourceProfile::PDF, cancellation)
+        .await?;
+    let root = std::env::temp_dir().join("fileflow-previews");
+    cleanup_preview_cache(&root);
+    let destination = root.join(Uuid::new_v4().simple().to_string());
+    tokio::fs::create_dir_all(&destination).await?;
+    let prefix = destination.join("first-page");
+    let output = destination.join("first-page.png");
+    let result = run_process_with_timeout(
+        engine,
+        &pdf_first_page_preview_args(input, &prefix),
+        cancellation,
+        PREVIEW_RENDER_TIMEOUT,
+    )
+    .await;
+    if let Err(error) = result {
+        let _ = tokio::fs::remove_dir_all(&destination).await;
+        return Err(error);
+    }
+    let metadata = match tokio::fs::metadata(&output).await {
+        Ok(metadata) => metadata,
+        Err(_) => {
+            let _ = tokio::fs::remove_dir_all(&destination).await;
+            return Err(ExecutionError::InvalidInput(
+                "Poppler n’a produit aucun aperçu du PDF.".into(),
+            ));
+        }
+    };
+    if !metadata.is_file() || metadata.len() == 0 {
+        let _ = tokio::fs::remove_dir_all(&destination).await;
+        return Err(ExecutionError::InvalidInput(
+            "Poppler a produit un aperçu PDF vide.".into(),
+        ));
+    }
+    Ok(PreparedFilePreview {
+        path: output,
+        family: FormatFamily::Image,
+        generated: true,
+    })
+}
+
+fn pdf_first_page_preview_args(input: &Path, prefix: &Path) -> Vec<OsString> {
+    vec![
+        OsString::from("-f"),
+        OsString::from("1"),
+        OsString::from("-l"),
+        OsString::from("1"),
+        OsString::from("-singlefile"),
+        OsString::from("-scale-to"),
+        OsString::from("1800"),
+        OsString::from("-png"),
+        input.as_os_str().into(),
+        prefix.as_os_str().into(),
+    ]
 }
 
 async fn prepare_image_thumbnail(
@@ -5693,6 +5821,30 @@ mod tests {
     }
 
     #[test]
+    fn qpdf_merge_accepts_recoverable_input_warnings() {
+        let args = qpdf_merge_args(
+            [Path::new("one.pdf"), Path::new("two.pdf")],
+            Path::new("merged.pdf"),
+        );
+        let args = args
+            .iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            args,
+            [
+                "--warning-exit-0",
+                "--empty",
+                "--pages",
+                "one.pdf",
+                "two.pdf",
+                "--",
+                "merged.pdf",
+            ]
+        );
+    }
+
+    #[test]
     fn archive_pagination_returns_only_requested_window() {
         let listing = "Physical Size = 1000\n----------\nPath = a.jpg\nFolder = -\nSize = 10\n\nPath = b.png\nFolder = -\nSize = 20\n\nPath = c.pdf\nFolder = -\nSize = 30\n\n";
         let page = parse_archive_listing(listing, 1, 1).unwrap();
@@ -5700,6 +5852,33 @@ mod tests {
         assert_eq!(page.samples.len(), 1);
         assert_eq!(page.samples[0].path, "b.png");
         assert!(page.has_more);
+    }
+
+    #[test]
+    fn archive_pdf_preview_renders_only_a_bounded_first_page() {
+        let args = pdf_first_page_preview_args(
+            Path::new("inside/archive.pdf"),
+            Path::new("preview/first-page"),
+        )
+        .iter()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+        assert_eq!(
+            args,
+            [
+                "-f",
+                "1",
+                "-l",
+                "1",
+                "-singlefile",
+                "-scale-to",
+                "1800",
+                "-png",
+                "inside/archive.pdf",
+                "preview/first-page",
+            ]
+        );
+        assert_eq!(PREVIEW_RENDER_TIMEOUT, Duration::from_secs(20));
     }
 
     #[test]

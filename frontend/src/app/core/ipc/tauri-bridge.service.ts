@@ -293,8 +293,8 @@ export class TauriBridgeService {
     return invoke<ArchiveInspection>('inspect_archive', { workspaceId, assetId: assetId ?? null, offset, limit });
   }
 
-  previewArchiveEntry(workspaceId: string, entryPath: string, assetId?: string | null): Promise<string> {
-    return invoke<string>('preview_archive_entry', { workspaceId, assetId: assetId ?? null, entryPath });
+  previewArchiveEntry(workspaceId: string, entryPath: string, assetId?: string | null): Promise<PreparedFilePreview> {
+    return invoke<PreparedFilePreview>('preview_archive_entry', { workspaceId, assetId: assetId ?? null, entryPath });
   }
 
   previewAsset(workspaceId: string, assetId: string): Promise<PreparedFilePreview> {

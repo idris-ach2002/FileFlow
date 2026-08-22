@@ -98,7 +98,7 @@ pub async fn preview_archive_entry(
     workspace_id: WorkspaceId,
     asset_id: Option<AssetId>,
     entry_path: String,
-) -> Result<String, String> {
+) -> Result<PreparedFilePreview, String> {
     require_active_session(&state)?;
     let selected = asset_id.into_iter().collect::<Vec<_>>();
     let assets = state
@@ -115,15 +115,22 @@ pub async fn preview_archive_entry(
         .ok_or_else(|| {
             "Aucune archive compatible n’est disponible dans ce workspace.".to_owned()
         })?;
-    let probes = state.core.engines.probe_all().await;
-    let engine = probes
+    let paths = state
+        .core
+        .engines
+        .probe_all()
+        .await
         .into_iter()
-        .find(|probe| probe.id == "archive" && probe.available)
-        .and_then(|probe| probe.executable)
+        .filter_map(|probe| probe.available.then_some((probe.id, probe.executable)))
+        .filter_map(|(id, path)| path.map(|path| (id, path)))
+        .collect::<HashMap<String, PathBuf>>();
+    let engine = paths
+        .get("archive")
+        .cloned()
         .ok_or_else(|| "7-Zip n’est pas disponible pour prévisualiser cette archive.".to_owned())?;
     let cancellation = CancellationToken::new();
     let scheduler = { state.runtime.read().scheduler.clone() };
-    let _lease = scheduler
+    let lease = scheduler
         .acquire("archive", ResourceProfile::ARCHIVE, &cancellation)
         .await
         .map_err(|error| error.to_string())?;
@@ -135,7 +142,15 @@ pub async fn preview_archive_entry(
     )
     .await
     .map_err(|error| error.to_string())?;
-    Ok(path.to_string_lossy().into_owned())
+    drop(lease);
+    fileflow_executor::prepare_archive_entry_file_preview(
+        &path,
+        EnginePaths::new(paths),
+        scheduler,
+        &cancellation,
+    )
+    .await
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

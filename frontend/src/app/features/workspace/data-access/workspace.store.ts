@@ -50,6 +50,7 @@ export class WorkspaceStore {
   private pendingIntakeAssets: Asset[] = [];
   private pendingWarnings: IntakeWarning[] = [];
   private pendingExecutionProgress: { completed: number; total: number } | null = null;
+  private inspectedArchiveId: string | null = null;
 
   readonly phase = signal<WorkspacePhase>('idle');
   readonly workspace = signal<WorkspaceSnapshot | null>(null);
@@ -428,17 +429,27 @@ export class WorkspaceStore {
     }
   }
 
-  async inspectArchive(offset = 0, limit = 24): Promise<void> {
+  async inspectArchive(offset = 0, limit = 24, archiveAssetId?: string | null): Promise<void> {
     const workspaceId = this.workspace()?.id;
     if (!workspaceId || this.archiveInspectionLoading()) return;
-    const selectedArchive = this.selectedAssets().find((asset) => asset.kind === 'archive')
+    const requestedArchive = archiveAssetId
+      ? this.assets().find((asset) => asset.kind === 'archive' && asset.data.id === archiveAssetId)
+      : null;
+    const currentArchive = this.inspectedArchiveId
+      ? this.assets().find((asset) => asset.kind === 'archive' && asset.data.id === this.inspectedArchiveId)
+      : null;
+    const selectedArchive = requestedArchive
+      ?? currentArchive
+      ?? this.selectedAssets().find((asset) => asset.kind === 'archive')
       ?? this.assets().find((asset) => asset.kind === 'archive');
+    if (!selectedArchive || selectedArchive.kind !== 'archive') return;
+    this.inspectedArchiveId = selectedArchive.data.id;
     this.archiveInspectionLoading.set(true);
     this.archiveInspectionError.set(null);
     try {
       this.archiveInspection.set(await this.bridge.inspectArchive(
         workspaceId,
-        selectedArchive?.data.id ?? null,
+        selectedArchive.data.id,
         Math.max(0, offset),
         Math.min(96, Math.max(1, limit)),
       ));
@@ -450,12 +461,16 @@ export class WorkspaceStore {
   }
 
 
-  async previewArchiveEntry(entryPath: string): Promise<string | null> {
+  async previewArchiveEntry(entryPath: string): Promise<PreparedFilePreview | null> {
     const workspaceId = this.workspace()?.id;
     if (!workspaceId) return null;
-    const selectedArchive = this.selectedAssets().find((asset) => asset.kind === 'archive')
+    const selectedArchive = (this.inspectedArchiveId
+      ? this.assets().find((asset) => asset.kind === 'archive' && asset.data.id === this.inspectedArchiveId)
+      : null)
+      ?? this.selectedAssets().find((asset) => asset.kind === 'archive')
       ?? this.assets().find((asset) => asset.kind === 'archive');
     if (!selectedArchive || selectedArchive.kind !== 'archive') return null;
+    this.archiveInspectionError.set(null);
     try {
       return await this.bridge.previewArchiveEntry(workspaceId, entryPath, selectedArchive.data.id);
     } catch (error) {
@@ -574,6 +589,7 @@ export class WorkspaceStore {
     this.warnings.set([]);
     this.archiveInspection.set(null);
     this.archiveInspectionError.set(null);
+    this.inspectedArchiveId = null;
     this.error.set(null);
     this.pageTotal.set(0);
     this.familyFilter.set(null);
