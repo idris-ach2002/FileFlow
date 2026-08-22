@@ -176,6 +176,8 @@ fn build_core() -> Arc<FileFlowCore> {
     core.engines
         .register(Arc::new(fileflow_adapter_pandoc::Adapter));
     core.engines
+        .register(Arc::new(fileflow_adapter_browser::Adapter));
+    core.engines
         .register(Arc::new(fileflow_adapter_zstd::Adapter));
     core.engines
         .register(Arc::new(fileflow_adapter_lz4::Adapter));
@@ -268,6 +270,7 @@ pub fn run() {
             commands::analysis::confirm_duplicates,
             commands::analysis::inspect_archive,
             commands::analysis::preview_archive_entry,
+            commands::analysis::preview_asset,
             commands::execution::execute_action,
             commands::execution::cancel_job,
             commands::execution::open_job_output,

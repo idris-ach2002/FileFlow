@@ -4,6 +4,7 @@
 //! never interpolates paths into a shell command. Batch work is windowed and
 //! every item must acquire a resource lease from the scheduler first.
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use chrono::Utc;
 use fileflow_domain::{FormatFamily, JobId, JobState, OutputPolicy, ResourceProfile};
 use fileflow_formats::FormatRegistry;
@@ -14,15 +15,30 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     ffi::OsString,
+    io::SeekFrom,
     path::{Path, PathBuf},
     process::Stdio,
     sync::Arc,
     time::{Duration, Instant},
 };
 use thiserror::Error;
-use tokio::{io::AsyncReadExt, process::Command, sync::mpsc, task::JoinSet};
+use tokio::{
+    io::{AsyncReadExt, AsyncSeekExt},
+    process::{Child, Command},
+    sync::mpsc,
+    task::JoinSet,
+};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+
+// HTML rendering must remain bounded even when a page contains an infinite
+// loop, a blocked resource, a modal dialog or a browser process that refuses
+// to exit. This deadline is deliberately independent from the generic engine
+// timeout (10 minutes) used by long-running conversions.
+const BROWSER_PRINT_TIMEOUT: Duration = Duration::from_secs(30);
+const BROWSER_SCRIPT_TIMEOUT: Duration = Duration::from_secs(14);
+const BROWSER_STATIC_TIMEOUT: Duration = Duration::from_secs(7);
+const BROWSER_TEXT_TIMEOUT: Duration = Duration::from_secs(6);
 
 #[cfg(target_os = "linux")]
 fn configure_external_command(command: &mut Command) {
@@ -822,6 +838,14 @@ async fn execute_item_inner(
             .await
         }
         "text-to-pdf" => run_text_to_pdf(engines, input, &plan.temporary_path, &cancellation).await,
+        "html-to-pdf" => {
+            validate_source_extension(input, &["html", "htm"], "HTML")?;
+            run_browser_print(engine, input, &plan.temporary_path, true, &cancellation).await
+        }
+        "email-to-pdf" => {
+            validate_source_extension(input, &["eml", "mail"], "EML")?;
+            run_eml_to_pdf(engine, input, &plan.temporary_path, &cancellation).await
+        }
         "pdf-compress" => {
             run_pdf_compress(engine, input, &plan.temporary_path, quality, &cancellation).await
         }
@@ -905,9 +929,6 @@ async fn execute_collective_action(
         }
         "images-to-pdf" => {
             let engine = engines.get("img2pdf")?;
-            let _lease = scheduler
-                .acquire("img2pdf", ResourceProfile::PDF, &cancellation)
-                .await?;
             let first = &request.inputs[0].path;
             let plan = resolver.plan(&OutputRequest {
                 source: first.clone(),
@@ -923,11 +944,45 @@ async fn execute_collective_action(
                 return Ok(Some(plan.final_path));
             }
             resolver.prepare(&plan).await?;
+            let job = TemporaryJobWorkspace::create().await?;
+            let normalized_root = job.path("normalized-images");
+            tokio::fs::create_dir_all(&normalized_root).await?;
+            let mut normalized = Vec::with_capacity(request.inputs.len());
+            for (index, input) in request.inputs.iter().enumerate() {
+                let detected = detect_path(&input.path).await?;
+                if detected.family != FormatFamily::Image {
+                    resolver.cleanup(&plan).await;
+                    return Err(ExecutionError::InvalidInput(format!(
+                        "{} n’est pas une image compatible.",
+                        input.path.display()
+                    )));
+                }
+                if matches!(detected.id.as_str(), "jpeg" | "png" | "tiff") {
+                    normalized.push(input.clone());
+                    continue;
+                }
+                let output = normalized_root.join(format!("{index:05}.png"));
+                normalize_image_for_pdf(
+                    &input.path,
+                    &output,
+                    engines,
+                    scheduler.clone(),
+                    &cancellation,
+                )
+                .await?;
+                normalized.push(ExecutionInput {
+                    path: output,
+                    source_root: None,
+                });
+            }
+            let _lease = scheduler
+                .acquire("img2pdf", ResourceProfile::PDF, &cancellation)
+                .await?;
             let list_path = plan.destination_directory.join(format!(
                 ".fileflow-img2pdf-{}.list",
                 Uuid::new_v4().simple()
             ));
-            tokio::fs::write(&list_path, nul_separated_paths(&request.inputs)).await?;
+            tokio::fs::write(&list_path, nul_separated_paths(&normalized)).await?;
             let args = [
                 OsString::from("--rotation=ifvalid"),
                 OsString::from("--from-file"),
@@ -1598,11 +1653,29 @@ async fn execute_conversion_step(
         .await?;
     match step.engine_id.as_str() {
         "vips" => {
-            run_vips_copy(
+            let result = run_vips_copy(
                 engine,
                 input,
                 output,
                 scheduler.budget().cpu_tokens.max(1),
+                cancellation,
+            )
+            .await;
+            if result.is_ok() {
+                return Ok(());
+            }
+            let vips_error = result.expect_err("the successful branch returned above");
+            let Ok(imagemagick) = engines.get("imagemagick") else {
+                return Err(vips_error);
+            };
+            drop(_lease);
+            let _fallback_lease = scheduler
+                .acquire("imagemagick", ResourceProfile::IMAGE, cancellation)
+                .await?;
+            let _ = tokio::fs::remove_file(output).await;
+            run_process(
+                imagemagick,
+                &[input.as_os_str().into(), output.as_os_str().into()],
                 cancellation,
             )
             .await
@@ -1654,6 +1727,13 @@ async fn execute_conversion_step(
             run_office_convert(engine, input, &output_plan, &step.to, cancellation).await
         }
         "pandoc" => run_pandoc(engine, input, output, cancellation).await,
+        "browser" => match step.from.as_str() {
+            "html" => run_browser_print(engine, input, output, true, cancellation).await,
+            "eml" => run_eml_to_pdf(engine, input, output, cancellation).await,
+            other => Err(ExecutionError::InvalidInput(format!(
+                "Le navigateur PDF n’est pas autorisé comme route intermédiaire depuis {other}."
+            ))),
+        },
         other => Err(ExecutionError::InvalidInput(format!(
             "Le moteur {other} n’est pas encore autorisé comme intermédiaire PDF."
         ))),
@@ -1696,6 +1776,45 @@ async fn image_file_to_pdf(
     )
     .await?;
     Ok(output.to_path_buf())
+}
+
+async fn normalize_image_for_pdf(
+    input: &Path,
+    output: &Path,
+    engines: &EnginePaths,
+    scheduler: Arc<ResourceScheduler>,
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    if let Ok(vips) = engines.get("vips") {
+        let _lease = scheduler
+            .acquire("vips", ResourceProfile::IMAGE, cancellation)
+            .await?;
+        if run_vips_copy(
+            vips,
+            input,
+            output,
+            scheduler.budget().cpu_tokens.max(1),
+            cancellation,
+        )
+        .await
+        .is_ok()
+        {
+            return Ok(());
+        }
+        let _ = tokio::fs::remove_file(output).await;
+    }
+    if let Ok(imagemagick) = engines.get("imagemagick") {
+        let _lease = scheduler
+            .acquire("imagemagick", ResourceProfile::IMAGE, cancellation)
+            .await?;
+        return run_process(
+            imagemagick,
+            &[input.as_os_str().into(), output.as_os_str().into()],
+            cancellation,
+        )
+        .await;
+    }
+    Err(ExecutionError::MissingEngine("vips ou imagemagick".into()))
 }
 
 async fn merge_pdf_files(
@@ -1790,6 +1909,18 @@ async fn run_text_to_pdf(
     output: &Path,
     cancellation: &CancellationToken,
 ) -> Result<(), ExecutionError> {
+    let extension = input
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if matches!(extension.as_str(), "html" | "htm") {
+        return run_browser_print(engines.get("browser")?, input, output, true, cancellation).await;
+    }
+    if matches!(extension.as_str(), "eml" | "mail") {
+        return run_eml_to_pdf(engines.get("browser")?, input, output, cancellation).await;
+    }
+
     let pandoc = engines.get("pandoc")?;
     let office = engines.get("office")?;
     let parent = output.parent().unwrap_or_else(|| Path::new("."));
@@ -1808,6 +1939,886 @@ async fn run_text_to_pdf(
     .await;
     let _ = tokio::fs::remove_file(&docx).await;
     result
+}
+
+fn validate_source_extension(
+    input: &Path,
+    allowed: &[&str],
+    label: &str,
+) -> Result<(), ExecutionError> {
+    let extension = input
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if allowed.contains(&extension.as_str()) {
+        Ok(())
+    } else {
+        Err(ExecutionError::InvalidInput(format!(
+            "Cette action attend un fichier {label}."
+        )))
+    }
+}
+
+async fn run_browser_print(
+    browser: &Path,
+    input: &Path,
+    output: &Path,
+    javascript: bool,
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    let result = tokio::time::timeout(
+        BROWSER_PRINT_TIMEOUT,
+        run_browser_print_with_fallbacks(browser, input, output, javascript, cancellation),
+    )
+    .await;
+    match result {
+        Ok(result) => result,
+        Err(_) => {
+            // Dropping the bounded future also drops the active Chromium child;
+            // `kill_on_drop(true)` guarantees it cannot continue in background.
+            let _ = tokio::fs::remove_file(output).await;
+            Err(ExecutionError::ProcessFailed {
+                program: browser
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("browser")
+                    .to_owned(),
+                message: format!(
+                    "délai global de conversion HTML dépassé ({} s); le processus a été arrêté",
+                    BROWSER_PRINT_TIMEOUT.as_secs()
+                ),
+            })
+        }
+    }
+}
+
+async fn run_browser_print_with_fallbacks(
+    browser: &Path,
+    input: &Path,
+    output: &Path,
+    javascript: bool,
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    let input = tokio::fs::canonicalize(input).await?;
+    let preserve_saved_dom = javascript && browser_should_preserve_saved_dom(&input).await?;
+    let primary = if preserve_saved_dom {
+        run_browser_sanitized_attempt(
+            browser,
+            &input,
+            output,
+            true,
+            BROWSER_STATIC_TIMEOUT,
+            cancellation,
+        )
+        .await
+    } else {
+        let timeout = if javascript {
+            BROWSER_SCRIPT_TIMEOUT
+        } else {
+            BROWSER_STATIC_TIMEOUT
+        };
+        run_browser_print_attempt(browser, &input, output, timeout, cancellation).await
+    };
+    if primary.is_ok() || !javascript || cancellation.is_cancelled() {
+        return primary;
+    }
+
+    // A saved Gmail page already contains its visible DOM. Running its scripts
+    // can replace that snapshot with Google's temporary-error screen because
+    // the local copy no longer owns the original authenticated web session.
+    // Such pages therefore use a sanitized copy from the first attempt;
+    // ordinary pages retain dynamic-first rendering and then use that copy.
+    let primary_error = primary.expect_err("the successful branch returned above");
+    let secondary = run_browser_sanitized_attempt(
+        browser,
+        &input,
+        output,
+        false,
+        BROWSER_STATIC_TIMEOUT,
+        cancellation,
+    )
+    .await;
+    if secondary.is_ok() || cancellation.is_cancelled() {
+        return secondary;
+    }
+
+    // If even the saved DOM references too many remote resources, reduce it to
+    // a self-contained readable document. The generated page contains no
+    // scripts, frames, stylesheets or network URLs and therefore cannot keep
+    // Chromium busy indefinitely.
+    let secondary_error = secondary.expect_err("the successful branch returned above");
+    let (snapshot_root, snapshot) = create_browser_text_snapshot(&input).await?;
+    let text_fallback = run_browser_print_attempt(
+        browser,
+        &snapshot,
+        output,
+        BROWSER_TEXT_TIMEOUT,
+        cancellation,
+    )
+    .await;
+    let _ = tokio::fs::remove_dir_all(&snapshot_root).await;
+    match text_fallback {
+        Ok(()) => Ok(()),
+        Err(ExecutionError::Cancelled) => Err(ExecutionError::Cancelled),
+        Err(text_error) => Err(ExecutionError::ProcessFailed {
+            program: browser
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("browser")
+                .to_owned(),
+            message: format!(
+                "le premier rendu a échoué ({primary_error}); le second rendu a échoué ({secondary_error}); le secours textuel a échoué ({text_error})"
+            ),
+        }),
+    }
+}
+
+async fn browser_should_preserve_saved_dom(input: &Path) -> Result<bool, ExecutionError> {
+    const MAX_SNIFF_BYTES: u64 = 8 * 1024 * 1024;
+    let file_name = input
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if file_name.contains("gmail") {
+        return Ok(true);
+    }
+
+    let file = tokio::fs::File::open(input).await?;
+    let mut limited = file.take(MAX_SNIFF_BYTES);
+    let mut bytes = Vec::new();
+    limited.read_to_end(&mut bytes).await?;
+    let source = String::from_utf8_lossy(&bytes).to_ascii_lowercase();
+    if source.contains("mail.google.com") || (source.contains("<title") && source.contains("gmail"))
+    {
+        return Ok(true);
+    }
+
+    let saved_from_browser = source.contains("saved from url=")
+        || source.contains("saved from url =")
+        || source.contains("enregistrée depuis l’url")
+        || source.contains("enregistree depuis l'url");
+    Ok(saved_from_browser && browser_has_companion_resources(input).await)
+}
+
+async fn browser_has_companion_resources(input: &Path) -> bool {
+    let Some(parent) = input.parent() else {
+        return false;
+    };
+    let Some(stem) = input.file_stem().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    for suffix in ["_files", "_fichiers", ".files", " files", " fichiers"] {
+        let candidate = parent.join(format!("{stem}{suffix}"));
+        if tokio::fs::metadata(candidate)
+            .await
+            .is_ok_and(|metadata| metadata.is_dir())
+        {
+            return true;
+        }
+    }
+    false
+}
+
+async fn run_browser_sanitized_attempt(
+    browser: &Path,
+    input: &Path,
+    output: &Path,
+    allow_local_images: bool,
+    timeout: Duration,
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    let (snapshot_root, snapshot) =
+        create_browser_sanitized_snapshot(input, allow_local_images).await?;
+    let result = run_browser_print_attempt(browser, &snapshot, output, timeout, cancellation).await;
+    let _ = tokio::fs::remove_dir_all(snapshot_root).await;
+    result
+}
+
+async fn create_browser_sanitized_snapshot(
+    input: &Path,
+    allow_local_images: bool,
+) -> Result<(PathBuf, PathBuf), ExecutionError> {
+    const MAX_HTML_BYTES: u64 = 64 * 1024 * 1024;
+    let metadata = tokio::fs::metadata(input).await?;
+    if metadata.len() > MAX_HTML_BYTES {
+        return Err(ExecutionError::InvalidInput(
+            "La page HTML dépasse 64 Mo et ne peut pas être sécurisée localement.".into(),
+        ));
+    }
+    let bytes = tokio::fs::read(input).await?;
+    let source = String::from_utf8_lossy(&bytes);
+    let document = browser_sanitized_document(
+        &source,
+        input.parent().unwrap_or_else(|| Path::new(".")),
+        allow_local_images,
+    );
+    let root = std::env::temp_dir()
+        .join("fileflow-browser-sanitized")
+        .join(Uuid::new_v4().simple().to_string());
+    tokio::fs::create_dir_all(&root).await?;
+    let snapshot = root.join("snapshot.html");
+    tokio::fs::write(&snapshot, document).await?;
+    Ok((root, snapshot))
+}
+
+fn browser_sanitized_document(
+    source: &str,
+    source_directory: &Path,
+    allow_local_images: bool,
+) -> String {
+    let document = remove_html_block(source, "script");
+    let document = remove_html_block(&document, "iframe");
+    let document = remove_html_block(&document, "object");
+    let mut base_url = file_url(source_directory);
+    if !base_url.ends_with('/') {
+        base_url.push('/');
+    }
+    let image_sources = if allow_local_images {
+        "file: data: blob:"
+    } else {
+        "data:"
+    };
+    let head = format!(
+        "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'none'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri file:; img-src {image_sources}; style-src 'unsafe-inline' file: data:; font-src file: data:; media-src file: data: blob:\"><base href=\"{}\">",
+        escape_html(&base_url)
+    );
+    insert_html_head_content(&document, &head)
+}
+
+fn insert_html_head_content(document: &str, content: &str) -> String {
+    let lower = document.to_ascii_lowercase();
+    if let Some(head_start) = find_html_tag(&lower, "<head", 0)
+        && let Some(relative_end) = lower[head_start..].find('>')
+    {
+        let insertion = head_start + relative_end + 1;
+        let mut output = String::with_capacity(document.len() + content.len());
+        output.push_str(&document[..insertion]);
+        output.push_str(content);
+        output.push_str(&document[insertion..]);
+        return output;
+    }
+    if let Some(html_start) = find_html_tag(&lower, "<html", 0)
+        && let Some(relative_end) = lower[html_start..].find('>')
+    {
+        let insertion = html_start + relative_end + 1;
+        let mut output = String::with_capacity(document.len() + content.len() + 13);
+        output.push_str(&document[..insertion]);
+        output.push_str("<head>");
+        output.push_str(content);
+        output.push_str("</head>");
+        output.push_str(&document[insertion..]);
+        return output;
+    }
+    format!("<!doctype html><html><head>{content}</head><body>{document}</body></html>")
+}
+
+async fn create_browser_text_snapshot(input: &Path) -> Result<(PathBuf, PathBuf), ExecutionError> {
+    const MAX_HTML_BYTES: u64 = 64 * 1024 * 1024;
+    const MAX_TEXT_CHARS: usize = 2_000_000;
+    let metadata = tokio::fs::metadata(input).await?;
+    if metadata.len() > MAX_HTML_BYTES {
+        return Err(ExecutionError::InvalidInput(
+            "La page HTML dépasse 64 Mo et ne peut pas utiliser le secours textuel.".into(),
+        ));
+    }
+    let bytes = tokio::fs::read(input).await?;
+    let source = String::from_utf8_lossy(&bytes);
+    let plain = html_to_plain_text(&source);
+    let truncated = plain.chars().count() > MAX_TEXT_CHARS;
+    let visible = plain.chars().take(MAX_TEXT_CHARS).collect::<String>();
+    let title = input
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("Page HTML");
+    let document = browser_text_snapshot_document(title, &visible, truncated);
+    let root = std::env::temp_dir()
+        .join("fileflow-browser-snapshot")
+        .join(Uuid::new_v4().simple().to_string());
+    tokio::fs::create_dir_all(&root).await?;
+    let snapshot = root.join("snapshot.html");
+    tokio::fs::write(&snapshot, document).await?;
+    Ok((root, snapshot))
+}
+
+fn browser_text_snapshot_document(title: &str, text: &str, truncated: bool) -> String {
+    let truncation = if truncated {
+        "<p class=warning>Le contenu extrêmement volumineux a été limité à deux millions de caractères.</p>"
+    } else {
+        ""
+    };
+    format!(
+        "<!doctype html><html lang=fr><head><meta charset=utf-8><title>{}</title><style>@page{{size:A4;margin:17mm}}*{{box-sizing:border-box}}body{{margin:0;color:#172033;font:12px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}}header{{margin-bottom:18px;padding:14px 16px;border:1px solid #dfe5ef;border-radius:12px;background:#f5f7fb}}h1{{margin:0 0 6px;font-size:16px}}p{{margin:0;color:#5f687a}}.warning{{margin-top:8px;color:#9a5b00}}main{{white-space:pre-wrap;overflow-wrap:anywhere}}</style></head><body><header><h1>Copie lisible créée par FileFlow</h1><p>Les scripts et ressources distantes ont été retirés car la page web originale ne terminait pas son chargement.</p>{truncation}</header><main>{}</main></body></html>",
+        escape_html(title),
+        escape_html(text)
+    )
+}
+
+async fn run_browser_print_attempt(
+    browser: &Path,
+    input: &Path,
+    output: &Path,
+    timeout: Duration,
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    let (attempt_root, profile, browser_output, browser_log) = browser_attempt_paths();
+    tokio::fs::create_dir_all(&profile).await?;
+
+    let mut args = vec![
+        OsString::from("--headless=new"),
+        OsString::from("--disable-gpu"),
+        OsString::from("--disable-extensions"),
+        OsString::from("--disable-sync"),
+        OsString::from("--disable-background-networking"),
+        OsString::from("--disable-background-timer-throttling"),
+        OsString::from("--disable-backgrounding-occluded-windows"),
+        OsString::from("--disable-renderer-backgrounding"),
+        OsString::from("--disable-component-update"),
+        OsString::from("--disable-default-apps"),
+        OsString::from("--disable-features=Translate,MediaRouter,OptimizationHints"),
+        OsString::from("--no-first-run"),
+        OsString::from("--no-default-browser-check"),
+        OsString::from("--hide-scrollbars"),
+        OsString::from("--run-all-compositor-stages-before-draw"),
+        OsString::from("--virtual-time-budget=5000"),
+        OsString::from("--host-resolver-rules=MAP * ~NOTFOUND"),
+        OsString::from("--proxy-server=socks5://127.0.0.1:9"),
+        OsString::from("--proxy-bypass-list=<-loopback>"),
+        OsString::from("--no-pdf-header-footer"),
+        OsString::from(format!("--user-data-dir={}", profile.display())),
+        OsString::from(format!("--print-to-pdf={}", browser_output.display())),
+    ];
+    args.push(OsString::from(file_url(input)));
+
+    // Keep Chromium's OS sandbox enabled. If the host installation cannot run
+    // sandboxed, FileFlow fails explicitly instead of weakening isolation.
+    // Chromium receives a visible, conventional `render.pdf` path. FileFlow's
+    // final temporary output is intentionally hidden on Unix; passing that
+    // dotfile directly to Chrome can make it exit successfully without writing
+    // anything. The completed PDF is copied to FileFlow's destination below.
+    let render_result = run_browser_process(
+        browser,
+        &args,
+        &browser_output,
+        &browser_log,
+        cancellation,
+        timeout,
+    )
+    .await;
+    let result = match render_result {
+        Ok(()) => match browser_complete_pdf_size(&browser_output).await {
+            Ok(Some(_)) => tokio::fs::copy(&browser_output, output)
+                .await
+                .map(|_| ())
+                .map_err(ExecutionError::from),
+            Ok(None) => Err(ExecutionError::InvalidInput(
+                "Le navigateur n’a produit aucun PDF complet.".into(),
+            )),
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(error),
+    };
+    let _ = tokio::fs::remove_dir_all(&attempt_root).await;
+    if result.is_err() {
+        // Chromium can create a partial PDF before hanging. Never expose that
+        // incomplete file as a successful conversion or preview.
+        let _ = tokio::fs::remove_file(output).await;
+    }
+    result?;
+    if !output.is_file() {
+        return Err(ExecutionError::InvalidInput(
+            "Le navigateur n’a produit aucun PDF.".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn browser_attempt_paths() -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+    let root = std::env::temp_dir()
+        .join("fileflow-browser")
+        .join(Uuid::new_v4().simple().to_string());
+    let profile = root.join("profile");
+    let output = root.join("render.pdf");
+    let log = root.join("browser.log");
+    (root, profile, output, log)
+}
+
+async fn run_browser_process(
+    browser: &Path,
+    args: &[OsString],
+    browser_output: &Path,
+    browser_log: &Path,
+    cancellation: &CancellationToken,
+    timeout: Duration,
+) -> Result<(), ExecutionError> {
+    if cancellation.is_cancelled() {
+        return Err(ExecutionError::Cancelled);
+    }
+
+    // Chrome helper processes may inherit stderr. `Command::output()` then
+    // waits for every inherited pipe to close and can report a false timeout
+    // after Chrome has already written the PDF. A regular log file preserves
+    // diagnostics without tying process completion to pipe ownership.
+    let log = std::fs::File::create(browser_log)?;
+    let mut command = Command::new(browser);
+    configure_external_command(&mut command);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(log))
+        .kill_on_drop(true);
+    let program = browser
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("browser")
+        .to_owned();
+    let mut child = command.spawn()?;
+    let started = Instant::now();
+    let mut last_complete_size = None;
+
+    loop {
+        if cancellation.is_cancelled() {
+            stop_browser_child(&mut child).await;
+            return Err(ExecutionError::Cancelled);
+        }
+
+        let complete_size = browser_complete_pdf_size(browser_output).await?;
+        if let Some(size) = complete_size {
+            // `%%EOF` plus an unchanged size on two consecutive polls means
+            // the PDF is complete. Do not wait for an unrelated Chrome helper
+            // process that keeps the parent alive.
+            if last_complete_size == Some(size) {
+                stop_browser_child(&mut child).await;
+                return Ok(());
+            }
+            last_complete_size = Some(size);
+        } else {
+            last_complete_size = None;
+        }
+
+        if let Some(status) = child.try_wait()? {
+            if status.success() && complete_size.is_some() {
+                return Ok(());
+            }
+            if status.success() {
+                return Err(ExecutionError::InvalidInput(
+                    "Le navigateur n’a produit aucun PDF.".into(),
+                ));
+            }
+            return Err(ExecutionError::ProcessFailed {
+                program,
+                message: browser_log_tail(browser_log, status).await,
+            });
+        }
+
+        if started.elapsed() >= timeout {
+            stop_browser_child(&mut child).await;
+            return Err(ExecutionError::ProcessFailed {
+                program,
+                message: format!(
+                    "délai maximal de traitement dépassé ({} s); le processus a été arrêté",
+                    timeout.as_secs()
+                ),
+            });
+        }
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn stop_browser_child(child: &mut Child) {
+    if child.try_wait().ok().flatten().is_some() {
+        return;
+    }
+    let _ = child.start_kill();
+    let _ = tokio::time::timeout(Duration::from_secs(1), child.wait()).await;
+}
+
+async fn browser_complete_pdf_size(path: &Path) -> Result<Option<u64>, ExecutionError> {
+    let metadata = match tokio::fs::metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.len() < 10 {
+        return Ok(None);
+    }
+
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut header = [0_u8; 5];
+    if let Err(error) = file.read_exact(&mut header).await {
+        if error.kind() == std::io::ErrorKind::UnexpectedEof {
+            return Ok(None);
+        }
+        return Err(error.into());
+    }
+    if &header != b"%PDF-" {
+        return Ok(None);
+    }
+
+    let tail_size = metadata.len().min(2048) as usize;
+    file.seek(SeekFrom::End(-(tail_size as i64))).await?;
+    let mut tail = vec![0_u8; tail_size];
+    if let Err(error) = file.read_exact(&mut tail).await {
+        if error.kind() == std::io::ErrorKind::UnexpectedEof {
+            return Ok(None);
+        }
+        return Err(error.into());
+    }
+    if tail
+        .windows(b"%%EOF".len())
+        .any(|window| window == b"%%EOF")
+    {
+        Ok(Some(metadata.len()))
+    } else {
+        Ok(None)
+    }
+}
+
+async fn browser_log_tail(log: &Path, status: std::process::ExitStatus) -> String {
+    match tokio::fs::read(log).await {
+        Ok(bytes) => tail_message(&String::from_utf8_lossy(&bytes), status),
+        Err(_) => format!("exit status {status}"),
+    }
+}
+
+async fn run_eml_to_pdf(
+    browser: &Path,
+    input: &Path,
+    output: &Path,
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    const MAX_EMAIL_BYTES: u64 = 64 * 1024 * 1024;
+    let metadata = tokio::fs::metadata(input).await?;
+    if metadata.len() > MAX_EMAIL_BYTES {
+        return Err(ExecutionError::InvalidInput(
+            "Cet e-mail dépasse 64 Mo. Enregistrez d’abord ses pièces jointes séparément.".into(),
+        ));
+    }
+    let bytes = tokio::fs::read(input).await?;
+    let raw = String::from_utf8_lossy(&bytes);
+    let (header_block, body_block) = split_header_body(&raw);
+    let headers = parse_mail_headers(header_block);
+    let body = extract_mail_text(&headers, body_block, 0);
+    let subject = decoded_header(&headers, "subject").unwrap_or_else(|| "Sans objet".into());
+    let sender = decoded_header(&headers, "from").unwrap_or_else(|| "—".into());
+    let recipients = decoded_header(&headers, "to").unwrap_or_else(|| "—".into());
+    let copy = decoded_header(&headers, "cc");
+    let date = decoded_header(&headers, "date").unwrap_or_else(|| "—".into());
+    let cc_row = copy.map_or_else(String::new, |value| {
+        format!(
+            "<div class=\"meta-row\"><span>Copie</span><strong>{}</strong></div>",
+            escape_html(&value)
+        )
+    });
+    let document = format!(
+        "<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\"><style>@page{{size:A4;margin:18mm}}*{{box-sizing:border-box}}body{{margin:0;color:#182033;font:14px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}}.mail{{border:1px solid #dfe5ef;border-radius:18px;overflow:hidden}}header{{padding:26px 28px;background:linear-gradient(135deg,#f4f8ff,#f7f5ff)}}.kicker{{color:#687086;font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}}h1{{margin:8px 0 0;font-size:25px;line-height:1.15}}.meta{{padding:17px 28px;border-bottom:1px solid #e7ebf2}}.meta-row{{display:grid;grid-template-columns:76px 1fr;gap:12px;padding:5px 0}}.meta-row span{{color:#7b8498}}.meta-row strong{{font-weight:650;overflow-wrap:anywhere}}article{{padding:28px;white-space:pre-wrap;overflow-wrap:anywhere}}footer{{margin-top:14px;color:#8b93a3;font-size:10px;text-align:center}}</style></head><body><main class=\"mail\"><header><div class=\"kicker\">E-mail archivé par FileFlow</div><h1>{}</h1></header><section class=\"meta\"><div class=\"meta-row\"><span>De</span><strong>{}</strong></div><div class=\"meta-row\"><span>À</span><strong>{}</strong></div>{}<div class=\"meta-row\"><span>Date</span><strong>{}</strong></div></section><article>{}</article></main><footer>Les contenus distants et scripts de l’e-mail ne sont pas exécutés.</footer></body></html>",
+        escape_html(&subject),
+        escape_html(&sender),
+        escape_html(&recipients),
+        cc_row,
+        escape_html(&date),
+        escape_html(body.trim()),
+    );
+    let html = output
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!(".fileflow-email-{}.html", Uuid::new_v4().simple()));
+    tokio::fs::write(&html, document).await?;
+    let result = run_browser_print(browser, &html, output, false, cancellation).await;
+    let _ = tokio::fs::remove_file(&html).await;
+    result
+}
+
+type MailHeaders = HashMap<String, String>;
+
+fn split_header_body(value: &str) -> (&str, &str) {
+    value
+        .split_once("\r\n\r\n")
+        .or_else(|| value.split_once("\n\n"))
+        .unwrap_or((value, ""))
+}
+
+fn parse_mail_headers(block: &str) -> MailHeaders {
+    let mut unfolded = Vec::<String>::new();
+    for line in block.replace("\r\n", "\n").lines() {
+        if line.starts_with(' ') || line.starts_with('\t') {
+            if let Some(last) = unfolded.last_mut() {
+                last.push(' ');
+                last.push_str(line.trim());
+            }
+        } else {
+            unfolded.push(line.to_owned());
+        }
+    }
+    unfolded
+        .into_iter()
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            Some((name.trim().to_ascii_lowercase(), value.trim().to_owned()))
+        })
+        .collect()
+}
+
+fn decoded_header(headers: &MailHeaders, name: &str) -> Option<String> {
+    headers.get(name).map(|value| decode_rfc2047(value))
+}
+
+fn extract_mail_text(headers: &MailHeaders, body: &str, depth: usize) -> String {
+    if depth > 6 {
+        return "[Contenu MIME trop profondément imbriqué]".into();
+    }
+    let content_type_header = headers
+        .get("content-type")
+        .cloned()
+        .unwrap_or_else(|| "text/plain".into());
+    let content_type = content_type_header.to_ascii_lowercase();
+    if content_type.starts_with("multipart/")
+        && let Some(boundary) = mail_parameter(&content_type_header, "boundary")
+    {
+        let marker = format!("--{boundary}");
+        let mut html_fallback = None;
+        for part in body.split(&marker).skip(1) {
+            let part = part.trim_start_matches(&['\r', '\n'][..]).trim_end();
+            if part.is_empty() || part.starts_with("--") {
+                continue;
+            }
+            let (part_headers_raw, part_body) = split_header_body(part);
+            let part_headers = parse_mail_headers(part_headers_raw);
+            if part_headers
+                .get("content-disposition")
+                .is_some_and(|value| value.to_ascii_lowercase().contains("attachment"))
+            {
+                continue;
+            }
+            let part_type_header = part_headers
+                .get("content-type")
+                .cloned()
+                .unwrap_or_else(|| "text/plain".into());
+            let part_type = part_type_header.to_ascii_lowercase();
+            if part_type.starts_with("multipart/") {
+                let nested = extract_mail_text(&part_headers, part_body, depth + 1);
+                if !nested.trim().is_empty() {
+                    return nested;
+                }
+            } else if part_type.starts_with("text/plain") {
+                return decode_mail_body(&part_headers, part_body);
+            } else if part_type.starts_with("text/html") {
+                html_fallback = Some(html_to_plain_text(&decode_mail_body(
+                    &part_headers,
+                    part_body,
+                )));
+            }
+        }
+        return html_fallback.unwrap_or_else(|| "[Aucun corps de message texte]".into());
+    }
+
+    let decoded = decode_mail_body(headers, body);
+    if content_type.starts_with("text/html") {
+        html_to_plain_text(&decoded)
+    } else {
+        decoded
+    }
+}
+
+fn mail_parameter(header: &str, name: &str) -> Option<String> {
+    header.split(';').skip(1).find_map(|part| {
+        let (key, value) = part.trim().split_once('=')?;
+        key.trim()
+            .eq_ignore_ascii_case(name)
+            .then(|| value.trim().trim_matches('"').trim_matches('\'').to_owned())
+    })
+}
+
+fn decode_mail_body(headers: &MailHeaders, body: &str) -> String {
+    let encoding = headers
+        .get("content-transfer-encoding")
+        .map(|value| value.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    let bytes = match encoding.as_str() {
+        "base64" => BASE64_STANDARD
+            .decode(
+                body.chars()
+                    .filter(|character| !character.is_whitespace())
+                    .collect::<String>(),
+            )
+            .unwrap_or_else(|_| body.as_bytes().to_vec()),
+        "quoted-printable" => decode_quoted_printable(body.as_bytes()),
+        _ => body.as_bytes().to_vec(),
+    };
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+fn decode_quoted_printable(input: &[u8]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(input.len());
+    let mut index = 0;
+    while index < input.len() {
+        if input[index] == b'=' {
+            if input.get(index + 1) == Some(&b'\r') && input.get(index + 2) == Some(&b'\n') {
+                index += 3;
+                continue;
+            }
+            if input.get(index + 1) == Some(&b'\n') {
+                index += 2;
+                continue;
+            }
+            if let (Some(high), Some(low)) = (input.get(index + 1), input.get(index + 2))
+                && let (Some(high), Some(low)) = (hex_value(*high), hex_value(*low))
+            {
+                output.push((high << 4) | low);
+                index += 3;
+                continue;
+            }
+        }
+        output.push(input[index]);
+        index += 1;
+    }
+    output
+}
+
+fn hex_value(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn decode_rfc2047(value: &str) -> String {
+    let mut output = String::new();
+    let mut remainder = value;
+    while let Some(start) = remainder.find("=?") {
+        output.push_str(&remainder[..start]);
+        let encoded = &remainder[start + 2..];
+        let Some(first) = encoded.find('?') else {
+            break;
+        };
+        let encoded = &encoded[first + 1..];
+        let Some(second) = encoded.find('?') else {
+            break;
+        };
+        let encoding = &encoded[..second];
+        let payload = &encoded[second + 1..];
+        let Some(end) = payload.find("?=") else { break };
+        let bytes = if encoding.eq_ignore_ascii_case("b") {
+            BASE64_STANDARD.decode(&payload[..end]).ok()
+        } else if encoding.eq_ignore_ascii_case("q") {
+            Some(decode_quoted_printable(
+                payload[..end].replace('_', " ").as_bytes(),
+            ))
+        } else {
+            None
+        };
+        if let Some(bytes) = bytes {
+            output.push_str(&String::from_utf8_lossy(&bytes));
+        } else {
+            output.push_str(&remainder[start..start + 2 + first + 1 + second + 1 + end + 2]);
+        }
+        remainder = &payload[end + 2..];
+    }
+    output.push_str(remainder);
+    output.trim().to_owned()
+}
+
+fn html_to_plain_text(value: &str) -> String {
+    let value = remove_html_block(value, "script");
+    let value = remove_html_block(&value, "style");
+    let mut output = String::with_capacity(value.len());
+    let mut inside_tag = false;
+    let mut tag = String::new();
+    for character in value.chars() {
+        match character {
+            '<' if !inside_tag => {
+                inside_tag = true;
+                tag.clear();
+            }
+            '>' if inside_tag => {
+                inside_tag = false;
+                let name = tag
+                    .trim()
+                    .trim_start_matches('/')
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("");
+                if matches!(
+                    name.to_ascii_lowercase().as_str(),
+                    "br" | "p" | "div" | "li" | "tr" | "h1" | "h2" | "h3"
+                ) {
+                    output.push('\n');
+                }
+            }
+            _ if inside_tag => tag.push(character),
+            _ => output.push(character),
+        }
+    }
+    output
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .lines()
+        .map(str::trim_end)
+        .fold(String::new(), |mut text, line| {
+            if !(line.is_empty() && text.ends_with("\n\n")) {
+                text.push_str(line);
+                text.push('\n');
+            }
+            text
+        })
+}
+
+fn remove_html_block(value: &str, element: &str) -> String {
+    let lower = value.to_ascii_lowercase();
+    let opening = format!("<{element}");
+    let closing = format!("</{element}");
+    let mut output = String::with_capacity(value.len());
+    let mut cursor = 0;
+
+    while let Some(start) = find_html_tag(&lower, &opening, cursor) {
+        output.push_str(&value[cursor..start]);
+        let Some(relative_open_end) = lower[start..].find('>') else {
+            cursor = value.len();
+            break;
+        };
+        let open_end = start + relative_open_end + 1;
+        if lower[start..open_end]
+            .trim_end_matches('>')
+            .trim_end()
+            .ends_with('/')
+        {
+            cursor = open_end;
+            continue;
+        }
+        let Some(close_start) = find_html_tag(&lower, &closing, open_end) else {
+            cursor = value.len();
+            break;
+        };
+        let Some(relative_close_end) = lower[close_start..].find('>') else {
+            cursor = value.len();
+            break;
+        };
+        cursor = close_start + relative_close_end + 1;
+        output.push(' ');
+    }
+    output.push_str(&value[cursor..]);
+    output
+}
+
+fn find_html_tag(value: &str, needle: &str, mut from: usize) -> Option<usize> {
+    while let Some(relative) = value[from..].find(needle) {
+        let index = from + relative;
+        let boundary = value.as_bytes().get(index + needle.len()).copied();
+        if boundary.is_none_or(|byte| byte.is_ascii_whitespace() || matches!(byte, b'>' | b'/')) {
+            return Some(index);
+        }
+        from = index + needle.len();
+    }
+    None
 }
 
 async fn run_pdf_protect(
@@ -2173,7 +3184,20 @@ fn item_output<'a>(
         "pdf-flatten-rotation" => ("qpdf", Some("pdf"), Some("rotation-aplatie")),
         "pdf-flatten-annotations" => ("qpdf", Some("pdf"), Some("annotations-aplaties")),
         "pdf-protect" => ("qpdf", Some("pdf"), Some("protege")),
-        "text-to-pdf" => ("pandoc", Some("pdf"), Some("pdf")),
+        "text-to-pdf" => (
+            if matches!(
+                source_extension.map(str::to_ascii_lowercase).as_deref(),
+                Some("html" | "htm" | "eml" | "mail")
+            ) {
+                "browser"
+            } else {
+                "pandoc"
+            },
+            Some("pdf"),
+            Some("pdf"),
+        ),
+        "html-to-pdf" => ("browser", Some("pdf"), Some("pdf")),
+        "email-to-pdf" => ("browser", Some("pdf"), Some("pdf")),
         "pdf-compress" => ("ghostscript", Some("pdf"), Some("leger")),
         "pdf-extract-text" => ("poppler", Some("txt"), Some("texte")),
         "pdf-ocr" => ("ocr", Some("pdf"), Some("ocr")),
@@ -3553,6 +4577,210 @@ pub struct ArchiveInspection {
     pub has_more: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedFilePreview {
+    pub path: PathBuf,
+    pub family: FormatFamily,
+    pub generated: bool,
+}
+
+pub async fn prepare_file_preview(
+    input: &Path,
+    engines: EnginePaths,
+    scheduler: Arc<ResourceScheduler>,
+    cancellation: &CancellationToken,
+) -> Result<PreparedFilePreview, ExecutionError> {
+    let detected = detect_path(input).await?;
+    let extension = input
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if detected.family == FormatFamily::Pdf {
+        return Ok(PreparedFilePreview {
+            path: input.to_path_buf(),
+            family: FormatFamily::Pdf,
+            generated: false,
+        });
+    }
+    if detected.family == FormatFamily::Image
+        && matches!(
+            extension.as_str(),
+            "jpg" | "jpeg" | "jpe" | "jfif" | "png" | "apng" | "gif" | "webp" | "svg"
+        )
+    {
+        return Ok(PreparedFilePreview {
+            path: input.to_path_buf(),
+            family: FormatFamily::Image,
+            generated: false,
+        });
+    }
+
+    let root = std::env::temp_dir().join("fileflow-previews");
+    cleanup_preview_cache(&root);
+    let destination = root.join(Uuid::new_v4().simple().to_string());
+    tokio::fs::create_dir_all(&destination).await?;
+
+    let result = match detected.family {
+        FormatFamily::Image => {
+            let output = destination.join("preview.png");
+            prepare_image_thumbnail(input, &output, &engines, scheduler.clone(), cancellation)
+                .await?;
+            PreparedFilePreview {
+                path: output,
+                family: FormatFamily::Image,
+                generated: true,
+            }
+        }
+        FormatFamily::Document | FormatFamily::Spreadsheet | FormatFamily::Presentation => {
+            let output = destination.join("preview.pdf");
+            let office = engines.get("office")?;
+            let _lease = scheduler
+                .acquire("office", ResourceProfile::OFFICE, cancellation)
+                .await?;
+            run_office_convert(
+                office,
+                input,
+                &transient_output_plan(&output),
+                "pdf",
+                cancellation,
+            )
+            .await?;
+            PreparedFilePreview {
+                path: output,
+                family: FormatFamily::Pdf,
+                generated: true,
+            }
+        }
+        FormatFamily::Text => {
+            let output = destination.join("preview.pdf");
+            match extension.as_str() {
+                "html" | "htm" => {
+                    run_browser_print(engines.get("browser")?, input, &output, true, cancellation)
+                        .await?;
+                }
+                "eml" | "mail" => {
+                    run_eml_to_pdf(engines.get("browser")?, input, &output, cancellation).await?;
+                }
+                _ => {
+                    let text = tokio::fs::read_to_string(input).await.map_err(|_| {
+                        ExecutionError::InvalidInput(
+                            "Ce fichier texte n’utilise pas un encodage compatible avec l’aperçu."
+                                .into(),
+                        )
+                    })?;
+                    let html = destination.join("preview.html");
+                    let document = format!(
+                        "<!doctype html><meta charset=\"utf-8\"><style>@page{{size:A4;margin:18mm}}body{{color:#182033;font:13px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}}</style>{}",
+                        escape_html(&text)
+                    );
+                    tokio::fs::write(&html, document).await?;
+                    run_browser_print(engines.get("browser")?, &html, &output, false, cancellation)
+                        .await?;
+                }
+            }
+            PreparedFilePreview {
+                path: output,
+                family: FormatFamily::Pdf,
+                generated: true,
+            }
+        }
+        FormatFamily::Ebook if matches!(extension.as_str(), "epub" | "fb2") => {
+            let html = destination.join("book.html");
+            let output = destination.join("preview.pdf");
+            let pandoc = engines.get("pandoc")?;
+            let _lease = scheduler
+                .acquire("pandoc", ResourceProfile::LIGHT, cancellation)
+                .await?;
+            run_pandoc(pandoc, input, &html, cancellation).await?;
+            drop(_lease);
+            run_browser_print(engines.get("browser")?, &html, &output, false, cancellation).await?;
+            PreparedFilePreview {
+                path: output,
+                family: FormatFamily::Pdf,
+                generated: true,
+            }
+        }
+        FormatFamily::Video => {
+            let output = destination.join("preview.jpg");
+            let ffmpeg = engines.get("ffmpeg")?;
+            let _lease = scheduler
+                .acquire("ffmpeg", ResourceProfile::MEDIA, cancellation)
+                .await?;
+            run_ffmpeg(
+                ffmpeg,
+                "video-thumbnail",
+                input,
+                &output,
+                Some("balanced"),
+                &HashMap::new(),
+                scheduler.budget().cpu_tokens.max(1),
+                cancellation,
+            )
+            .await?;
+            PreparedFilePreview {
+                path: output,
+                family: FormatFamily::Image,
+                generated: true,
+            }
+        }
+        _ => {
+            let _ = tokio::fs::remove_dir_all(&destination).await;
+            return Err(ExecutionError::InvalidInput(format!(
+                "Le format {} ne possède pas de représentation visuelle fiable.",
+                detected.id
+            )));
+        }
+    };
+    Ok(result)
+}
+
+async fn prepare_image_thumbnail(
+    input: &Path,
+    output: &Path,
+    engines: &EnginePaths,
+    scheduler: Arc<ResourceScheduler>,
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    if let Ok(vips) = engines.get("vips") {
+        let _lease = scheduler
+            .acquire("vips-preview", ResourceProfile::IMAGE, cancellation)
+            .await?;
+        if run_vips_thumbnail(
+            vips,
+            input,
+            output,
+            Some("balanced"),
+            scheduler.budget().cpu_tokens.max(1),
+            cancellation,
+        )
+        .await
+        .is_ok()
+        {
+            return Ok(());
+        }
+        let _ = tokio::fs::remove_file(output).await;
+    }
+    let imagemagick = engines.get("imagemagick")?;
+    let _lease = scheduler
+        .acquire("imagemagick-preview", ResourceProfile::IMAGE, cancellation)
+        .await?;
+    run_process(
+        imagemagick,
+        &[
+            input.as_os_str().into(),
+            OsString::from("-auto-orient"),
+            OsString::from("-thumbnail"),
+            OsString::from("1800x1800>"),
+            OsString::from("-strip"),
+            output.as_os_str().into(),
+        ],
+        cancellation,
+    )
+    .await
+}
+
 pub async fn extract_archive_entry_preview(
     engine: &Path,
     input: &Path,
@@ -3942,7 +5170,9 @@ fn process_timeout(engine: &Path) -> Duration {
         .and_then(|value| value.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    if name.contains("soffice") || name.contains("libreoffice") {
+    if is_browser_executable_name(&name) {
+        BROWSER_PRINT_TIMEOUT
+    } else if name.contains("soffice") || name.contains("libreoffice") {
         Duration::from_secs(180)
     } else if name.contains("ffmpeg") || name.contains("ocrmypdf") || name.contains("tesseract") {
         Duration::from_secs(60 * 60)
@@ -3951,6 +5181,13 @@ fn process_timeout(engine: &Path) -> Duration {
     } else {
         Duration::from_secs(10 * 60)
     }
+}
+
+fn is_browser_executable_name(name: &str) -> bool {
+    name.contains("chrome")
+        || name.contains("chromium")
+        || name.contains("msedge")
+        || name.contains("microsoft edge")
 }
 
 async fn capture_process(
@@ -4046,6 +5283,15 @@ async fn run_process(
     args: &[OsString],
     cancellation: &CancellationToken,
 ) -> Result<(), ExecutionError> {
+    run_process_with_timeout(engine, args, cancellation, process_timeout(engine)).await
+}
+
+async fn run_process_with_timeout(
+    engine: &Path,
+    args: &[OsString],
+    cancellation: &CancellationToken,
+    timeout: Duration,
+) -> Result<(), ExecutionError> {
     if cancellation.is_cancelled() {
         return Err(ExecutionError::Cancelled);
     }
@@ -4067,10 +5313,13 @@ async fn run_process(
     let output = tokio::select! {
         result = &mut future => result?,
         _ = cancellation.cancelled() => return Err(ExecutionError::Cancelled),
-        _ = tokio::time::sleep(process_timeout(engine)) => {
+        _ = tokio::time::sleep(timeout) => {
             return Err(ExecutionError::ProcessFailed {
                 program: program.clone(),
-                message: "délai maximal de traitement dépassé; le processus a été arrêté".into(),
+                message: format!(
+                    "délai maximal de traitement dépassé ({} s); le processus a été arrêté",
+                    timeout.as_secs()
+                ),
             });
         }
     };
@@ -4104,7 +5353,7 @@ fn profile_for(engine: &str) -> ResourceProfile {
     match engine {
         "ffmpeg" => ResourceProfile::MEDIA,
         "vips" | "imagemagick" => ResourceProfile::IMAGE,
-        "office" => ResourceProfile::OFFICE,
+        "office" | "browser" => ResourceProfile::OFFICE,
         "ocr" | "tesseract" => ResourceProfile::OCR,
         "archive" | "zstd" | "lz4" => ResourceProfile::ARCHIVE,
         "qpdf" | "ghostscript" | "poppler" => ResourceProfile::PDF,
@@ -4271,6 +5520,8 @@ pub const EXECUTABLE_ACTIONS: &[&str] = &[
     "extract-audio",
     "video-to-gif",
     "text-to-pdf",
+    "html-to-pdf",
+    "email-to-pdf",
     "text-convert",
     "ebook-convert",
 ];
@@ -4493,5 +5744,216 @@ mod tests {
         let bytes = nul_separated_paths(&inputs);
         assert!(bytes.ends_with(&[0]));
         assert_eq!(bytes.iter().filter(|byte| **byte == 0).count(), 2);
+    }
+
+    #[test]
+    fn email_decoding_handles_encoded_headers_and_quoted_printable_bodies() {
+        assert_eq!(
+            decode_rfc2047("=?UTF-8?B?U3VqZXQgZMOpY29kw6k=?="),
+            "Sujet décodé"
+        );
+        assert_eq!(
+            String::from_utf8(decode_quoted_printable(b"Bonjour=20=C3=A0=20tous")).unwrap(),
+            "Bonjour à tous"
+        );
+    }
+
+    #[test]
+    fn email_html_preview_neutralizes_scripts_and_markup() {
+        let headers = HashMap::from([
+            ("content-type".into(), "text/html; charset=utf-8".into()),
+            (
+                "content-transfer-encoding".into(),
+                "quoted-printable".into(),
+            ),
+        ]);
+        let text = extract_mail_text(
+            &headers,
+            "<h1>Message</h1><script>window.location='https://example.com'</script><p>Corps=20sûr</p>",
+            0,
+        );
+        assert!(text.contains("Message"));
+        assert!(text.contains("Corps sûr"));
+        assert!(!text.contains("window.location"));
+        assert!(!text.contains("<script>"));
+    }
+
+    #[test]
+    fn email_multipart_boundaries_keep_their_original_case() {
+        let headers = HashMap::from([(
+            "content-type".into(),
+            "multipart/alternative; boundary=FileFlowBoundary".into(),
+        )]);
+        let body = "--FileFlowBoundary\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nVersion texte\r\n--FileFlowBoundary--\r\n";
+        assert_eq!(extract_mail_text(&headers, body, 0).trim(), "Version texte");
+    }
+
+    #[test]
+    fn browser_timeout_is_strictly_thirty_seconds_on_every_platform() {
+        for executable in [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/usr/bin/chromium",
+            r"C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+        ] {
+            assert_eq!(
+                process_timeout(Path::new(executable)),
+                Duration::from_secs(30)
+            );
+        }
+    }
+
+    #[test]
+    fn browser_render_budget_keeps_dynamic_and_static_attempts_below_global_limit() {
+        assert!(
+            BROWSER_SCRIPT_TIMEOUT + BROWSER_STATIC_TIMEOUT + BROWSER_TEXT_TIMEOUT
+                < BROWSER_PRINT_TIMEOUT
+        );
+        assert_eq!(BROWSER_SCRIPT_TIMEOUT, Duration::from_secs(14));
+        assert_eq!(BROWSER_STATIC_TIMEOUT, Duration::from_secs(7));
+        assert_eq!(BROWSER_TEXT_TIMEOUT, Duration::from_secs(6));
+    }
+
+    #[test]
+    fn browser_sanitized_snapshot_blocks_scripts_and_keeps_saved_content() {
+        let source = "<html><head><title>Gmail</title><script>document.body.textContent='Erreur temporaire'</script></head><body><main>KingSpec 512 Go</main><img src='Commande_files/photo.png'></body></html>";
+        let document = browser_sanitized_document(source, Path::new("/tmp/Mes messages"), true);
+        assert!(document.contains("KingSpec 512 Go"));
+        assert!(document.contains("Content-Security-Policy"));
+        assert!(document.contains("script-src 'none'"));
+        assert!(document.contains("img-src file: data: blob:"));
+        assert!(document.contains("file:///tmp/Mes%20messages/"));
+        assert!(!document.contains("document.body.textContent"));
+        assert!(!document.to_ascii_lowercase().contains("<script"));
+    }
+
+    #[tokio::test]
+    async fn browser_saved_gmail_uses_dom_preservation_mode() {
+        let root = std::env::temp_dir()
+            .join("fileflow-gmail-detection")
+            .join(Uuid::new_v4().simple().to_string());
+        tokio::fs::create_dir_all(&root)
+            .await
+            .expect("temporary root");
+        let gmail = root.join("Commandes - Gmail.htm");
+        tokio::fs::write(
+            &gmail,
+            b"<html><head><title>Commande - Gmail</title></head><body><main>Le message sauvegarde</main><script>document.body.textContent='Erreur temporaire'</script></body></html>",
+        )
+        .await
+        .expect("saved Gmail page");
+        assert!(
+            browser_should_preserve_saved_dom(&gmail)
+                .await
+                .expect("Gmail detection")
+        );
+
+        let ordinary = root.join("application.html");
+        tokio::fs::write(
+            &ordinary,
+            b"<html><body><div id=app></div><script>renderApplication()</script></body></html>",
+        )
+        .await
+        .expect("ordinary dynamic page");
+        assert!(
+            !browser_should_preserve_saved_dom(&ordinary)
+                .await
+                .expect("ordinary page detection")
+        );
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[test]
+    fn browser_print_uses_a_visible_pdf_staging_path() {
+        let (_root, profile, output, log) = browser_attempt_paths();
+        assert_eq!(
+            output.file_name().and_then(|value| value.to_str()),
+            Some("render.pdf")
+        );
+        assert!(
+            !output
+                .file_name()
+                .and_then(|value| value.to_str())
+                .expect("UTF-8 staging filename")
+                .starts_with('.')
+        );
+        assert_eq!(
+            profile.file_name().and_then(|value| value.to_str()),
+            Some("profile")
+        );
+        assert_eq!(
+            log.file_name().and_then(|value| value.to_str()),
+            Some("browser.log")
+        );
+    }
+
+    #[tokio::test]
+    async fn browser_pdf_detection_rejects_partial_files() {
+        let (root, _profile, output, _log) = browser_attempt_paths();
+        tokio::fs::create_dir_all(&root)
+            .await
+            .expect("temporary root");
+        tokio::fs::write(&output, b"%PDF-1.7\n1 0 obj\n<<>>\nendobj\n")
+            .await
+            .expect("partial PDF");
+        assert_eq!(
+            browser_complete_pdf_size(&output)
+                .await
+                .expect("partial PDF check"),
+            None
+        );
+
+        tokio::fs::write(&output, b"%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n")
+            .await
+            .expect("complete PDF");
+        assert!(
+            browser_complete_pdf_size(&output)
+                .await
+                .expect("complete PDF check")
+                .is_some()
+        );
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[test]
+    fn browser_text_snapshot_removes_active_markup() {
+        let source = "<h1>Commande</h1><script>while(true){}</script><p>KingSpec 512 Go</p>";
+        let plain = html_to_plain_text(source);
+        let document = browser_text_snapshot_document("Gmail", &plain, false);
+        assert!(document.contains("Commande"));
+        assert!(document.contains("KingSpec 512 Go"));
+        assert!(!document.contains("while(true)"));
+        assert!(!document.contains("<script>"));
+    }
+
+    #[test]
+    #[ignore = "helper process used by browser_process_timeout_stops_a_hung_child"]
+    fn timeout_child_process_sleeps() {
+        std::thread::sleep(Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn browser_process_timeout_stops_a_hung_child() {
+        let executable = std::env::current_exe().expect("test executable");
+        let cancellation = CancellationToken::new();
+        let started = Instant::now();
+        let error = run_process_with_timeout(
+            &executable,
+            &[
+                OsString::from("--ignored"),
+                OsString::from("--exact"),
+                OsString::from("tests::timeout_child_process_sleeps"),
+            ],
+            &cancellation,
+            Duration::from_millis(50),
+        )
+        .await
+        .expect_err("the helper process must time out");
+
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(matches!(
+            error,
+            ExecutionError::ProcessFailed { message, .. }
+                if message.contains("délai maximal") && message.contains("0 s")
+        ));
     }
 }

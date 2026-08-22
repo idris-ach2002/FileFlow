@@ -1,63 +1,59 @@
 # Graphe de transformation vers PDF
 
-Le mode Smart-to-PDF fait converger plusieurs familles de fichiers vers un PDF validé.
+Le mode Smart-to-PDF fait converger les fichiers reconnus vers un PDF validé. Le planificateur choisit un chemin uniquement lorsqu'un moteur réellement disponible peut l'exécuter.
 
 ```mermaid
-flowchart LR
-    INPUT["Entrées"] --> DETECT["Détection format / famille"]
+flowchart TD
+    INPUT["Fichiers ou dossier"] --> DETECT["Détection réelle du format"]
 
-    DETECT --> IMG["Images"]
+    DETECT --> WEB["HTML · HTM"]
+    DETECT --> MAIL["EML · MAIL"]
+    DETECT --> IMAGE["Images · HEIC · RAW"]
+    DETECT --> DOC["Office · texte · ebook"]
     DETECT --> PDF["PDF existant"]
-    DETECT --> OFFICE["Office"]
-    DETECT --> TEXT["Document / texte"]
-    DETECT --> ARCH["Archive"]
 
-    IMG --> IMG2PDF["img2pdf / pipeline image"]
-    OFFICE --> LO["LibreOffice"]
-    TEXT --> PANDOC["Pandoc"]
-    ARCH --> EXTRACT["7-Zip / extraction"]
-    EXTRACT --> AGAIN["Nouvelle détection"]
+    WEB --> BROWSER["Chromium isolé · JavaScript borné"]
+    MAIL --> SAFE["Décodage MIME · HTML neutralisé"]
+    SAFE --> BROWSER_SAFE["Chromium isolé · JavaScript désactivé"]
 
-    AGAIN --> IMG2PDF
-    AGAIN --> LO
-    AGAIN --> PANDOC
-    AGAIN --> PDF
+    IMAGE --> NATIVE{"JPEG / PNG / TIFF ?"}
+    NATIVE -->|oui| IMG2PDF["img2pdf"]
+    NATIVE -->|non| NORMALIZE["libvips ou ImageMagick → PNG"]
+    NORMALIZE --> IMG2PDF
 
-    IMG2PDF --> COMPONENT["PDF composant"]
-    LO --> COMPONENT
+    DOC --> OFFICE["LibreOffice"]
+    DOC --> PANDOC["Pandoc"]
+
+    BROWSER --> COMPONENT["PDF composant"]
+    BROWSER_SAFE --> COMPONENT
+    IMG2PDF --> COMPONENT
+    OFFICE --> COMPONENT
     PANDOC --> COMPONENT
     PDF --> COMPONENT
 
-    COMPONENT --> MERGE["qpdf — assemblage"]
-    MERGE --> OPTIONS{"Options"}
-    OPTIONS -->|OCR| OCR["OCRmyPDF / Tesseract"]
-    OPTIONS -->|Métadonnées| META["ExifTool"]
-    OPTIONS -->|Protection| PROTECT["qpdf"]
-    OPTIONS -->|aucune| VALIDATE["Validation"]
-
-    OCR --> VALIDATE
-    META --> VALIDATE
-    PROTECT --> VALIDATE
-
-    VALIDATE --> STRUCT["%PDF- + qpdf --check"]
-    STRUCT --> STAGE["OutputResolver staging"]
-    STAGE --> CHECK2["Validation finale"]
-    CHECK2 --> FINAL["PDF final"]
+    COMPONENT --> MERGE["qpdf · assemblage"]
+    MERGE --> OPTIONAL["OCR · métadonnées · protection"]
+    OPTIONAL --> VALIDATE["Signature PDF + qpdf --check"]
+    VALIDATE --> STAGE["Destination choisie · staging atomique"]
+    STAGE --> FINAL["PDF final"]
 ```
 
-## Validation
+## HTML et scripts
 
-FileFlow contrôle d’abord que le fichier :
-- existe ;
-- possède une taille minimale ;
-- commence par la signature `%PDF-`.
+Les pages HTML sont imprimées par Chrome, Chromium ou Edge en mode headless. JavaScript reste actif afin de permettre le rendu des applications et graphiques dynamiques, mais l'exécution est bornée à cinq secondes. Le profil temporaire est isolé, les extensions sont désactivées et les requêtes réseau ainsi que la résolution DNS sont bloquées. Un document HTML local peut donc exécuter son rendu sans transformer la conversion en navigateur généraliste connecté.
 
-Lorsque qpdf est disponible, FileFlow ajoute `qpdf --warning-exit-0 --check`.
+## E-mails EML
 
-## Pourquoi une seconde validation ?
+Un e-mail n'est jamais ouvert comme une page web active. FileFlow décode les en-têtes, les contenus Base64 ou quoted-printable et les parties MIME pertinentes, neutralise les balises et scripts, puis génère une représentation HTML échappée. L'impression PDF s'effectue ensuite avec JavaScript désactivé.
 
-Le pipeline valide le PDF de travail puis le fichier copié vers le staging final. La deuxième validation porte donc sur le fichier réellement destiné à être promu vers le résultat utilisateur.
+## Images étendues
+
+JPEG, PNG et TIFF sont transmis directement à img2pdf. HEIC/HEIF, AVIF, WebP, JPEG XL, RAW et les formats plus rares reconnus sont d'abord normalisés en PNG par libvips, avec ImageMagick comme solution de repli. La disponibilité réelle du codec dépend des codecs installés avec ces moteurs.
+
+## Validation et destination
+
+FileFlow contrôle l'existence, la taille minimale et la signature `%PDF-`. Lorsque qpdf est disponible, il ajoute `qpdf --warning-exit-0 --check`. Le pipeline valide le PDF de travail puis le fichier copié vers le staging final. La destination explicitement sélectionnée dans l'interface prime sur la destination guidée et les conflits n'écrasent jamais silencieusement un fichier existant.
 
 ## Workspace temporaire
 
-Les composants et fichiers techniques restent dans un workspace de job. Le résultat est promu en dehors avant que le workspace soit nettoyé.
+Les composants, profils de navigateur et fichiers techniques restent dans un workspace de job. Le résultat est promu en dehors avant le nettoyage du workspace.

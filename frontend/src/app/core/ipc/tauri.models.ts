@@ -436,6 +436,12 @@ export interface ArchiveInspection {
   hasMore: boolean;
 }
 
+export interface PreparedFilePreview {
+  path: string;
+  family: FormatFamily;
+  generated: boolean;
+}
+
 export interface AccountBootstrap {
   hasAccount: boolean;
   knownAccounts: AccountProfile[];

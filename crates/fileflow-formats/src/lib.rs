@@ -229,10 +229,13 @@ fn text_descriptor(sample: &[u8], extension: Option<String>) -> Option<DetectedF
         .ok()?
         .trim_start_matches('\u{feff}')
         .trim_start();
-    let (id, mime) = if (text.starts_with('{') && text.contains(':')) || text.starts_with('[') {
+    let lower = text.to_ascii_lowercase();
+    let (id, mime) = if looks_like_email_message(&lower) {
+        ("eml", "message/rfc822")
+    } else if (text.starts_with('{') && text.contains(':')) || text.starts_with('[') {
         ("json", "application/json")
     } else if text.starts_with("<?xml") || (text.starts_with('<') && text.contains('>')) {
-        if text.to_ascii_lowercase().contains("<html") {
+        if lower.contains("<html") || lower.starts_with("<!doctype html") {
             ("html", "text/html")
         } else {
             ("xml", "application/xml")
@@ -247,6 +250,21 @@ fn text_descriptor(sample: &[u8], extension: Option<String>) -> Option<DetectedF
         family: FormatFamily::Text,
         confidence: DetectionConfidence::Magic,
     })
+}
+
+fn looks_like_email_message(text: &str) -> bool {
+    let header = text.split("\n\n").next().unwrap_or(text);
+    let has_subject = header.lines().any(|line| line.starts_with("subject:"));
+    let has_sender = header
+        .lines()
+        .any(|line| line.starts_with("from:") || line.starts_with("sender:"));
+    let has_recipient = header
+        .lines()
+        .any(|line| line.starts_with("to:") || line.starts_with("delivered-to:"));
+    let has_mime = header
+        .lines()
+        .any(|line| line.starts_with("mime-version:") || line.starts_with("content-type:"));
+    has_sender && (has_subject || has_recipient || has_mime)
 }
 
 fn from_extension(extension: Option<String>, descriptor: ExtensionDescriptor) -> DetectedFormat {
@@ -290,6 +308,9 @@ fn normalize_format_id(extension: &str) -> &str {
         "jpg" | "jpeg" => "jpeg",
         "tif" | "tiff" => "tiff",
         "htm" | "html" => "html",
+        "jpe" | "jfif" => "jpeg",
+        "jp2" | "j2k" | "jpf" | "jpx" | "jpm" => "jpeg2000",
+        "pbm" | "pgm" | "ppm" | "pnm" | "pam" => "netpbm",
         other => other,
     }
 }
@@ -332,6 +353,20 @@ fn extension_descriptor(extension: &str) -> Option<ExtensionDescriptor> {
         "svg" => image("svg", "image/svg+xml"),
         "ico" => image("ico", "image/x-icon"),
         "jxl" => image("jxl", "image/jxl"),
+        "apng" => image("apng", "image/apng"),
+        "jpe" | "jfif" => image("jpeg", "image/jpeg"),
+        "jp2" | "j2k" | "jpf" | "jpx" | "jpm" | "mj2" => image("jpeg2000", "image/jp2"),
+        "tga" | "icb" | "vda" | "vst" => image("tga", "image/x-tga"),
+        "dds" => image("dds", "image/vnd-ms.dds"),
+        "exr" => image("openexr", "image/x-exr"),
+        "hdr" | "rgbe" => image("radiance", "image/vnd.radiance"),
+        "pbm" | "pgm" | "ppm" | "pnm" | "pam" => image("netpbm", "image/x-portable-anymap"),
+        "pcx" | "dcx" => image("pcx", "image/x-pcx"),
+        "qoi" => image("qoi", "image/qoi"),
+        "xcf" => image("xcf", "image/x-xcf"),
+        "cur" => image("cursor", "image/x-win-bitmap"),
+        "icns" => image("icns", "image/icns"),
+        "wmf" | "emf" => image("windows-metafile", "image/x-wmf"),
         "psd" | "psb" => image("photoshop", "image/vnd.adobe.photoshop"),
         "eps" => image("eps", "application/postscript"),
         "dng" | "cr2" | "cr3" | "nef" | "nrw" | "arw" | "srf" | "sr2" | "orf" | "raf" | "rw2"
@@ -383,6 +418,7 @@ fn extension_descriptor(extension: &str) -> Option<ExtensionDescriptor> {
             simple("text", Some("text/plain"), FormatFamily::Text)
         }
         "html" | "htm" => simple("html", Some("text/html"), FormatFamily::Text),
+        "eml" | "mail" => simple("eml", Some("message/rfc822"), FormatFamily::Text),
         "json" => simple("json", Some("application/json"), FormatFamily::Text),
         "xml" => simple("xml", Some("application/xml"), FormatFamily::Text),
         "yaml" | "yml" => simple("yaml", Some("application/yaml"), FormatFamily::Text),
@@ -606,6 +642,21 @@ mod tests {
         assert_eq!(json.family, FormatFamily::Text);
         assert_eq!(html.id, "html");
         assert_eq!(html.family, FormatFamily::Text);
+    }
+
+    #[test]
+    fn recognizes_email_messages_and_extended_images() {
+        let registry = FormatRegistry;
+        let email = registry.detect(
+            Path::new("message.bin"),
+            b"From: alice@example.test\nTo: bob@example.test\nSubject: Hello\nMIME-Version: 1.0\n\nBody",
+        );
+        let image = registry.detect(Path::new("render.exr"), b"");
+
+        assert_eq!(email.id, "eml");
+        assert_eq!(email.mime_type.as_deref(), Some("message/rfc822"));
+        assert_eq!(image.family, FormatFamily::Image);
+        assert_eq!(image.id, "openexr");
     }
 
     #[test]

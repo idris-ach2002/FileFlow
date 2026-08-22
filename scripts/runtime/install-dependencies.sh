@@ -165,11 +165,20 @@ probe_office() {
   return 1
 }
 
+probe_browser() {
+  has_any google-chrome google-chrome-stable chromium chromium-browser microsoft-edge msedge chrome && return 0
+  [ -x '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' ] && return 0
+  [ -x '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge' ] && return 0
+  [ -x '/Applications/Chromium.app/Contents/MacOS/Chromium' ] && return 0
+  return 1
+}
+
 probe_spec() {
   local spec="$1" cmd
   IFS='|' read -r -a cmds <<< "$spec"
   for cmd in "${cmds[@]}"; do
     [ "$cmd" = '@office' ] && { probe_office && return 0; continue; }
+    [ "$cmd" = '@browser' ] && { probe_browser && return 0; continue; }
     has "$cmd" && return 0
   done
   return 1
@@ -367,6 +376,12 @@ case "$PKG_MANAGER" in
     done
     ;;
 esac
+
+if [ "$OS" = Darwin ]; then
+  ensure_engine 'Navigateur PDF' @browser brew-cask:google-chrome
+else
+  ensure_engine 'Navigateur PDF' @browser native:chromium
+fi
 
 printf '\nRuntime dependencies: %s available, %s missing, %s fallback warnings.\n' "$ok" "$missing" "$warnings"
 printf 'Missing engines do not prevent FileFlow from being installed; only their related actions are unavailable.\n'

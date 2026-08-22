@@ -40,6 +40,21 @@ check_office() {
   MISSING=$((MISSING + 1)); return 1
 }
 
+check_browser() {
+  local path name
+  for name in google-chrome google-chrome-stable chromium chromium-browser microsoft-edge msedge chrome; do
+    if path="$(find_cmd "$name" 2>/dev/null)"; then
+      printf '[OK]   %-14s %s\n' 'Navigateur PDF' "$path"
+      FOUND=$((FOUND + 1)); return 0
+    fi
+  done
+  for path in '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge' '/Applications/Chromium.app/Contents/MacOS/Chromium'; do
+    [ -x "$path" ] && { printf '[OK]   %-14s %s\n' 'Navigateur PDF' "$path"; FOUND=$((FOUND + 1)); return 0; }
+  done
+  printf '[MISS] %-14s not installed\n' 'Navigateur PDF'
+  MISSING=$((MISSING + 1)); return 1
+}
+
 FOUND=0; MISSING=0
 printf 'FileFlow runtime doctor — %s / %s\n\n' "$(uname -s 2>/dev/null || echo unknown)" "$(uname -m 2>/dev/null || echo unknown)"
 check FFmpeg ffmpeg || true
@@ -53,6 +68,7 @@ check Tesseract tesseract || true
 check OCRmyPDF ocrmypdf || true
 check_office || true
 check Pandoc pandoc || true
+check_browser || true
 check ExifTool exiftool || true
 check 7-Zip 7zz 7z || true
 check Zstandard zstd || true

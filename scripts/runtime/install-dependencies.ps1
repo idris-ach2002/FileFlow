@@ -98,8 +98,24 @@ function Find-LibreOffice {
   return $null
 }
 
+function Find-Browser {
+  $command = Find-Any @('msedge.exe', 'chrome.exe', 'chromium.exe', 'msedge', 'chrome', 'chromium')
+  if ($command) { return $command }
+  foreach ($path in @(
+    "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
+    "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
+    "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+    "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
+    "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe"
+  )) {
+    if ($path -and (Test-Path $path)) { return $path }
+  }
+  return $null
+}
+
 function Is-Available([string]$Probe) {
   if ($Probe -eq '@office') { return [bool](Find-LibreOffice) }
+  if ($Probe -eq '@browser') { return [bool](Find-Browser) }
   return [bool](Find-Any ($Probe -split '\|'))
 }
 
@@ -206,6 +222,7 @@ Ensure-Engine 'Tesseract'    'tesseract.exe|tesseract'       @('winget:tesseract
 Ensure-Engine 'OCRmyPDF'     'ocrmypdf.exe|ocrmypdf'         @('pipx:ocrmypdf')
 Ensure-Engine 'LibreOffice'  '@office'                       @('winget:TheDocumentFoundation.LibreOffice','choco:libreoffice-fresh','scoop:libreoffice')
 Ensure-Engine 'Pandoc'       'pandoc.exe|pandoc'             @('winget:JohnMacFarlane.Pandoc','choco:pandoc','scoop:pandoc')
+Ensure-Engine 'Navigateur PDF' '@browser'                    @('winget:Microsoft.Edge','winget:Google.Chrome')
 Ensure-Engine 'ExifTool'     'exiftool.exe|exiftool'         @('winget:OliverBetz.ExifTool','choco:exiftool','scoop:exiftool')
 Ensure-Engine '7-Zip'        '7zz.exe|7z.exe|7z'             @('winget:7zip.7zip','choco:7zip','scoop:7zip')
 Ensure-Engine 'Zstandard'    'zstd.exe|zstd'                 @('winget:Facebook.Zstandard','choco:zstandard','scoop:zstd')

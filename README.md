@@ -26,7 +26,7 @@ Version du workspace documentée : **1.0.1**.
 ## Ce que FileFlow sait faire
 
 - convertir des images individuellement ou par lot ;
-- créer des PDF à partir d’images ou de collections ;
+- créer des PDF à partir d’images, HEIC/HEIF, HTML, EML ou de collections ;
 - fusionner, découper, valider et transformer des PDF ;
 - effectuer de l’OCR ;
 - convertir des documents Office et des formats structurés ;
@@ -36,6 +36,8 @@ Version du workspace documentée : **1.0.1**.
 - gérer les métadonnées ;
 - organiser les sorties, l’historique, les favoris et les automatisations ;
 - fonctionner avec des moteurs système installés sur Windows, macOS et Linux.
+
+Les pages HTML sont imprimées dans un navigateur Chromium isolé : JavaScript est autorisé pendant une durée bornée pour rendre les contenus dynamiques, tandis que le réseau et le DNS restent désactivés. Les e-mails EML suivent un chemin distinct qui neutralise HTML et scripts avant la création du PDF.
 
 ## Documentation
 

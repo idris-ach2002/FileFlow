@@ -497,6 +497,30 @@ fn default_actions() -> Vec<ActionDescriptor> {
             true,
         ),
         action(
+            "html-to-pdf",
+            "HTML vers PDF",
+            "Rendre la page avec JavaScript dans un navigateur isolé, puis l’imprimer en PDF.",
+            OperationCategory::Pdf,
+            &[Text],
+            &["browser"],
+            Some("pdf"),
+            true,
+            false,
+            true,
+        ),
+        action(
+            "email-to-pdf",
+            "E-mail EML vers PDF",
+            "Créer une copie PDF lisible de l’e-mail, de ses en-têtes et de son contenu texte.",
+            OperationCategory::Pdf,
+            &[Text],
+            &["browser"],
+            Some("pdf"),
+            true,
+            false,
+            true,
+        ),
+        action(
             "pdf-merge",
             "Fusionner des PDF",
             "Réunir plusieurs PDF dans l’ordre choisi.",
@@ -1793,6 +1817,20 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
             ],
         ),
         format_profile(
+            "extended-image",
+            "Images étendues et professionnelles",
+            Image,
+            &[
+                "apng", "jpe", "jfif", "jp2", "j2k", "jpf", "jpx", "jpm", "mj2", "tga", "icb",
+                "vda", "vst", "dds", "exr", "hdr", "rgbe", "pbm", "pgm", "ppm", "pnm", "pam",
+                "pcx", "dcx", "qoi", "xcf", "cur", "icns", "wmf", "emf",
+            ],
+            true,
+            &image_actions,
+            &["jpg", "png", "webp", "avif", "tiff", "pdf"],
+            &["zip", "7z", "tar", "tar.gz", "tar.zst", "zst", "lz4"],
+        ),
+        format_profile(
             "pdf",
             "PDF",
             Pdf,
@@ -1863,10 +1901,42 @@ fn default_format_capabilities() -> Vec<FormatCapabilityProfile> {
             ],
         ),
         format_profile(
+            "html",
+            "Page HTML dynamique",
+            Text,
+            &["html", "htm"],
+            true,
+            &[
+                "html-to-pdf",
+                "text-to-pdf",
+                "text-convert",
+                "zstd-compress",
+                "lz4-compress",
+                "archive-package",
+            ],
+            &["pdf", "html", "docx", "txt"],
+            &["zip", "7z", "tar", "tar.gz", "tar.zst", "zst", "lz4"],
+        ),
+        format_profile(
+            "eml",
+            "E-mail EML",
+            Text,
+            &["eml", "mail"],
+            true,
+            &[
+                "email-to-pdf",
+                "zstd-compress",
+                "lz4-compress",
+                "archive-package",
+            ],
+            &["pdf"],
+            &["zip", "7z", "tar", "tar.gz", "tar.zst", "zst", "lz4"],
+        ),
+        format_profile(
             "markup",
             "Texte / Markdown / HTML",
             Text,
-            &["txt", "md", "markdown", "rst", "html", "htm", "tex"],
+            &["txt", "md", "markdown", "rst", "tex"],
             true,
             &[
                 "text-to-pdf",
@@ -2135,6 +2205,19 @@ fn default_conversion_edges() -> Vec<ConversionEdge> {
         "svg",
         "photoshop",
         "eps",
+        "apng",
+        "jpeg2000",
+        "tga",
+        "dds",
+        "openexr",
+        "radiance",
+        "netpbm",
+        "pcx",
+        "qoi",
+        "xcf",
+        "cursor",
+        "icns",
+        "windows-metafile",
     ] {
         for to in ["jpeg", "png", "webp", "avif", "tiff"] {
             if from != to {
@@ -2155,6 +2238,33 @@ fn default_conversion_edges() -> Vec<ConversionEdge> {
     for from in ["jpeg", "png", "tiff"] {
         edges.push(edge(from, "pdf", "img2pdf", 1, false));
     }
+    // ImageMagick is a compatibility fallback for codecs that a local libvips
+    // build may not contain (notably some RAW, vector and professional formats).
+    for from in [
+        "heic",
+        "heif",
+        "avif",
+        "jxl",
+        "raw",
+        "svg",
+        "photoshop",
+        "eps",
+        "apng",
+        "jpeg2000",
+        "tga",
+        "dds",
+        "openexr",
+        "radiance",
+        "netpbm",
+        "pcx",
+        "qoi",
+        "xcf",
+        "cursor",
+        "icns",
+        "windows-metafile",
+    ] {
+        edges.push(edge(from, "png", "imagemagick", 2, false));
+    }
 
     for from in [
         "doc", "docx", "odt", "rtf", "wpd", "xls", "xlsx", "ods", "csv", "tsv", "ppt", "pptx",
@@ -2168,6 +2278,8 @@ fn default_conversion_edges() -> Vec<ConversionEdge> {
         edges.push(edge(from, "html", "pandoc", 1, false));
         edges.push(edge(from, "epub", "pandoc", 2, false));
     }
+    edges.push(edge("html", "pdf", "browser", 1, false));
+    edges.push(edge("eml", "pdf", "browser", 1, false));
     for from in ["epub", "fb2"] {
         edges.push(edge(from, "docx", "pandoc", 2, false));
     }
@@ -2314,5 +2426,24 @@ mod tests {
                 .expect("image should have a PDF route");
             assert!(plan.steps.iter().all(|step| step.engine_id != "office"));
         }
+    }
+
+    #[test]
+    fn html_and_email_use_the_browser_pdf_renderer_when_available() {
+        let catalog = CapabilityCatalog::default();
+        let engines = HashSet::from([
+            "browser".to_string(),
+            "pandoc".to_string(),
+            "office".to_string(),
+        ]);
+        let html = catalog
+            .conversion_plan_with_engines("html", "pdf", &engines)
+            .expect("HTML route");
+        let email = catalog
+            .conversion_plan_with_engines("eml", "pdf", &engines)
+            .expect("EML route");
+
+        assert_eq!(html.steps[0].engine_id, "browser");
+        assert_eq!(email.steps[0].engine_id, "browser");
     }
 }

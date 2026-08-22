@@ -4,25 +4,25 @@
   font-synthesis: none;
 
   /* FileFlow Aurora — premium neutral + indigo system */
-  --bg: #f6f7fb;
-  --bg-elevated: #fafbff;
+  --bg: #f5f5f7;
+  --bg-elevated: #fbfbfd;
   --surface-1: rgba(255,255,255,.94);
   --surface-2: #f0f2f8;
   --surface-3: #e9ecf5;
   --surface-glass: rgba(255,255,255,.76);
-  --text: #202330;
-  --text-strong: #10121a;
-  --text-muted: #666d7f;
-  --text-faint: #969daf;
-  --border: #e1e5ef;
-  --border-strong: #d2d8e7;
+  --text: #24252a;
+  --text-strong: #111113;
+  --text-muted: #68686f;
+  --text-faint: #8e8e93;
+  --border: #e1e1e6;
+  --border-strong: #d1d1d7;
 
-  --accent: #5b63f5;
-  --accent-hover: #4d54e4;
-  --accent-strong: #3c43c3;
-  --accent-soft: #eef0ff;
-  --accent-soft-2: #f5f3ff;
-  --violet: #7b5cf6;
+  --accent: #087cff;
+  --accent-hover: #0068dc;
+  --accent-strong: #0057b8;
+  --accent-soft: #eaf4ff;
+  --accent-soft-2: #f0f1ff;
+  --violet: #5e5ce6;
   --cyan: #2aa7cc;
   --success: #1d9c69;
   --success-soft: #e9f8f1;
@@ -336,4 +336,106 @@ button, input, select, textarea { max-width: 100%; }
   .page-head,.formats-head,.history-head,.organize-head,.settings-head,.guide-head,
   .catalog-head,.list-head { display: block !important; }
   .ff-card,.ff-panel { border-radius: 16px; }
+}
+
+/* FileFlow clarity pass ----------------------------------------------------
+ * The guided conversion view is the product's primary path. Its local styles
+ * predate the larger type scale, so these final rules make every essential
+ * control readable without re-introducing technical noise.
+ */
+ff-workspace-page .stage-card {
+  background: color-mix(in srgb, var(--surface-1) 96%, transparent) !important;
+  backdrop-filter: blur(24px) saturate(1.12);
+  animation: ff-card-breathe 7s ease-in-out infinite;
+}
+ff-workspace-page .stage-header .kicker,
+ff-workspace-page .preview-head span { font-size: 11px !important; }
+ff-workspace-page .stage-header p:last-child { font-size: 15px !important; line-height: 1.6 !important; }
+ff-workspace-page .source-strip strong { font-size: 13px !important; }
+ff-workspace-page .source-strip small { font-size: 12px !important; }
+ff-workspace-page .task-card { min-height: 118px !important; padding: 17px 18px !important; }
+ff-workspace-page .task-card strong { font-size: 17px !important; }
+ff-workspace-page .task-card small { font-size: 13px !important; line-height: 1.45 !important; }
+ff-workspace-page .smart-suggestion strong { font-size: 13px !important; }
+ff-workspace-page .smart-suggestion small { font-size: 12px !important; line-height: 1.45 !important; }
+ff-workspace-page .smart-suggestion button { min-height: 38px !important; padding-inline: 14px !important; font-size: 12px !important; }
+ff-workspace-page .essential-settings > h2 { font-size: 19px !important; }
+ff-workspace-page .setting-card { min-height: 92px !important; padding: 14px !important; border-radius: 17px !important; }
+ff-workspace-page .setting-card strong { font-size: 15px !important; }
+ff-workspace-page .setting-card small { margin-top: 5px !important; font-size: 12.5px !important; line-height: 1.45 !important; }
+ff-workspace-page .setting-card select,
+ff-workspace-page .setting-card input,
+ff-workspace-page .destination-setting button { min-height: 44px !important; font-size: 13px !important; }
+ff-workspace-page .advanced-toggle { min-height: 56px !important; }
+ff-workspace-page .advanced-toggle strong { font-size: 13px !important; }
+ff-workspace-page .advanced-toggle small { font-size: 12px !important; }
+ff-workspace-page .advanced-group strong,
+ff-workspace-page .route-info strong { font-size: 13px !important; }
+ff-workspace-page .advanced-group small,
+ff-workspace-page .route-info small,
+ff-workspace-page .advanced-group label { font-size: 12px !important; line-height: 1.5 !important; }
+ff-workspace-page .preview-head strong { max-width: 75%; overflow: hidden; font-size: 13px !important; text-overflow: ellipsis; white-space: nowrap; }
+ff-workspace-page .preview-placeholder strong { font-size: 15px !important; }
+ff-workspace-page .preview-placeholder small { font-size: 12.5px !important; line-height: 1.55 !important; }
+ff-workspace-page .preview-placeholder .quiet-button { margin-top: 14px; }
+ff-workspace-page .launch-button,
+ff-welcome-page .primary-action {
+  position: relative;
+  overflow: hidden;
+  min-height: 54px !important;
+  font-size: 15px !important;
+  animation: ff-primary-breathe 3.4s ease-in-out infinite;
+}
+ff-workspace-page .launch-button::after,
+ff-welcome-page .primary-action::after {
+  content: '';
+  position: absolute;
+  inset: -80% auto -80% -35%;
+  width: 28%;
+  transform: rotate(18deg);
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 34%), transparent);
+  animation: ff-button-sheen 4.2s ease-in-out infinite;
+}
+ff-workspace-page .timeline strong { font-size: 13px !important; }
+ff-workspace-page .timeline small { font-size: 12px !important; }
+ff-workspace-page .result-file strong { font-size: 13px !important; }
+ff-workspace-page .result-file small,
+ff-workspace-page .cleanup-note,
+ff-workspace-page .privacy-note { font-size: 12px !important; }
+
+@keyframes ff-primary-breathe {
+  50% { transform: translateY(-1px); box-shadow: 0 16px 38px color-mix(in srgb,var(--accent) 32%,transparent); }
+}
+@keyframes ff-button-sheen {
+  0%,55% { left: -35%; opacity: 0; }
+  68% { opacity: 1; }
+  88%,100% { left: 115%; opacity: 0; }
+}
+@keyframes ff-card-breathe {
+  50% { box-shadow: 0 18px 46px rgb(38 46 82 / 8%); }
+}
+
+@media (min-width: 721px) and (max-width: 1050px) {
+  .content { padding: 34px 28px 64px !important; }
+}
+
+@media (max-width: 980px) {
+  ff-workspace-page .preview-panel { min-height: 460px !important; }
+  ff-workspace-page .setting-card { grid-template-columns: 46px minmax(0,1fr) minmax(165px,220px) !important; }
+}
+
+@media (max-width: 620px) {
+  body { font-size: 15px; }
+  ff-workspace-page .flow-steps { position: sticky; top: 0; z-index: 8; padding: 8px 4px; background: color-mix(in srgb,var(--bg) 92%,transparent); backdrop-filter: blur(14px); }
+  ff-workspace-page .stage-header h1,
+  ff-workspace-page .stage-header.compact h1 { font-size: clamp(30px,9vw,38px) !important; }
+  ff-workspace-page .setting-card { grid-template-columns: 42px minmax(0,1fr) !important; }
+  ff-workspace-page .setting-card > select,
+  ff-workspace-page .setting-card > button,
+  ff-workspace-page .setting-card > .password-wrap,
+  ff-workspace-page .setting-card > .read-only-value { grid-column: 1 / -1 !important; }
+  ff-workspace-page .essential-settings,
+  ff-workspace-page .preview-panel { padding: 15px !important; }
+  ff-workspace-page .preview-panel { min-height: 390px !important; }
+  ff-welcome-page .welcome-brand span { font-size: 10px !important; }
 }

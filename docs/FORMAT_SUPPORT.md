@@ -13,7 +13,9 @@ A format must not be shown as convertible merely because FileFlow recognizes its
 
 ### Images and camera formats
 
-JPEG/JPG, PNG, WebP, AVIF, HEIC/HEIF, TIFF, BMP, GIF, SVG, ICO, JPEG XL, PSD/PSB, EPS and common RAW families including DNG, CR2/CR3, NEF/NRW, ARW/SRF/SR2, ORF, RAF, RW2, PEF, X3F, ERF, KDC, DCR, MOS and MEF.
+JPEG/JPG/JFIF, PNG/APNG, WebP, AVIF, HEIC/HEIF, TIFF, BMP, GIF, SVG, ICO/CUR/ICNS, JPEG XL, JPEG 2000, TGA, DDS, OpenEXR, HDR/RGBE, PBM/PGM/PPM/PNM/PAM, PCX/DCX, QOI, XCF, PSD/PSB, EPS, WMF/EMF and common RAW families including DNG, CR2/CR3, NEF/NRW, ARW/SRF/SR2, ORF, RAF, RW2, PEF, X3F, ERF, KDC, DCR, MOS and MEF.
+
+Recognition is broad; actual decoding is delegated to libvips and ImageMagick and therefore follows the codecs installed with those engines. HEIC/HEIF and other non-native img2pdf inputs are normalized to PNG before PDF assembly.
 
 ### PDF and office
 
@@ -21,7 +23,7 @@ PDF, DOC/DOCX, ODT, RTF, Pages, WPD, TeX, XLS/XLSX/XLSM, ODS, CSV/TSV, Numbers, 
 
 ### Text and structured data
 
-TXT, Markdown, RST, LOG, HTML, JSON, XML, YAML, TOML, JSONL/NDJSON, SQL, INI/CFG/CONF and Java-style properties.
+TXT, Markdown, RST, LOG, HTML/HTM, EML/MAIL, JSON, XML, YAML, TOML, JSONL/NDJSON, SQL, INI/CFG/CONF and Java-style properties.
 
 ### Archives and compressed streams
 
@@ -47,6 +49,9 @@ The runtime currently wires real execution for:
 
 - image conversion/batch conversion, optimization and resizing via libvips;
 - images -> PDF via img2pdf;
+- extended/HEIC images -> PNG via libvips or ImageMagick -> PDF via img2pdf;
+- HTML -> PDF via an isolated headless Chromium-compatible browser, with bounded JavaScript execution and network/DNS disabled;
+- EML -> safe HTML -> PDF after MIME decoding and script/markup neutralization;
 - PDF merge/split via qpdf;
 - PDF compression via Ghostscript;
 - PDF -> images/text via Poppler;
@@ -57,6 +62,7 @@ The runtime currently wires real execution for:
 - audio/video conversion, compatibility output, compression, audio extraction and GIF generation via FFmpeg;
 - light document/text conversions via Pandoc;
 - EPUB/FB2 conversion via Pandoc sandbox mode;
+- generated previews for unfamiliar images, HTML, EML, Office, text, EPUB/FB2 and video inputs;
 - Zstandard compression/decompression via `zstd`;
 - LZ4 compression/decompression via `lz4`.
 

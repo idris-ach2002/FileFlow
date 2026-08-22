@@ -16,6 +16,7 @@ import {
   FormatFamily,
   IntakeStats,
   IntakeWarning,
+  PreparedFilePreview,
   SortDirection,
   WorkspaceInsights,
   WorkspaceIntakeEvent,
@@ -347,6 +348,12 @@ export class WorkspaceStore {
     } finally {
       this.outputActionBusy.set(false);
     }
+  }
+
+  async prepareAssetPreview(assetId: string): Promise<PreparedFilePreview> {
+    const workspaceId = this.workspace()?.id ?? this.activeWorkspaceId();
+    if (!workspaceId) throw new Error('Aucun espace de travail actif.');
+    return this.bridge.previewAsset(workspaceId, assetId);
   }
 
   private onExecutionEvent(event: ExecutionEvent): void {

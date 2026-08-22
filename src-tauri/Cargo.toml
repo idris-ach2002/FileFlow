@@ -23,6 +23,7 @@ fileflow-adapter-tesseract = { path = "../crates/adapters/fileflow-adapter-tesse
 fileflow-adapter-zstd = { path = "../crates/adapters/fileflow-adapter-zstd" }
 fileflow-adapter-lz4 = { path = "../crates/adapters/fileflow-adapter-lz4" }
 fileflow-adapter-pandoc = { path = "../crates/adapters/fileflow-adapter-pandoc" }
+fileflow-adapter-browser = { path = "../crates/adapters/fileflow-adapter-browser" }
 fileflow-adapter-ocr = { path = "../crates/adapters/fileflow-adapter-ocr" }
 fileflow-adapter-office = { path = "../crates/adapters/fileflow-adapter-office" }
 fileflow-adapter-qpdf = { path = "../crates/adapters/fileflow-adapter-qpdf" }

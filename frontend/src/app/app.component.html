@@ -1,6 +1,6 @@
 @if (auth.phase() === 'loading') {
   <div class="boot-screen">
-    <div class="boot-logo">F</div>
+    <div class="boot-logo"><img src="/fileflow-emblem.png" alt="" /></div>
     <strong>FileFlow</strong>
     <span>Préparation de votre espace…</span>
   </div>
@@ -18,7 +18,7 @@
 
     <aside class="sidebar">
       <a class="brand" routerLink="/" aria-label="FileFlow — Accueil">
-        <div class="brand-mark"><span>F</span></div>
+        <div class="brand-mark"><img src="/fileflow-emblem.png" alt="" /></div>
         <div class="brand-copy">
           <strong>FileFlow</strong>
           <span>Vos fichiers, simplement</span>
@@ -71,11 +71,6 @@
         <span class="profile-copy"><strong>{{ auth.profile()?.displayName }}</strong><small>Profil & préférences</small></span>
         <span class="profile-arrow">›</span>
       </a>
-
-      <div class="privacy-card">
-        <span class="privacy-icon"></span>
-        <div><strong>Traitement local</strong><span>Vos fichiers restent sur cet appareil.</span></div>
-      </div>
 
       <div class="runtime-state" [class.runtime-error]="capabilities.phase() === 'error'">
         <span class="status-dot"></span>

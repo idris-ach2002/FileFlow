@@ -1,7 +1,8 @@
 use crate::{AppState, commands::account::require_active_session};
 use fileflow_analysis::{DuplicateInput, DuplicateReport};
 use fileflow_domain::{Asset, AssetId, ResourceProfile, WorkspaceId};
-use fileflow_executor::ArchiveInspection;
+use fileflow_executor::{ArchiveInspection, EnginePaths, PreparedFilePreview};
+use std::{collections::HashMap, path::PathBuf};
 use tauri::State;
 use tokio_util::sync::CancellationToken;
 
@@ -135,4 +136,45 @@ pub async fn preview_archive_entry(
     .await
     .map_err(|error| error.to_string())?;
     Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub async fn preview_asset(
+    state: State<'_, AppState>,
+    workspace_id: WorkspaceId,
+    asset_id: AssetId,
+) -> Result<PreparedFilePreview, String> {
+    require_active_session(&state)?;
+    let assets = state
+        .core
+        .workspaces
+        .select_assets(workspace_id, &[asset_id], &[])
+        .map_err(|error| error.to_string())?;
+    let path = assets
+        .into_iter()
+        .find_map(|asset| match asset {
+            Asset::File(file) => Some(file.common.path),
+            _ => None,
+        })
+        .ok_or_else(|| "Ce fichier n’est plus disponible dans la sélection.".to_owned())?;
+
+    let paths = state
+        .core
+        .engines
+        .probe_all()
+        .await
+        .into_iter()
+        .filter_map(|probe| probe.available.then_some((probe.id, probe.executable)))
+        .filter_map(|(id, path)| path.map(|path| (id, path)))
+        .collect::<HashMap<String, PathBuf>>();
+    let cancellation = CancellationToken::new();
+    let scheduler = { state.runtime.read().scheduler.clone() };
+    fileflow_executor::prepare_file_preview(
+        &path,
+        EnginePaths::new(paths),
+        scheduler,
+        &cancellation,
+    )
+    .await
+    .map_err(|error| error.to_string())
 }

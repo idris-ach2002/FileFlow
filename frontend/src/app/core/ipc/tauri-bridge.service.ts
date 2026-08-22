@@ -31,6 +31,7 @@ import {
   DuplicateCleanupPlan,
   FileOperationResult,
   OrganizationPreview,
+  PreparedFilePreview,
   RenamePreview,
   RenameRule,
   SaveWatchedFolderRequest,
@@ -294,5 +295,9 @@ export class TauriBridgeService {
 
   previewArchiveEntry(workspaceId: string, entryPath: string, assetId?: string | null): Promise<string> {
     return invoke<string>('preview_archive_entry', { workspaceId, assetId: assetId ?? null, entryPath });
+  }
+
+  previewAsset(workspaceId: string, assetId: string): Promise<PreparedFilePreview> {
+    return invoke<PreparedFilePreview>('preview_asset', { workspaceId, assetId });
   }
 }

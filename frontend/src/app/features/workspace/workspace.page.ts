@@ -4,7 +4,7 @@ import { Router } from '@angular/router';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { AuthStore } from '../../core/auth/auth.store';
 import { CapabilityStore } from '../../core/catalog/capability.store';
-import { ActionDescriptor, Asset, FormatFamily } from '../../core/ipc/tauri.models';
+import { ActionDescriptor, Asset, DestinationPolicy, FormatFamily } from '../../core/ipc/tauri.models';
 import { PreferencesService } from '../../core/preferences/preferences.service';
 import { UiMemoryService } from '../../core/state/ui-memory.service';
 import { WorkspaceStore } from './data-access/workspace.store';
@@ -12,6 +12,21 @@ import { WorkspaceStore } from './data-access/workspace.store';
 type SimpleTask = 'convert' | 'compress' | 'extract' | 'organize' | 'rename' | 'protect';
 type Quality = 'small' | 'balanced' | 'high';
 type CompressionProfile = 'keep' | 'small' | 'balanced' | 'high';
+type WorkspaceDestination = 'subfolder' | 'same' | 'choose';
+
+export function resolveWorkspaceDestination(
+  selection: WorkspaceDestination,
+  explicitDirectory: string | null,
+  guidedDirectory: string | null,
+): { destination: DestinationPolicy; customDirectory: string | null } {
+  const chosen = selection === 'choose' ? explicitDirectory?.trim() || null : null;
+  if (chosen) return { destination: 'customFolder', customDirectory: chosen };
+  if (selection === 'same') return { destination: 'sameFolder', customDirectory: null };
+  const guided = selection === 'subfolder' ? guidedDirectory?.trim() || null : null;
+  return guided
+    ? { destination: 'customFolder', customDirectory: guided }
+    : { destination: 'subfolder', customDirectory: null };
+}
 
 interface TaskCard {
   id: SimpleTask;
@@ -200,10 +215,11 @@ const TASKS: TaskCard[] = [
                     <button class="preview-clickable" type="button" (click)="openSourcePreview()"><iframe [src]="url" title="Aperçu du PDF" tabindex="-1"></iframe><span>Agrandir</span></button>
                   } @else if (imagePreviewUrl(); as image) {
                     <button class="image-preview preview-clickable" type="button" (click)="openSourcePreview()"><img [src]="image" alt="Aperçu du fichier" /><span>Agrandir</span></button>
+                  } @else if (previewLoading()) {
+                    <div class="preview-placeholder preview-loading"><span class="spinner"></span><strong>Préparation de l’aperçu…</strong><small>FileFlow crée localement une représentation compatible de ce format.</small></div>
                   } @else {
-                    <div class="preview-placeholder"><span>{{ primaryFileMark() }}</span><strong>{{ primaryFileName() }}</strong><small>L’aperçu visuel sera disponible pour les formats compatibles. La conversion reste locale.</small></div>
+                    <div class="preview-placeholder"><span>{{ primaryFileMark() }}</span><strong>{{ primaryFileName() }}</strong><small>{{ previewError() || 'Ce format ne possède pas de représentation visuelle fiable.' }}</small><button type="button" class="quiet-button" (click)="retryPreview()">Réessayer l’aperçu</button></div>
                   }
-                  <div class="preview-trust"><span>◆</span><strong>Original intact</strong><small>FileFlow travaille toujours sur une copie temporaire.</small></div>
                 </aside>
               </div>
             </section>
@@ -321,7 +337,7 @@ export class WorkspacePage {
   protected readonly selectedTask = signal<SimpleTask | null>(null);
   protected readonly targetFormat = signal('pdf');
   protected readonly quality = signal<Quality>('balanced');
-  protected readonly destination = signal<'subfolder' | 'same' | 'choose'>('subfolder');
+  protected readonly destination = signal<WorkspaceDestination>('subfolder');
   protected readonly customDirectory = signal<string | null>(null);
   protected readonly finalCompression = signal<CompressionProfile>('balanced');
   protected readonly improve = signal(false);
@@ -338,6 +354,11 @@ export class WorkspacePage {
   protected readonly fullscreenPreviewPath = signal<string | null>(null);
   protected readonly fullscreenPreviewTitle = signal('Aperçu');
   protected readonly fullscreenPreviewFamily = signal<FormatFamily>('unknown');
+  protected readonly preparedPreviewPath = signal<string | null>(null);
+  protected readonly preparedPreviewFamily = signal<FormatFamily>('unknown');
+  protected readonly previewLoading = signal(false);
+  protected readonly previewError = signal<string | null>(null);
+  private previewRequest = 0;
 
   protected readonly firstAsset = computed(() => this.store.selectedAssets()[0] ?? this.store.assets().find(a => a.kind === 'file' || a.kind === 'archive') ?? null);
   protected readonly primaryFamily = computed<FormatFamily>(() => this.firstAsset() ? this.assetFamily(this.firstAsset()!) : 'unknown');
@@ -352,16 +373,16 @@ export class WorkspacePage {
   protected readonly targetOptions = computed(() => this.computeTargetOptions());
   protected readonly resolvedActionId = computed(() => this.resolveActionId());
   protected readonly activeAction = computed<ActionDescriptor | null>(() => this.capabilities.action(this.resolvedActionId()));
-  protected readonly willProducePdf = computed(() => this.targetFormat() === 'pdf' || ['smart-to-pdf','collection-to-pdf','pdf-compress','pdf-protect','pdf-merge','pdf-split','office-to-pdf','text-to-pdf','pdf-ocr'].includes(this.resolvedActionId() ?? ''));
+  protected readonly willProducePdf = computed(() => this.targetFormat() === 'pdf' || ['smart-to-pdf','collection-to-pdf','pdf-compress','pdf-protect','pdf-merge','pdf-split','office-to-pdf','text-to-pdf','html-to-pdf','email-to-pdf','pdf-ocr'].includes(this.resolvedActionId() ?? ''));
   protected readonly pdfPreviewUrl = computed<SafeResourceUrl | null>(() => {
-    const asset = this.firstAsset();
-    if (!asset || this.assetFamily(asset) !== 'pdf' || (asset.kind !== 'file' && asset.kind !== 'archive')) return null;
-    try { return this.sanitizer.bypassSecurityTrustResourceUrl(convertFileSrc(asset.data.path)); } catch { return null; }
+    const path = this.preparedPreviewPath();
+    if (!path || this.preparedPreviewFamily() !== 'pdf') return null;
+    try { return this.sanitizer.bypassSecurityTrustResourceUrl(convertFileSrc(path)); } catch { return null; }
   });
   protected readonly imagePreviewUrl = computed(() => {
-    const asset = this.firstAsset();
-    if (!asset || this.assetFamily(asset) !== 'image' || (asset.kind !== 'file' && asset.kind !== 'archive')) return null;
-    try { return convertFileSrc(asset.data.path); } catch { return null; }
+    const path = this.preparedPreviewPath();
+    if (!path || this.preparedPreviewFamily() !== 'image') return null;
+    try { return convertFileSrc(path); } catch { return null; }
   });
   protected readonly resultPdfPreviewUrl = computed<SafeResourceUrl | null>(() => {
     const path = this.store.executionSummary()?.outputs?.[0];
@@ -389,8 +410,10 @@ export class WorkspacePage {
     if (draft) {
       this.targetFormat.set(draft.targetFormat ?? 'pdf');
       this.quality.set(draft.quality ?? 'balanced');
-      this.destination.set(draft.destination ?? 'subfolder');
-      this.customDirectory.set(draft.customDirectory ?? null);
+      if (draft.destination === 'choose' && draft.customDirectory) {
+        this.destination.set('choose');
+        this.customDirectory.set(draft.customDirectory);
+      }
       this.finalCompression.set(draft.finalCompression ?? 'balanced');
       this.improve.set(draft.improve ?? false);
       this.stripMetadata.set(draft.stripMetadata ?? false);
@@ -400,9 +423,23 @@ export class WorkspacePage {
       this.advancedOpen.set(draft.advancedOpen ?? false);
       if (draft.actionId && TASKS.some(task => task.id === draft.actionId)) this.selectedTask.set(draft.actionId as SimpleTask);
     }
+    effect(() => {
+      const preference = this.prefs.destination();
+      if (this.destination() === 'choose' && this.customDirectory()) return;
+      this.destination.set(preference === 'sameFolder' ? 'same' : preference === 'ask' ? 'choose' : 'subfolder');
+      this.customDirectory.set(null);
+    });
     effect(() => this.memory.saveGuidedFlowDraft({
       actionId: this.selectedTask(), targetFormat: this.targetFormat(), quality: this.quality(), destination: this.destination(), customDirectory: this.customDirectory(), finalCompression: this.finalCompression(), improve: this.improve(), stripMetadata: this.stripMetadata(), targetSizeMb: this.targetSizeMb(), signatureText: this.signatureText(), collectionOrder: this.collectionOrder(), advancedOpen: this.advancedOpen(),
     }));
+    effect(() => {
+      const asset = this.firstAsset();
+      const request = ++this.previewRequest;
+      this.preparedPreviewPath.set(null);
+      this.preparedPreviewFamily.set('unknown');
+      this.previewError.set(null);
+      if (asset?.kind === 'file') void this.preparePreview(asset, request);
+    });
     if (this.store.activeActionId()) this.selectedTask.set(null);
     if (!this.store.hasWorkspace()) void this.store.restoreRememberedWorkspace();
   }
@@ -412,15 +449,24 @@ export class WorkspacePage {
     if (asset) this.openAssetPreview(asset);
   }
 
-  protected openAssetPreview(asset: Asset): void {
+  protected async openAssetPreview(asset: Asset): Promise<void> {
     if (asset.kind === 'archive') {
       void this.openArchiveBrowser();
       return;
     }
     if (asset.kind !== 'file') return;
-    this.fullscreenPreviewPath.set(asset.data.path);
+    let path = asset.data.path;
+    let family = this.assetFamily(asset);
+    try {
+      const preview = await this.store.prepareAssetPreview(asset.data.id);
+      path = preview.path;
+      family = preview.family;
+    } catch (error) {
+      this.previewError.set(this.readableError(error));
+    }
+    this.fullscreenPreviewPath.set(path);
     this.fullscreenPreviewTitle.set(asset.data.name);
-    this.fullscreenPreviewFamily.set(this.assetFamily(asset));
+    this.fullscreenPreviewFamily.set(family);
   }
 
   protected openResultPreview(): void {
@@ -505,10 +551,10 @@ export class WorkspacePage {
     return this.activeAction()?.description ?? 'Les réglages utiles seulement.';
   }
   protected destinationLabel(): string {
-    const guided = this.prefs.beginnerMode() ? this.auth.onboarding()?.storageDirectory?.trim() : '';
-    if (guided) return guided;
-    if (this.destination() === 'choose') return this.customDirectory() ?? 'Choisir un dossier';
+    if (this.destination() === 'choose') return this.customDirectory() ? `Dossier personnalisé · ${this.folderName(this.customDirectory()!)}` : 'Choisir un dossier';
     if (this.destination() === 'same') return 'À côté de l’original';
+    const guided = this.prefs.beginnerMode() ? this.auth.onboarding()?.storageDirectory?.trim() : '';
+    if (guided) return `Dossier FileFlow · ${this.folderName(guided)}`;
     return 'Sous-dossier FileFlow';
   }
   protected supportsQuality(): boolean { return ['convert','compress','organize'].includes(this.selectedTask() ?? '') || this.activeAction()?.category === 'optimize'; }
@@ -517,6 +563,7 @@ export class WorkspacePage {
     if (this.selectedTask() === 'rename') return true;
     if (!action || !this.capabilities.isActionExecutable(action)) return false;
     if (this.selectedTask() === 'protect' && !this.pdfPassword().trim()) return false;
+    if (this.destination() === 'choose' && !this.customDirectory()) return false;
     return true;
   }
   protected launchLabel(): string { if (this.selectedTask() === 'rename') return 'Ouvrir le renommage'; if (this.selectedTask() === 'organize' && this.isSinglePdf()) return 'Diviser le PDF'; if (this.willProducePdf()) return 'Créer le PDF'; return `Lancer ${this.configureTitle().toLowerCase()}`; }
@@ -527,10 +574,16 @@ export class WorkspacePage {
     const workspaceId = this.store.workspace()?.id;
     if (!action || !workspaceId || !this.capabilities.isActionExecutable(action)) return;
     if (this.selectedTask() === 'protect' && !this.pdfPassword().trim()) return;
+    if (this.destination() === 'choose' && !this.customDirectory()) {
+      await this.chooseDestination();
+      if (!this.customDirectory()) return;
+    }
 
-    const guidedDirectory = this.prefs.beginnerMode() ? this.auth.onboarding()?.storageDirectory?.trim() || null : null;
-    const destination = guidedDirectory ? 'customFolder' as const : this.destination() === 'same' ? 'sameFolder' as const : this.destination() === 'choose' ? 'customFolder' as const : 'subfolder' as const;
-    const customDirectory = guidedDirectory ?? (this.destination() === 'choose' ? this.customDirectory() : null);
+    const resolvedDestination = resolveWorkspaceDestination(
+      this.destination(),
+      this.customDirectory(),
+      this.prefs.beginnerMode() ? this.auth.onboarding()?.storageDirectory ?? null : null,
+    );
     const parameters: Record<string, string | number | boolean | null> = {
       finalCompression: this.finalCompression(), improve: this.improve(), stripMetadata: this.stripMetadata(), targetSizeMb: this.targetSizeMb(), signatureText: this.signatureText().trim() || null, collectionOrder: this.collectionOrder(),
     };
@@ -543,7 +596,7 @@ export class WorkspacePage {
       targetFormat: this.actionTargetFormat(action),
       quality: this.supportsQuality() ? this.quality() : null,
       parameters,
-      outputPolicy: { destination, customDirectory, subfolderName: 'FileFlow', preserveTree: false, conflict: 'increment', naming: 'original', overwriteOriginal: false },
+      outputPolicy: { ...resolvedDestination, subfolderName: 'FileFlow', preserveTree: this.prefs.preserveTree(), conflict: 'increment', naming: 'original', overwriteOriginal: false },
     });
     this.pdfPassword.set('');
     this.showPdfPassword.set(false);
@@ -655,6 +708,29 @@ export class WorkspacePage {
   protected fileName(path: string): string { return path.split(/[\\/]/).pop() || path; }
   protected extensionLabel(path: string): string { const ext=this.fileName(path).split('.').pop(); return ext ? ext.toUpperCase() : 'Fichier'; }
   protected resultMark(path: string): string { const ext=this.extensionLabel(path); return ext === 'PDF' ? 'PDF' : ext.slice(0,3); }
+
+  protected retryPreview(): void {
+    const asset = this.firstAsset();
+    if (asset?.kind === 'file') void this.preparePreview(asset, ++this.previewRequest);
+  }
+
+  private async preparePreview(asset: Asset & { kind: 'file' }, request: number): Promise<void> {
+    this.previewLoading.set(true);
+    this.previewError.set(null);
+    try {
+      const preview = await this.store.prepareAssetPreview(asset.data.id);
+      if (request !== this.previewRequest) return;
+      this.preparedPreviewPath.set(preview.path);
+      this.preparedPreviewFamily.set(preview.family);
+    } catch (error) {
+      if (request === this.previewRequest) this.previewError.set(this.readableError(error));
+    } finally {
+      if (request === this.previewRequest) this.previewLoading.set(false);
+    }
+  }
+
+  private folderName(path: string): string { return path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'FileFlow'; }
+  private readableError(error: unknown): string { return error instanceof Error ? error.message : String(error || 'Aperçu indisponible.'); }
 }
 
 function options(values: string[]): { value: string; label: string }[] { return values.map(value => ({ value, label: value === 'jpg' ? 'JPEG / JPG' : value === 'tiff' ? 'TIFF' : value.toUpperCase() })); }

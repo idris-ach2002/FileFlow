@@ -7,6 +7,7 @@ Modules frontend détectés : `advanced`, `automations`, `favorites`, `formats`,
 - conversion de formats ;
 - traitement par lot ;
 - images vers PDF ;
+- prise en charge étendue des images, dont HEIC/HEIF, RAW, JPEG 2000, OpenEXR et formats Netpbm ;
 - intégration libvips et ImageMagick ;
 - politique de sortie commune avec les autres opérations.
 
@@ -15,6 +16,8 @@ Modules frontend détectés : `advanced`, `automations`, `favorites`, `formats`,
 - Smart-to-PDF ;
 - collection/dossier vers PDF ;
 - images vers PDF ;
+- HTML dynamique vers PDF avec navigateur isolé ;
+- EML vers PDF après décodage MIME et neutralisation des scripts ;
 - fusion de PDF ;
 - découpage ;
 - PDF vers images ;
@@ -64,6 +67,8 @@ Les politiques comprennent notamment :
 ## Workspace
 
 Le workspace conserve la relation entre chaque asset et sa racine source, afin que les opérations puissent reconstruire ou ignorer l’arborescence selon la politique choisie.
+
+Les fichiers qui ne sont pas directement affichables par le WebView reçoivent une prévisualisation locale générée et mise en cache : images rares et HEIC, documents Office, HTML, EML, textes, EPUB/FB2 et miniatures vidéo. Une destination choisie explicitement dans le workspace est toujours prioritaire sur le dossier guidé configuré auparavant.
 
 ## Automatisations
 

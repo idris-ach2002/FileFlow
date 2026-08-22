@@ -1042,6 +1042,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fileflow-adapter-browser"
+version = "1.0.1"
+dependencies = [
+ "async-trait",
+ "fileflow-domain",
+ "fileflow-engine",
+]
+
+[[package]]
 name = "fileflow-adapter-ffmpeg"
 version = "1.0.1"
 dependencies = [
@@ -1199,6 +1208,7 @@ dependencies = [
  "chrono",
  "dashmap",
  "fileflow-adapter-archive",
+ "fileflow-adapter-browser",
  "fileflow-adapter-ffmpeg",
  "fileflow-adapter-ghostscript",
  "fileflow-adapter-imagemagick",
@@ -1265,6 +1275,7 @@ dependencies = [
 name = "fileflow-executor"
 version = "1.0.1"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "fileflow-domain",
  "fileflow-formats",

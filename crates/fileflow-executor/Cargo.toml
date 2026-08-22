@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 serde_json.workspace = true
+base64.workspace = true
 fileflow-domain = { path = "../fileflow-domain" }
 fileflow-formats = { path = "../fileflow-formats" }
 fileflow-output = { path = "../fileflow-output" }

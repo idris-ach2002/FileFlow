@@ -28,6 +28,7 @@ members = [
     "crates/adapters/fileflow-adapter-ghostscript",
     "crates/adapters/fileflow-adapter-tesseract",
     "crates/adapters/fileflow-adapter-pandoc",
+    "crates/adapters/fileflow-adapter-browser",
     "crates/adapters/fileflow-adapter-zstd",
     "crates/adapters/fileflow-adapter-lz4",
 ]
@@ -39,6 +40,7 @@ publish = false
 
 [workspace.dependencies]
 async-trait = "0.1"
+base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 dashmap = "6"
 infer = "0.19"
