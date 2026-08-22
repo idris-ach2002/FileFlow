@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+      <rect width="1440" height="900" rx="32" fill="#111522"/>
+      <rect x="36" y="36" width="1368" height="828" rx="24" fill="#171c2c" stroke="#343b58" stroke-width="2"/>
+      <text x="90" y="150" fill="#ffffff" font-family="Arial, sans-serif" font-size="54" font-weight="700">Étape 3 — Workspace</text>
+      <text x="90" y="215" fill="#aeb6d4" font-family="Arial, sans-serif" font-size="28">Sélection, analyse et préparation des fichiers.</text>
+      <rect x="90" y="285" width="1260" height="440" rx="18" fill="#0e1220" stroke="#4f5b85" stroke-dasharray="14 12" stroke-width="3"/>
+      <text x="720" y="495" text-anchor="middle" fill="#c7cce0" font-family="Arial, sans-serif" font-size="34">EMPLACEMENT DE CAPTURE UI</text>
+      <text x="720" y="550" text-anchor="middle" fill="#7f88ad" font-family="Arial, sans-serif" font-size="24">Remplacer par la capture réelle de la version validée.</text>
+      <text x="90" y="805" fill="#6f789c" font-family="Arial, sans-serif" font-size="20">FileFlow · documentation</text>
+    </svg>
