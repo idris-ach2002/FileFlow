@@ -160,7 +160,7 @@ export class OrganizePage {
 
   protected selectMode(mode: OrganizeMode): void { this.mode.set(mode); this.error.set(null); this.notice.set(null); }
   protected targetCountLabel(): string { const selected=this.workspace.selectedCount(); return selected ? `${selected} sélectionné(s)` : `${this.workspace.counts().files + this.workspace.counts().archives} élément(s)`; }
-  protected goWorkspace(): void { void this.router.navigate(['/workspace']); }
+  protected goWorkspace(): void { void this.router.navigate(['/conversion']); }
 
   protected updateRename(key: keyof RenameRule, value: string): void { this.renameRule.update((rule) => ({...rule,[key]:value})); this.renamePreview.set(null); }
   protected updateRenameNumber(key: 'counterStart'|'counterPadding', value: string): void { const parsed=Number(value); if(Number.isFinite(parsed)) this.renameRule.update((rule)=>({...rule,[key]:Math.max(key==='counterPadding'?1:0,Math.floor(parsed))})); this.renamePreview.set(null); }
@@ -170,7 +170,7 @@ export class OrganizePage {
   protected async previewRename(): Promise<void> { const id=this.workspace.workspace()?.id; if(!id)return; await this.guard(async()=>{ this.renamePreview.set(await this.bridge.previewBatchRename(id,this.selectedIds(),this.renameRule())); }); }
   protected async applyRename(): Promise<void> { const id=this.workspace.workspace()?.id; const preview=this.renamePreview(); if(!id||!preview||preview.conflicts)return; const roots=[...(this.workspace.workspace()?.roots??[])]; await this.guard(async()=>{ const result=await this.bridge.applyBatchRename(id,this.selectedIds(),this.renameRule()); this.notice.set(`${result.processed} élément(s) renommé(s).`); this.renamePreview.set(null); if(roots.length) await this.workspace.start(roots); }); }
 
-  protected async chooseDestination(): Promise<void> { const selected=await this.bridge.chooseStorageDirectory(); if(selected){this.destination.set(selected);this.organizationPreview.set(null);} }
+  protected async chooseDestination(): Promise<void> { const selected=await this.bridge.pickDirectory('Dossier de destination',true); if(selected){this.destination.set(selected);this.organizationPreview.set(null);} }
   protected organizationExample(): string { return this.organizationMode()==='type' ? 'FileFlow/Images · PDF · Vidéos…' : this.organizationMode()==='date' ? 'FileFlow/2026/08/…' : 'FileFlow/Images/2026/08/…'; }
   protected async previewOrganization(): Promise<void> { const id=this.workspace.workspace()?.id; if(!id||!this.destination())return; await this.guard(async()=>{ this.organizationPreview.set(await this.bridge.previewOrganization(id,this.selectedIds(),this.destination(),this.organizationMode())); }); }
   protected async applyOrganization(): Promise<void> { const id=this.workspace.workspace()?.id; const preview=this.organizationPreview(); if(!id||!preview||!this.destination())return; const destination=this.destination(); await this.guard(async()=>{ const result=await this.bridge.applyOrganization(id,this.selectedIds(),destination,this.organizationMode()); this.notice.set(`${result.processed} fichier(s) classé(s).`); this.organizationPreview.set(null); await this.workspace.start([destination]); }); }

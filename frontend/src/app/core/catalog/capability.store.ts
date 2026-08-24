@@ -2,6 +2,7 @@ import { computed, inject, Injectable, signal } from '@angular/core';
 import { TauriBridgeService } from '../ipc/tauri-bridge.service';
 import {
   ActionDescriptor,
+  ActionUiSpec,
   CapabilityCatalog,
   EngineProbe,
   HealthResponse,
@@ -24,6 +25,7 @@ export class CapabilityStore {
 
   readonly actions = computed(() => this.catalog()?.actions ?? []);
   readonly formats = computed(() => this.catalog()?.formats ?? []);
+  readonly actionUi = computed(() => this.catalog()?.actionUi ?? []);
   readonly featuredActions = computed(() => {
     const favorites = this.favoriteActionIds();
     return this.actions()
@@ -83,6 +85,11 @@ export class CapabilityStore {
   action(id: string | null | undefined): ActionDescriptor | null {
     if (!id) return null;
     return this.actions().find((action) => action.id === id) ?? null;
+  }
+
+  uiSpec(id: string | null | undefined): ActionUiSpec | null {
+    if (!id) return null;
+    return this.actionUi().find((spec) => spec.actionId === id) ?? null;
   }
 
   formatCapability(id: string | null | undefined) {

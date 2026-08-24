@@ -3,6 +3,7 @@ import { Router } from '@angular/router';
 import { CapabilityStore } from '../../core/catalog/capability.store';
 import { ActionDescriptor, FormatCapabilityProfile } from '../../core/ipc/tauri.models';
 import { WorkspaceStore } from '../workspace/data-access/workspace.store';
+import { ConversionIntentStore } from '../../core/conversion/conversion-intent.store';
 
 @Component({
   selector: 'ff-formats-page',
@@ -55,6 +56,7 @@ export class FormatsPage {
   protected readonly capabilities = inject(CapabilityStore);
   private readonly workspace = inject(WorkspaceStore);
   private readonly router = inject(Router);
+  private readonly intents = inject(ConversionIntentStore);
   protected readonly query = signal('');
   protected readonly family = signal('all');
   protected readonly readyOnly = signal(false);
@@ -71,7 +73,7 @@ export class FormatsPage {
   protected actionsFor(format: FormatCapabilityProfile): ActionDescriptor[] { return format.actions.map((id)=>this.capabilities.action(id)).filter((action):action is ActionDescriptor=>!!action); }
   protected actionCount(format: FormatCapabilityProfile): number { return this.actionsFor(format).filter((action)=>this.capabilities.isActionExecutable(action)).length; }
   protected actionState(action: ActionDescriptor): string { return this.capabilities.actionState(action)==='missing-engine' ? 'Moteur absent' : 'Prévu'; }
-  protected openAction(action: ActionDescriptor): void { if(!this.capabilities.isActionExecutable(action))return; this.workspace.setPendingAction(action.id); if(this.workspace.hasWorkspace()){this.workspace.openAction(action.id);void this.router.navigate(['/workspace']);}else{void this.router.navigate(['/']);} }
+  protected openAction(action: ActionDescriptor): void { if(!this.capabilities.isActionExecutable(action))return; const spec=this.capabilities.uiSpec(action.id); this.intents.start({actionId:action.id,sourceFormats:spec?.sourceFormats??[],targetFormat:spec?.defaultTarget??action.outputFormat??null,inputMode:spec?.inputMode??'files',uiKind:spec?.kind??'generic',parameters:{}}); this.workspace.startNewConversion(action.id); void this.router.navigate(['/conversion',action.id]); }
   protected capabilityLabels(format: FormatCapabilityProfile): {label:string;on:boolean}[] { return [{label:'Aperçu',on:format.preview},{label:'Lecture',on:format.readable},{label:'Écriture',on:format.writable},{label:'Métadonnées',on:format.metadata},{label:'Miniature',on:format.thumbnail},{label:'Extraction',on:format.extractable},{label:'Streaming',on:format.streamable}]; }
   protected capabilityName(value:string):string{return CAPABILITY_LABELS[value]??value;}
   protected familyLabel(value:string):string{return FAMILY_LABELS[value]??value;}

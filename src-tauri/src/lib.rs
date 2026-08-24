@@ -112,7 +112,7 @@ fn build_tray(app: &tauri::App) -> tauri::Result<TrayIcon> {
             "tray-open" => show_main_window(app),
             "tray-convert" => {
                 show_main_window(app);
-                let _ = app.emit("fileflow://navigate", "/workspace");
+                let _ = app.emit("fileflow://navigate", "/conversion");
             }
             "tray-history" => {
                 show_main_window(app);
@@ -251,7 +251,7 @@ pub fn run() {
             commands::account::current_session,
             commands::account::save_onboarding,
             commands::account::update_profile,
-            commands::account::choose_profile_avatar,
+            commands::account::set_profile_avatar,
             commands::account::profile_avatar,
             commands::account::default_storage_directory,
             commands::system::health_check,
@@ -262,6 +262,7 @@ pub fn run() {
             commands::system::plan_conversion,
             commands::system::scheduler_status,
             commands::system::set_performance_mode,
+            commands::paths::validate_system_path,
             commands::workspace::create_workspace,
             commands::workspace::get_workspace,
             commands::workspace::list_workspace_assets,

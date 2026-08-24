@@ -13,10 +13,16 @@ export const routes: Routes = [
     loadComponent: () => import('./features/home/home.page').then((m) => m.HomePage),
   },
   {
-    path: 'workspace',
+    path: 'conversion',
     canActivate: [requireAccountGuard],
     loadComponent: () => import('./features/workspace/workspace.page').then((m) => m.WorkspacePage),
   },
+  {
+    path: 'conversion/:actionId',
+    canActivate: [requireAccountGuard],
+    loadComponent: () => import('./features/workspace/workspace.page').then((m) => m.WorkspacePage),
+  },
+  { path: 'workspace', redirectTo: 'conversion', pathMatch: 'full' },
   {
     path: 'organize',
     canActivate: [requireAccountGuard],
@@ -54,6 +60,11 @@ export const routes: Routes = [
   },
   {
     path: 'settings',
+    redirectTo: 'settings/general',
+    pathMatch: 'full',
+  },
+  {
+    path: 'settings/:section',
     canActivate: [requireAccountGuard],
     loadComponent: () => import('./features/settings/settings.page').then((m) => m.SettingsPage),
   },

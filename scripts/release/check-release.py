@@ -55,7 +55,7 @@ def main() -> None:
         ".github/workflows/ci.yml", ".github/workflows/native-linux.yml",
         ".github/workflows/native-macos.yml", ".github/workflows/native-windows.yml",
         ".github/workflows/release-linux.yml", ".github/workflows/release-macos.yml",
-        ".github/workflows/release-windows.yml",
+        ".github/workflows/release-windows.yml", ".github/workflows/release.yml",
     ]
     for rel in required:
         if not (ROOT / rel).is_file():
@@ -125,6 +125,13 @@ def main() -> None:
                 raise SystemExit(f"{rel} still contains legacy engine-factory token: {token}")
         if "tauri build" not in text:
             raise SystemExit(f"{rel} must build the FileFlow application")
+
+    atomic_release = require_tokens(".github/workflows/release.yml", [
+        "tags: ['v*.*.*']", "needs: [linux, macos, windows]", "generate-updater-manifest.mjs",
+        "verify-release.mjs", "gh release create",
+    ])
+    if "workflow_run" in atomic_release or "actions/workflows" in atomic_release:
+        raise SystemExit("atomic release must consume reusable build jobs, not query workflow history")
 
     if "ENGINE_PACK_" in unix_installer or "ENGINE_PACK_" in windows_installer:
         raise SystemExit("installer manifests must no longer depend on engine pack metadata")

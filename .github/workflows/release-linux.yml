@@ -1,8 +1,7 @@
 name: FileFlow Release Linux
 
 on:
-  push:
-    tags: ['linux-v*.*.*']
+  workflow_call:
 
 permissions:
   contents: read
@@ -53,7 +52,7 @@ jobs:
         shell: bash
         run: |
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          test "$GITHUB_REF_NAME" = "linux-v${VERSION}"
+          test "$GITHUB_REF_NAME" = "v${VERSION}"
           git fetch origin main:refs/remotes/origin/main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
           pnpm run release:check
@@ -80,30 +79,3 @@ jobs:
           path: dist/release/${{ matrix.target }}
           if-no-files-found: error
           retention-days: 14
-
-  publish:
-    name: Publish Linux
-    needs: build
-    runs-on: ubuntu-22.04
-    permissions: { contents: write }
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
-        with: { node-version: '22.22.3' }
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: native-*
-          path: dist/release
-      - name: Restore target names
-        run: |
-          for dir in dist/release/native-*; do test -d "$dir" || continue; target="${dir##*/native-}"; mv "$dir" "dist/release/$target"; done
-      - name: Canonicalize and checksum
-        run: |
-          node scripts/release/canonicalize-installers.mjs --platform linux --root dist/release
-          node scripts/release/generate-checksums.mjs --root dist/release --output SHA256SUMS-linux
-      - name: Publish immutable release
-        env: { GH_TOKEN: '${{ github.token }}' }
-        run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && { echo "Release already exists" >&2; exit 2; } || true
-          mapfile -d '' ASSETS < <(find dist/release -type f -print0 | sort -z)
-          gh release create "$GITHUB_REF_NAME" "${ASSETS[@]}" SHA256SUMS-linux --verify-tag --title "FileFlow ${GITHUB_REF_NAME#linux-v} — Linux" --notes "FileFlow app; conversion engines are installed locally by install.sh. Provenance: ${GITHUB_SHA}."

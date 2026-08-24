@@ -28,6 +28,19 @@ export interface HealthResponse {
   scheduler: SchedulerSnapshot;
 }
 
+export interface PathValidation {
+  input: string;
+  normalized?: string | null;
+  valid: boolean;
+  exists: boolean;
+  isDirectory: boolean;
+  isFile: boolean;
+  isSymlink: boolean;
+  readable: boolean;
+  writable: boolean;
+  message: string;
+}
+
 export interface EngineProbe {
   id: string;
   displayName: string;
@@ -190,6 +203,50 @@ export interface ActionDescriptor {
   featured: boolean;
 }
 
+export type ActionUiKind =
+  | 'conversion'
+  | 'image'
+  | 'pdf'
+  | 'media'
+  | 'archive'
+  | 'extract'
+  | 'organization'
+  | 'privacy'
+  | 'generic';
+
+export type ActionInputMode = 'files' | 'directories' | 'filesOrDirectories';
+export type ActionParameterKind = 'select' | 'number' | 'range' | 'toggle' | 'text' | 'password' | 'color' | 'time' | 'pageRange';
+
+export interface ActionParameterOption {
+  value: string;
+  label: string;
+}
+
+export interface ActionParameterDescriptor {
+  key: string;
+  label: string;
+  description: string;
+  kind: ActionParameterKind;
+  defaultValue?: string | null;
+  minimum?: string | null;
+  maximum?: string | null;
+  step?: string | null;
+  required: boolean;
+  advanced: boolean;
+  options: ActionParameterOption[];
+}
+
+export interface ActionUiSpec {
+  actionId: string;
+  kind: ActionUiKind;
+  inputMode: ActionInputMode;
+  sourceFormats: string[];
+  targetFormats: string[];
+  defaultTarget?: string | null;
+  parameters: ActionParameterDescriptor[];
+  supportsPreview: boolean;
+}
+
 export interface ActionRecommendation {
   actionId: string;
   score: number;
@@ -240,6 +297,7 @@ export interface CapabilityCatalog {
   actions: ActionDescriptor[];
   conversions: ConversionEdge[];
   formats: FormatCapabilityProfile[];
+  actionUi: ActionUiSpec[];
 }
 
 export interface ExtensionCount {
@@ -325,6 +383,9 @@ export interface ExecuteWorkspaceActionRequest {
   workspaceId: string;
   actionId: string;
   selectedAssetIds: string[];
+  expectedSourceFormats?: string[];
+  excludedRelativePaths?: string[];
+  exclusionPatterns?: string[];
   outputPolicy: OutputPolicy;
   targetFormat?: string | null;
   quality?: 'small' | 'balanced' | 'high' | null;
@@ -356,6 +417,7 @@ export type ExecutionEvent =
   | { event: 'itemCompleted'; data: { jobId: string; index: number; input: string; output?: string | null; skipped: boolean } }
   | { event: 'itemFailed'; data: { jobId: string; index: number; input: string; message: string } }
   | { event: 'progress'; data: { jobId: string; completed: number; total: number } }
+  | { event: 'bytesProgress'; data: { jobId: string; processedBytes: number; totalBytes: number; outputBytes: number; bytesPerSecond: number } }
   | { event: 'phase'; data: { jobId: string; phase: string; completed: number; total: number } }
   | { event: 'finished'; data: { summary: ExecutionSummary } };
 
@@ -440,6 +502,7 @@ export interface PreparedFilePreview {
   path: string;
   family: FormatFamily;
   generated: boolean;
+  content?: string | null;
 }
 
 export interface AccountBootstrap {

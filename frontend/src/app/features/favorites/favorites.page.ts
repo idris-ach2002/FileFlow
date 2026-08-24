@@ -3,6 +3,7 @@ import { Router } from '@angular/router';
 import { CapabilityStore } from '../../core/catalog/capability.store';
 import { ActionDescriptor } from '../../core/ipc/tauri.models';
 import { WorkspaceStore } from '../workspace/data-access/workspace.store';
+import { ConversionIntentStore } from '../../core/conversion/conversion-intent.store';
 
 @Component({
   selector: 'ff-favorites-page',
@@ -45,16 +46,13 @@ export class FavoritesPage {
   protected readonly capabilities = inject(CapabilityStore);
   protected readonly router = inject(Router);
   private readonly workspace = inject(WorkspaceStore);
+  private readonly intents = inject(ConversionIntentStore);
 
   protected async remove(action: ActionDescriptor): Promise<void> { try { await this.capabilities.toggleFavorite(action.id); } catch { /* rollback in store */ } }
   protected async startAction(action: ActionDescriptor): Promise<void> {
-    this.workspace.setPendingAction(action.id);
-    if (this.workspace.hasWorkspace()) { this.workspace.openAction(action.id); await this.router.navigate(['/workspace']); return; }
-    const paths = DIRECTORY_FIRST_ACTIONS.has(action.id) ? await this.workspace.pickDirectories() : await this.workspace.pickFiles();
-    if (!paths.length) return;
-    await this.router.navigate(['/workspace']);
-    await this.workspace.start(paths);
+    const spec = this.capabilities.uiSpec(action.id);
+    this.intents.start({ actionId: action.id, sourceFormats: spec?.sourceFormats ?? [], targetFormat: spec?.defaultTarget ?? action.outputFormat ?? null, inputMode: spec?.inputMode ?? 'files', uiKind: spec?.kind ?? 'generic', parameters: {} });
+    this.workspace.startNewConversion(action.id);
+    await this.router.navigate(['/conversion', action.id]);
   }
 }
-
-const DIRECTORY_FIRST_ACTIONS = new Set(['tar-zstd-create','tar-lz4-create','archive-create']);

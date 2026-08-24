@@ -8,11 +8,15 @@
   <router-outlet />
 } @else {
   <div class="app-shell">
-    @if (updater.available()) {
-      <aside class="update-banner" aria-live="polite">
-        <div><strong>FileFlow {{ updater.version() }} est disponible</strong><span>La mise à jour est signée et sera installée localement.</span></div>
-        <button type="button" class="update-install" (click)="updater.install()" [disabled]="updater.busy()">Installer</button>
-        <button type="button" class="update-dismiss" aria-label="Plus tard" (click)="updater.dismiss()">×</button>
+    @if (updater.visible()) {
+      <aside class="update-banner" aria-live="polite" [class.update-error]="updater.state() === 'error'">
+        <div class="update-copy"><strong>@if (updater.version()) { FileFlow {{ updater.version() }} } @else { Mise à jour FileFlow }</strong><span>{{ updater.statusLabel() }}</span>
+          @if (updater.state() === 'downloading' || updater.state() === 'installing') { <div class="update-progress"><i [style.width.%]="updater.state() === 'installing' ? 100 : updater.progress()"></i></div> }
+        </div>
+        @if (updater.available()) { <button type="button" class="update-install" (click)="updater.install()">Télécharger et installer</button> }
+        @if (updater.state() === 'error') { <button type="button" class="update-install" (click)="updater.check(false)">Réessayer</button> }
+        <a class="update-install" routerLink="/settings/updates">Détails</a>
+        @if (!updater.busy()) { <button type="button" class="update-dismiss" aria-label="Plus tard" (click)="updater.dismiss()">×</button> }
       </aside>
     }
 
@@ -36,8 +40,8 @@
         <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">
           <span class="nav-icon">⌂</span><span class="nav-label">Accueil</span>
         </a>
-        <a routerLink="/workspace" routerLinkActive="active">
-          <span class="nav-icon">▦</span><span class="nav-label">Fichiers</span>
+        <a routerLink="/conversion" routerLinkActive="active">
+          <span class="nav-icon">↻</span><span class="nav-label">Conversion</span>
           @if (workspaceStore.hasWorkspace()) { <span class="nav-count">{{ workspaceStore.counts().files }}</span> }
         </a>
         <a routerLink="/history" routerLinkActive="active">
@@ -64,7 +68,7 @@
 
       <div class="sidebar-spacer"></div>
 
-      <a class="profile-card" routerLink="/settings" aria-label="Ouvrir mon profil">
+      <a class="profile-card" routerLink="/settings/account" aria-label="Ouvrir mon profil">
         <span class="profile-avatar">
           @if (auth.avatarUrl(); as avatar) { <img [src]="avatar" alt="" /> } @else { {{ auth.initials() }} }
         </span>

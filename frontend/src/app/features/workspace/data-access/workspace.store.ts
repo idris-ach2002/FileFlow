@@ -1,5 +1,4 @@
 import { computed, inject, Injectable, signal } from '@angular/core';
-import { open } from '@tauri-apps/plugin-dialog';
 import { TauriBridgeService } from '../../../core/ipc/tauri-bridge.service';
 import { PreferencesService } from '../../../core/preferences/preferences.service';
 import { UiMemoryService } from '../../../core/state/ui-memory.service';
@@ -37,6 +36,8 @@ const EMPTY_STATS: IntakeStats = {
 
 const PREVIEW_LIMIT = 120;
 const PAGE_SIZE = 200;
+const TREE_PAGE_SIZE = 500;
+const TREE_ASSET_LIMIT = 50_000;
 
 @Injectable({ providedIn: 'root' })
 export class WorkspaceStore {
@@ -57,6 +58,9 @@ export class WorkspaceStore {
   readonly activeWorkspaceId = signal<string | null>(null);
   readonly stats = signal<IntakeStats>({ ...EMPTY_STATS });
   readonly assets = signal<Asset[]>([]);
+  readonly treeAssets = signal<Asset[]>([]);
+  readonly treeLoading = signal(false);
+  readonly treeTruncated = signal(false);
   readonly warnings = signal<IntakeWarning[]>([]);
   readonly error = signal<string | null>(null);
   readonly dragActive = signal(false);
@@ -88,12 +92,20 @@ export class WorkspaceStore {
   readonly executionPhaseActive = signal(false);
   readonly executionPhaseCompleted = signal(0);
   readonly executionPhaseTotal = signal(1);
+  readonly executionBytesProcessed = signal(0);
+  readonly executionBytesTotal = signal(0);
+  readonly executionOutputBytes = signal(0);
+  readonly executionBytesPerSecond = signal(0);
   readonly outputActionBusy = signal(false);
   readonly outputActionMessage = signal<string | null>(null);
 
   readonly busy = computed(() => this.phase() === 'scanning');
   readonly executing = computed(() => this.runningJobId() !== null);
   readonly executionProgress = computed(() => {
+    if (this.executionBytesTotal() > 0 && this.executionPhase() === 'conversion') {
+      const ratio = Math.min(1, this.executionBytesProcessed() / this.executionBytesTotal());
+      return Math.round(12 + ratio * 74);
+    }
     if (this.executionPhaseActive()) {
       const phase = this.executionPhase();
       const completed = this.executionPhaseCompleted();
@@ -129,14 +141,12 @@ export class WorkspaceStore {
     };
   });
 
-  async pickFiles(): Promise<string[]> {
-    const selection = await open({ multiple: true, directory: false });
-    return normalizeSelection(selection);
+  async pickFiles(extensions: string[] = []): Promise<string[]> {
+    return this.bridge.pickFiles(extensions);
   }
 
   async pickDirectories(): Promise<string[]> {
-    const selection = await open({ multiple: true, directory: true });
-    return normalizeSelection(selection);
+    return this.bridge.pickDirectories();
   }
 
   async start(paths: string[]): Promise<boolean> {
@@ -182,6 +192,13 @@ export class WorkspaceStore {
   }
 
   setPendingAction(actionId: string | null): void {
+    this.pendingActionId.set(actionId);
+  }
+
+  startNewConversion(actionId: string | null): void {
+    if (this.executing()) return;
+    this.resetForScan();
+    this.phase.set('idle');
     this.pendingActionId.set(actionId);
   }
 
@@ -234,6 +251,37 @@ export class WorkspaceStore {
     this.pageTotal.set(page.total);
   }
 
+  async loadTreeAssets(): Promise<void> {
+    const workspaceId = this.workspace()?.id;
+    if (!workspaceId || this.treeLoading()) return;
+    this.treeLoading.set(true);
+    this.treeTruncated.set(false);
+    try {
+      const collected: Asset[] = [];
+      let total = Number.POSITIVE_INFINITY;
+      while (collected.length < total && collected.length < TREE_ASSET_LIMIT) {
+        const page = await this.bridge.listWorkspaceAssets(workspaceId, {
+          offset: collected.length,
+          limit: TREE_PAGE_SIZE,
+          includeHidden: true,
+          sortBy: 'name',
+          sortDirection: 'ascending',
+        });
+        total = page.total;
+        collected.push(...page.items);
+        if (!page.items.length) break;
+      }
+      if (this.workspace()?.id !== workspaceId) return;
+      collected.sort((left, right) => left.data.relativePath.localeCompare(right.data.relativePath, 'fr', { numeric: true, sensitivity: 'base' }));
+      this.treeAssets.set(collected);
+      this.treeTruncated.set(collected.length < total);
+    } catch (error) {
+      this.error.set(errorMessage(error));
+    } finally {
+      this.treeLoading.set(false);
+    }
+  }
+
   toggleSelection(assetId: string): void {
     this.selectedIds.update((current) => {
       const next = new Set(current);
@@ -267,6 +315,10 @@ export class WorkspaceStore {
     this.executionPhaseActive.set(false);
     this.executionPhaseCompleted.set(0);
     this.executionPhaseTotal.set(1);
+    this.executionBytesProcessed.set(0);
+    this.executionBytesTotal.set(0);
+    this.executionOutputBytes.set(0);
+    this.executionBytesPerSecond.set(0);
     try {
       const summary = await this.bridge.executeAction(request, (event) => this.onExecutionEvent(event));
       this.executionSummary.set(summary);
@@ -294,6 +346,10 @@ export class WorkspaceStore {
     this.executionPhaseActive.set(false);
     this.executionPhaseCompleted.set(0);
     this.executionPhaseTotal.set(1);
+    this.executionBytesProcessed.set(0);
+    this.executionBytesTotal.set(0);
+    this.executionOutputBytes.set(0);
+    this.executionBytesPerSecond.set(0);
   }
 
   async refreshAfterMutation(): Promise<void> {
@@ -377,6 +433,12 @@ export class WorkspaceStore {
         this.executionPhase.set(event.data.phase);
         this.executionPhaseCompleted.set(event.data.completed);
         this.executionPhaseTotal.set(Math.max(1, event.data.total));
+        break;
+      case 'bytesProgress':
+        this.executionBytesProcessed.set(event.data.processedBytes);
+        this.executionBytesTotal.set(event.data.totalBytes);
+        this.executionOutputBytes.set(event.data.outputBytes);
+        this.executionBytesPerSecond.set(event.data.bytesPerSecond);
         break;
       case 'finished':
         this.flushExecutionProgress();
@@ -586,6 +648,9 @@ export class WorkspaceStore {
     this.activeWorkspaceId.set(null);
     this.stats.set({ ...EMPTY_STATS });
     this.assets.set([]);
+    this.treeAssets.set([]);
+    this.treeLoading.set(false);
+    this.treeTruncated.set(false);
     this.warnings.set([]);
     this.archiveInspection.set(null);
     this.archiveInspectionError.set(null);
@@ -610,6 +675,10 @@ export class WorkspaceStore {
     this.executionPhaseActive.set(false);
     this.executionPhaseCompleted.set(0);
     this.executionPhaseTotal.set(1);
+    this.executionBytesProcessed.set(0);
+    this.executionBytesTotal.set(0);
+    this.executionOutputBytes.set(0);
+    this.executionBytesPerSecond.set(0);
     this.executionFailures.set([]);
     this.pendingIntakeStats = null;
     this.pendingIntakeAssets = [];
@@ -624,11 +693,6 @@ function scheduleAnimationFrame(callback: () => void): void {
     return;
   }
   globalThis.setTimeout(callback, 16);
-}
-
-function normalizeSelection(selection: string | string[] | null): string[] {
-  if (selection === null) return [];
-  return Array.isArray(selection) ? selection : [selection];
 }
 
 function errorMessage(error: unknown): string {

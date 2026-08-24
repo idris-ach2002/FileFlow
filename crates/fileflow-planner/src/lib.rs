@@ -63,20 +63,96 @@ pub struct FormatCapabilityProfile {
     pub compress_to: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ActionUiKind {
+    Conversion,
+    Image,
+    Pdf,
+    Media,
+    Archive,
+    Extract,
+    Organization,
+    Privacy,
+    Generic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ActionInputMode {
+    Files,
+    Directories,
+    FilesOrDirectories,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ActionParameterKind {
+    Select,
+    Number,
+    Range,
+    Toggle,
+    Text,
+    Password,
+    Color,
+    Time,
+    PageRange,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionParameterOption {
+    pub value: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionParameterDescriptor {
+    pub key: String,
+    pub label: String,
+    pub description: String,
+    pub kind: ActionParameterKind,
+    pub default_value: Option<String>,
+    pub minimum: Option<String>,
+    pub maximum: Option<String>,
+    pub step: Option<String>,
+    pub required: bool,
+    pub advanced: bool,
+    pub options: Vec<ActionParameterOption>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionUiSpec {
+    pub action_id: String,
+    pub kind: ActionUiKind,
+    pub input_mode: ActionInputMode,
+    pub source_formats: Vec<String>,
+    pub target_formats: Vec<String>,
+    pub default_target: Option<String>,
+    pub parameters: Vec<ActionParameterDescriptor>,
+    pub supports_preview: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CapabilityCatalog {
     pub actions: Vec<ActionDescriptor>,
     pub conversions: Vec<ConversionEdge>,
     pub formats: Vec<FormatCapabilityProfile>,
+    pub action_ui: Vec<ActionUiSpec>,
 }
 
 impl Default for CapabilityCatalog {
     fn default() -> Self {
+        let actions = default_actions();
+        let formats = default_format_capabilities();
         Self {
-            actions: default_actions(),
+            action_ui: default_action_ui(&actions, &formats),
+            actions,
             conversions: default_conversion_edges(),
-            formats: default_format_capabilities(),
+            formats,
         }
     }
 }
@@ -84,6 +160,10 @@ impl Default for CapabilityCatalog {
 impl CapabilityCatalog {
     pub fn action(&self, id: &str) -> Option<&ActionDescriptor> {
         self.actions.iter().find(|action| action.id == id)
+    }
+
+    pub fn action_ui(&self, id: &str) -> Option<&ActionUiSpec> {
+        self.action_ui.iter().find(|spec| spec.action_id == id)
     }
 
     pub fn format(&self, id: &str) -> Option<&FormatCapabilityProfile> {
@@ -406,6 +486,414 @@ fn action(
         destructive,
         featured,
     }
+}
+
+fn parameter(
+    key: &str,
+    label: &str,
+    description: &str,
+    kind: ActionParameterKind,
+    default_value: Option<&str>,
+    bounds: Option<(&str, &str, &str)>,
+) -> ActionParameterDescriptor {
+    let (minimum, maximum, step) = bounds.unwrap_or(("", "", ""));
+    ActionParameterDescriptor {
+        key: key.into(),
+        label: label.into(),
+        description: description.into(),
+        kind,
+        default_value: default_value.map(str::to_owned),
+        minimum: (!minimum.is_empty()).then(|| minimum.into()),
+        maximum: (!maximum.is_empty()).then(|| maximum.into()),
+        step: (!step.is_empty()).then(|| step.into()),
+        required: false,
+        advanced: false,
+        options: Vec::new(),
+    }
+}
+
+fn select_parameter(
+    key: &str,
+    label: &str,
+    description: &str,
+    default_value: &str,
+    values: &[(&str, &str)],
+) -> ActionParameterDescriptor {
+    ActionParameterDescriptor {
+        options: values
+            .iter()
+            .map(|(value, label)| ActionParameterOption {
+                value: (*value).into(),
+                label: (*label).into(),
+            })
+            .collect(),
+        ..parameter(
+            key,
+            label,
+            description,
+            ActionParameterKind::Select,
+            Some(default_value),
+            None,
+        )
+    }
+}
+
+fn action_parameters(id: &str) -> Vec<ActionParameterDescriptor> {
+    use ActionParameterKind::*;
+    let number = |key, label, default, min, max, step| {
+        parameter(
+            key,
+            label,
+            "Le moteur valide cette valeur avant le traitement.",
+            Number,
+            Some(default),
+            Some((min, max, step)),
+        )
+    };
+    let range = |key, label, default, min, max, step| {
+        parameter(
+            key,
+            label,
+            "Ajustement appliqué sans modifier le fichier original.",
+            Range,
+            Some(default),
+            Some((min, max, step)),
+        )
+    };
+
+    match id {
+        "image-rotate" => vec![range("angle", "Angle", "90", "-360", "360", "1")],
+        "image-sepia" => vec![range("strength", "Intensité", "80", "0", "100", "1")],
+        "image-adjust" => vec![
+            range("brightness", "Luminosité", "0", "-100", "100", "1"),
+            range("contrast", "Contraste", "0", "-100", "100", "1"),
+            range("saturation", "Saturation", "100", "0", "200", "1"),
+            range("gamma", "Gamma", "1", "0.1", "5", "0.1"),
+        ],
+        "image-sharpen" => vec![range("amount", "Netteté", "1", "0.1", "5", "0.1")],
+        "image-blur" => vec![range("radius", "Rayon", "2", "0.1", "20", "0.1")],
+        "image-threshold" => vec![range("threshold", "Seuil", "50", "0", "100", "1")],
+        "image-posterize" => vec![range("levels", "Niveaux", "6", "2", "32", "1")],
+        "image-pixelate" => vec![range(
+            "pixelPercent",
+            "Taille des pixels",
+            "8",
+            "1",
+            "50",
+            "1",
+        )],
+        "image-flatten" => vec![parameter(
+            "background",
+            "Arrière-plan",
+            "Couleur utilisée pour remplacer la transparence.",
+            Color,
+            Some("#ffffff"),
+            None,
+        )],
+        "image-crop-center" => vec![
+            number("width", "Largeur", "1200", "1", "20000", "1"),
+            number("height", "Hauteur", "1200", "1", "20000", "1"),
+        ],
+        "image-resize-exact" => vec![
+            number("width", "Largeur", "1920", "1", "20000", "1"),
+            number("height", "Hauteur", "1080", "1", "20000", "1"),
+            select_parameter(
+                "fit",
+                "Ajustement",
+                "Conserver, remplir ou étirer l’image.",
+                "contain",
+                &[
+                    ("contain", "Contenir"),
+                    ("fill", "Remplir"),
+                    ("stretch", "Étirer"),
+                ],
+            ),
+        ],
+        "image-crop-custom" => vec![
+            number("width", "Largeur", "1200", "1", "20000", "1"),
+            number("height", "Hauteur", "1200", "1", "20000", "1"),
+            number("x", "Position X", "0", "0", "20000", "1"),
+            number("y", "Position Y", "0", "0", "20000", "1"),
+        ],
+        "image-canvas" => vec![
+            number("width", "Largeur", "1920", "1", "20000", "1"),
+            number("height", "Hauteur", "1080", "1", "20000", "1"),
+            parameter(
+                "background",
+                "Arrière-plan",
+                "Couleur de la nouvelle toile.",
+                Color,
+                Some("#ffffff"),
+                None,
+            ),
+        ],
+        "image-contrast-stretch" => vec![
+            range("blackPoint", "Point noir", "0.5", "0", "20", "0.1"),
+            range("whitePoint", "Point blanc", "0.5", "0", "20", "0.1"),
+        ],
+        "image-set-dpi" => vec![number("dpi", "Résolution DPI", "300", "36", "2400", "1")],
+        "image-perspective" => vec![
+            number("x0", "Coin 1 · X", "0", "0", "20000", "1"),
+            number("y0", "Coin 1 · Y", "0", "0", "20000", "1"),
+            number("x1", "Coin 2 · X", "1200", "0", "20000", "1"),
+            number("y1", "Coin 2 · Y", "0", "0", "20000", "1"),
+            number("x2", "Coin 3 · X", "1200", "0", "20000", "1"),
+            number("y2", "Coin 3 · Y", "1200", "0", "20000", "1"),
+            number("x3", "Coin 4 · X", "0", "0", "20000", "1"),
+            number("y3", "Coin 4 · Y", "1200", "0", "20000", "1"),
+            number("width", "Largeur finale", "1200", "1", "20000", "1"),
+            number("height", "Hauteur finale", "1200", "1", "20000", "1"),
+        ],
+        "image-border" => vec![
+            number("pixels", "Épaisseur", "16", "1", "500", "1"),
+            parameter(
+                "color",
+                "Couleur",
+                "Couleur de la bordure.",
+                Color,
+                Some("#ffffff"),
+                None,
+            ),
+        ],
+        "image-vignette" => vec![range("radius", "Intensité", "12", "0", "100", "1")],
+        "image-watermark" => vec![
+            parameter(
+                "text",
+                "Texte",
+                "Texte placé en bas à droite.",
+                Text,
+                Some("FileFlow"),
+                None,
+            ),
+            number("fontSize", "Taille", "28", "8", "200", "1"),
+        ],
+        "pdf-rotate-pages" => vec![
+            select_parameter(
+                "angle",
+                "Rotation",
+                "Rotation appliquée aux pages sélectionnées.",
+                "90",
+                &[
+                    ("90", "90°"),
+                    ("180", "180°"),
+                    ("270", "270°"),
+                    ("-90", "-90°"),
+                ],
+            ),
+            parameter(
+                "pages",
+                "Pages",
+                "Exemples : 1,3-5 ou 1-z.",
+                PageRange,
+                Some("1-z"),
+                None,
+            ),
+        ],
+        "pdf-select-pages" => vec![parameter(
+            "pages",
+            "Pages à conserver",
+            "Exemples : 1,3-5 ou 1-z.",
+            PageRange,
+            Some("1-z"),
+            None,
+        )],
+        "pdf-protect" => vec![ActionParameterDescriptor {
+            required: true,
+            ..parameter(
+                "password",
+                "Mot de passe",
+                "Le mot de passe n’est jamais mémorisé.",
+                Password,
+                None,
+                None,
+            )
+        }],
+        "video-rotate" => vec![select_parameter(
+            "direction",
+            "Rotation",
+            "Orientation de la vidéo finale.",
+            "right",
+            &[
+                ("right", "90° à droite"),
+                ("left", "90° à gauche"),
+                ("180", "180°"),
+            ],
+        )],
+        "video-resize" => vec![
+            number("width", "Largeur", "1920", "16", "7680", "2"),
+            number("height", "Hauteur", "1080", "16", "4320", "2"),
+        ],
+        "video-thumbnail" => vec![parameter(
+            "second",
+            "Position",
+            "Instant de la miniature dans la vidéo.",
+            Time,
+            Some("1"),
+            Some(("0", "86400", "0.1")),
+        )],
+        "media-trim" => vec![
+            parameter(
+                "start",
+                "Début",
+                "Instant de début.",
+                Time,
+                Some("0"),
+                Some(("0", "86400", "0.1")),
+            ),
+            parameter(
+                "duration",
+                "Durée",
+                "Durée conservée.",
+                Time,
+                Some("30"),
+                Some(("0.1", "86400", "0.1")),
+            ),
+        ],
+        "audio-gain" => vec![range("gainDb", "Gain", "0", "-30", "30", "0.5")],
+        "smart-to-pdf" | "collection-to-pdf" => vec![
+            select_parameter(
+                "finalCompression",
+                "Compression finale",
+                "Optimisation appliquée au PDF final.",
+                "balanced",
+                &[
+                    ("keep", "Conserver"),
+                    ("small", "Plus léger"),
+                    ("balanced", "Équilibré"),
+                    ("high", "Haute qualité"),
+                ],
+            ),
+            number("targetSizeMb", "Taille cible (Mo)", "0", "0", "4096", "1"),
+            parameter(
+                "improve",
+                "Améliorer les scans",
+                "Redressement et OCR lorsque le moteur le permet.",
+                Toggle,
+                Some("false"),
+                None,
+            ),
+            parameter(
+                "stripMetadata",
+                "Nettoyer les métadonnées",
+                "Retire les informations privées avant le partage.",
+                Toggle,
+                Some("false"),
+                None,
+            ),
+            parameter(
+                "signatureText",
+                "Signature visuelle",
+                "Texte ajouté au document final.",
+                Text,
+                None,
+                None,
+            ),
+        ],
+        _ => Vec::new(),
+    }
+}
+
+fn action_targets(action: &ActionDescriptor) -> Vec<String> {
+    let targets: &[&str] = match action.id.as_str() {
+        "image-convert" | "image-batch-convert" => {
+            &["jpg", "png", "webp", "avif", "tiff", "bmp", "gif"]
+        }
+        "office-convert" => &[
+            "pdf", "docx", "odt", "rtf", "txt", "html", "xlsx", "ods", "csv", "pptx", "odp",
+        ],
+        "audio-convert" => &["mp3", "m4a", "aac", "wav", "flac", "ogg", "opus"],
+        "extract-audio" => &["m4a", "mp3", "aac", "wav", "flac", "ogg", "opus"],
+        "video-convert" => &["mp4", "webm", "mkv", "mov"],
+        "text-convert" => &["html", "md", "docx", "epub", "txt"],
+        "ebook-convert" => &["html", "md", "docx", "txt", "epub"],
+        "pdf-to-images" => &["png", "jpg"],
+        "archive-create" => &["zip", "7z", "tar"],
+        "archive-package" => &["smart", "tar.zst", "zip", "tar"],
+        "tar-zstd-create" => &["tar.zst"],
+        "zstd-compress" => &["zst"],
+        _ => &[],
+    };
+    if targets.is_empty() {
+        action.output_format.iter().cloned().collect()
+    } else {
+        targets.iter().map(|value| (*value).into()).collect()
+    }
+}
+
+fn action_kind(action: &ActionDescriptor) -> ActionUiKind {
+    if action.id.ends_with("-convert") {
+        return ActionUiKind::Conversion;
+    }
+
+    match action.category {
+        OperationCategory::Convert | OperationCategory::Document => ActionUiKind::Conversion,
+        OperationCategory::Image => ActionUiKind::Image,
+        OperationCategory::Pdf => ActionUiKind::Pdf,
+        OperationCategory::Media => ActionUiKind::Media,
+        OperationCategory::Archive => ActionUiKind::Archive,
+        OperationCategory::Extract => ActionUiKind::Extract,
+        OperationCategory::Organize => ActionUiKind::Organization,
+        OperationCategory::Privacy => ActionUiKind::Privacy,
+        OperationCategory::Optimize => {
+            if action.accepts.contains(&FormatFamily::Image) {
+                ActionUiKind::Image
+            } else if action.accepts.contains(&FormatFamily::Pdf) {
+                ActionUiKind::Pdf
+            } else if action
+                .accepts
+                .iter()
+                .any(|family| matches!(*family, FormatFamily::Audio | FormatFamily::Video))
+            {
+                ActionUiKind::Media
+            } else {
+                ActionUiKind::Generic
+            }
+        }
+    }
+}
+
+fn default_action_ui(
+    actions: &[ActionDescriptor],
+    formats: &[FormatCapabilityProfile],
+) -> Vec<ActionUiSpec> {
+    actions
+        .iter()
+        .map(|action| {
+            let mut source_formats = formats
+                .iter()
+                .filter(|format| {
+                    action.accepts.is_empty() || action.accepts.contains(&format.family)
+                })
+                .flat_map(|format| format.extensions.iter().cloned())
+                .collect::<Vec<_>>();
+            source_formats.sort();
+            source_formats.dedup();
+            let input_mode = match action.id.as_str() {
+                "tar-zstd-create" | "tar-lz4-create" | "archive-create" | "archive-package"
+                | "collection-to-pdf" => ActionInputMode::FilesOrDirectories,
+                "organize-by-type" | "duplicate-scan" => ActionInputMode::Directories,
+                _ => ActionInputMode::Files,
+            };
+            let target_formats = action_targets(action);
+            let default_target = action
+                .output_format
+                .clone()
+                .or_else(|| target_formats.first().cloned());
+            ActionUiSpec {
+                action_id: action.id.clone(),
+                kind: action_kind(action),
+                input_mode,
+                source_formats,
+                target_formats,
+                default_target,
+                parameters: action_parameters(&action.id),
+                supports_preview: matches!(
+                    action_kind(action),
+                    ActionUiKind::Image | ActionUiKind::Pdf | ActionUiKind::Media
+                ),
+            }
+        })
+        .collect()
 }
 
 fn default_actions() -> Vec<ActionDescriptor> {
@@ -1170,11 +1658,11 @@ fn default_actions() -> Vec<ActionDescriptor> {
         ),
         action(
             "archive-package",
-            "Compresser vers…",
-            "Créer ZIP, 7Z, TAR, TAR.GZ, TAR.XZ, TAR.BZ2, TAR.ZST ou TAR.LZ4 à partir d’un fichier, d’un lot ou d’un dossier.",
+            "Compression intelligente",
+            "Choisir automatiquement TAR.ZST pour le débit maximal, ou créer un ZIP/TAR compatible à partir d’un lot ou d’un dossier.",
             OperationCategory::Archive,
             &[],
-            &["archive"],
+            &["archive", "zstd"],
             None,
             true,
             false,
@@ -2326,6 +2814,7 @@ mod tests {
                 edge("pdf", "png", "poppler", 2, true),
             ],
             formats: Vec::new(),
+            action_ui: Vec::new(),
         };
 
         let plan = catalog.conversion_plan("docx", "png").unwrap();
@@ -2394,6 +2883,7 @@ mod tests {
                 edge("png", "pdf", "pdf", 2, false),
             ],
             formats: Vec::new(),
+            action_ui: Vec::new(),
         };
         let plan = catalog.conversion_plan("xyz", "pdf").expect("route");
         assert_eq!(plan.intermediates, vec!["png"]);
@@ -2445,5 +2935,35 @@ mod tests {
 
         assert_eq!(html.steps[0].engine_id, "browser");
         assert_eq!(email.steps[0].engine_id, "browser");
+    }
+
+    #[test]
+    fn exposes_action_specific_ui_contracts() {
+        let catalog = CapabilityCatalog::default();
+        let convert = catalog
+            .action_ui("image-convert")
+            .expect("image conversion UI");
+        assert_eq!(convert.kind, ActionUiKind::Conversion);
+        assert!(convert.target_formats.iter().any(|format| format == "webp"));
+
+        let protect = catalog.action_ui("pdf-protect").expect("PDF protection UI");
+        let password = protect
+            .parameters
+            .iter()
+            .find(|parameter| parameter.key == "password")
+            .expect("password field");
+        assert!(password.required);
+        assert_eq!(password.kind, ActionParameterKind::Password);
+
+        let package = catalog
+            .action_ui("archive-package")
+            .expect("archive package UI");
+        assert_eq!(package.input_mode, ActionInputMode::FilesOrDirectories);
+        assert!(
+            package
+                .target_formats
+                .iter()
+                .any(|format| format == "tar.zst")
+        );
     }
 }

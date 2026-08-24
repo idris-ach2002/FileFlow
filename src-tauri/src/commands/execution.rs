@@ -1,6 +1,6 @@
 use crate::{AppState, RecentOutputs, commands::account::require_active_session};
 use chrono::Utc;
-use fileflow_domain::{AssetId, JobId, OutputPolicy, WorkspaceId};
+use fileflow_domain::{Asset, AssetId, JobId, OutputPolicy, WorkspaceId};
 use fileflow_executor::{
     EnginePaths, ExecutionEvent, ExecutionInput, ExecutionRequest, ExecutionSummary,
 };
@@ -25,6 +25,12 @@ pub struct ExecuteWorkspaceAction {
     pub action_id: String,
     #[serde(default)]
     pub selected_asset_ids: Vec<AssetId>,
+    #[serde(default)]
+    pub expected_source_formats: Vec<String>,
+    #[serde(default)]
+    pub excluded_relative_paths: Vec<String>,
+    #[serde(default)]
+    pub exclusion_patterns: Vec<String>,
     #[serde(default)]
     pub output_policy: OutputPolicy,
     pub target_format: Option<String>,
@@ -57,7 +63,7 @@ pub async fn execute_action(
         .core
         .workspace(request.workspace_id)
         .map_err(|error| error.to_string())?;
-    let assets = state
+    let mut assets = state
         .core
         .workspaces
         .select_assets(
@@ -66,6 +72,25 @@ pub async fn execute_action(
             &action.accepts,
         )
         .map_err(|error| error.to_string())?;
+    if !request.expected_source_formats.is_empty() {
+        let expected = request
+            .expected_source_formats
+            .iter()
+            .map(|value| value.trim().trim_start_matches('.').to_ascii_lowercase())
+            .collect::<std::collections::HashSet<_>>();
+        assets.retain(|asset| asset_matches_formats(asset, &expected));
+    }
+    let excluded_paths = request
+        .excluded_relative_paths
+        .iter()
+        .filter_map(|value| normalize_exclusion_rule(value))
+        .collect::<Vec<_>>();
+    let exclusion_patterns = request
+        .exclusion_patterns
+        .iter()
+        .filter_map(|value| normalize_relative_rule(value))
+        .collect::<Vec<_>>();
+    assets.retain(|asset| !asset_is_excluded(asset, &excluded_paths, &exclusion_patterns));
     if assets.is_empty() {
         return Err("Aucun élément compatible n’est sélectionné pour cette opération.".into());
     }
@@ -140,6 +165,69 @@ pub async fn execute_action(
     remember_outputs(&state, &summary);
     record_history(state.storage.clone(), account_id, &summary, input_bytes).await;
     Ok(summary)
+}
+
+fn asset_matches_formats(asset: &Asset, expected: &std::collections::HashSet<String>) -> bool {
+    let format = match asset {
+        Asset::File(file) => &file.format,
+        Asset::Archive(archive) => &archive.format,
+        Asset::Directory(_) | Asset::Symlink(_) => return false,
+    };
+    expected.contains(&format.id.to_ascii_lowercase())
+        || format
+            .extension
+            .as_ref()
+            .is_some_and(|extension| expected.contains(&extension.to_ascii_lowercase()))
+}
+
+fn normalize_relative_rule(value: &str) -> Option<String> {
+    let normalized = value.trim().replace('\\', "/");
+    let normalized = normalized.trim_matches('/').trim_start_matches("./");
+    (!normalized.is_empty()).then(|| normalized.to_ascii_lowercase())
+}
+
+fn normalize_exclusion_rule(value: &str) -> Option<(Option<usize>, String)> {
+    let trimmed = value.trim();
+    if let Some((root, relative)) = trimmed.split_once(':')
+        && let Ok(root_index) = root.parse::<usize>()
+    {
+        return normalize_relative_rule(relative).map(|path| (Some(root_index), path));
+    }
+    normalize_relative_rule(trimmed).map(|path| (None, path))
+}
+
+fn asset_is_excluded(
+    asset: &Asset,
+    excluded_paths: &[(Option<usize>, String)],
+    patterns: &[String],
+) -> bool {
+    let relative = asset
+        .common()
+        .relative_path
+        .to_string_lossy()
+        .replace('\\', "/");
+    let relative = relative.trim_matches('/').to_ascii_lowercase();
+    if excluded_paths.iter().any(|(root, rule)| {
+        root.is_none_or(|root| root == asset.common().root_index)
+            && (relative == *rule || relative.starts_with(&format!("{rule}/")))
+    }) {
+        return true;
+    }
+    let components = relative.split('/').collect::<Vec<_>>();
+    patterns.iter().any(|pattern| {
+        if let Some(extension) = pattern.strip_prefix("*.") {
+            return asset
+                .common()
+                .path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value.eq_ignore_ascii_case(extension));
+        }
+        if pattern.contains('/') {
+            return relative == *pattern || relative.starts_with(&format!("{pattern}/"));
+        }
+        components.iter().any(|component| *component == pattern)
+    })
 }
 
 #[tauri::command]
@@ -281,6 +369,25 @@ pub async fn save_job_output_copy(
         .await
         .map_err(|error| format!("La copie a été interrompue : {error}"))??;
     Ok(Some(destination))
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exclusion_rules_keep_the_workspace_root_identity() {
+        assert_eq!(
+            normalize_exclusion_rule(r"2:node_modules\cache"),
+            Some((Some(2), "node_modules/cache".into()))
+        );
+        assert_eq!(
+            normalize_exclusion_rule("build/output"),
+            Some((None, "build/output".into()))
+        );
+        assert_eq!(normalize_exclusion_rule(" / "), None);
+    }
 }
 
 fn unique_copy_destination(base: &Path) -> PathBuf {

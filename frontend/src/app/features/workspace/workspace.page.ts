@@ -1,12 +1,14 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, untracked } from '@angular/core';
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
-import { Router } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { AuthStore } from '../../core/auth/auth.store';
 import { CapabilityStore } from '../../core/catalog/capability.store';
-import { ActionDescriptor, Asset, DestinationPolicy, FormatFamily } from '../../core/ipc/tauri.models';
+import { ActionDescriptor, ActionParameterDescriptor, Asset, DestinationPolicy, FormatFamily, PathValidation } from '../../core/ipc/tauri.models';
+import { TauriBridgeService } from '../../core/ipc/tauri-bridge.service';
 import { PreferencesService } from '../../core/preferences/preferences.service';
 import { UiMemoryService } from '../../core/state/ui-memory.service';
+import { ConversionIntentStore } from '../../core/conversion/conversion-intent.store';
 import { WorkspaceStore } from './data-access/workspace.store';
 
 type SimpleTask = 'convert' | 'compress' | 'extract' | 'organize' | 'rename' | 'protect';
@@ -65,8 +67,38 @@ const TASKS: TaskCard[] = [
           <button class="ff-button" type="button" (click)="backHome()">Recommencer</button>
         </section>
       } @else if (!store.hasWorkspace()) {
-        <section class="state-card loading-state">
-          <span class="spinner"></span><div><h2>Récupération de votre espace…</h2><p>FileFlow reprend votre dernière sélection quand elle est encore disponible.</p></div>
+        <section class="stage-card intake-stage">
+          <header class="stage-header">
+            <div><div class="stage-number">2</div><p class="kicker">SOURCES COMPATIBLES</p><h1>{{ intakeTitle() }}</h1><p>{{ intakeSubtitle() }}</p></div>
+            @if (requestedAction()) { <button class="quiet-button" type="button" (click)="router.navigate(['/advanced'])">← Changer d’action</button> }
+          </header>
+          @if (requestedAction(); as action) {
+            <div class="intent-summary">
+              <span class="intent-mark">{{ action.title.slice(0,2).toUpperCase() }}</span>
+              <div><strong>{{ action.title }}</strong><small>{{ action.description }}</small></div>
+              @if (requestedTarget()) { <b>{{ requestedTarget()!.toUpperCase() }}</b> }
+            </div>
+          }
+          @if (acceptedFormats().length) {
+            <div class="accepted-formats"><span>Formats acceptés</span>@for (format of acceptedFormats().slice(0,18); track format) { <code>.{{ format }}</code> }@if (acceptedFormats().length > 18) { <code>+{{ acceptedFormats().length - 18 }}</code> }</div>
+          }
+          <div class="intake-actions">
+            @if (requestedInputMode() !== 'directories') {
+              <button type="button" class="intake-choice primary" (click)="chooseCompatibleFiles()"><span>＋</span><strong>Choisir des fichiers</strong><small>Le sélecteur affiche uniquement les extensions compatibles.</small></button>
+            }
+            @if (requestedInputMode() !== 'files') {
+              <button type="button" class="intake-choice" (click)="chooseSourceDirectories()"><span>▱</span><strong>Choisir un dossier</strong><small>L’arborescence sera analysée avant le traitement.</small></button>
+            }
+          </div>
+          @if (requestedInputMode() !== 'files') {
+            <section class="manual-path" [class.valid]="sourcePathValidation()?.valid" [class.invalid]="sourcePath().length > 0 && sourcePathValidation()?.valid === false">
+              <div class="manual-path-head"><div><strong>Ou saisir le chemin du dossier</strong><small>Validation réelle sur cet appareil, pas une simple vérification de texte.</small></div><span>{{ sourcePathChecking() ? 'Vérification…' : sourcePathValidation()?.valid ? '✓ Valide' : 'Requis' }}</span></div>
+              <div class="path-input-row"><input type="text" spellcheck="false" autocomplete="off" placeholder="/Users/vous/Documents ou C:\\Users\\vous\\Documents" [value]="sourcePath()" (input)="updateSourcePath($any($event.target).value)" /><button type="button" (click)="chooseSourceDirectoryWithoutStarting()">Parcourir…</button></div>
+              <p>{{ sourcePathValidation()?.message ?? 'Le cadre restera rouge jusqu’à ce que le dossier existe et soit accessible.' }}</p>
+              <button class="analyze-path" type="button" [disabled]="!sourcePathValidation()?.valid || sourcePathChecking()" (click)="startValidatedSourcePath()">Énumérer l’arborescence →</button>
+            </section>
+          }
+          <div class="privacy-note">◆ Le type réel sera vérifié localement après la sélection. Aucun fichier n’est envoyé.</div>
         </section>
       } @else if (store.busy()) {
         <section class="stage-card treatment-card">
@@ -117,9 +149,71 @@ const TASKS: TaskCard[] = [
                 <button class="quiet-button" type="button" (click)="returnToActions()">← Changer d’action</button>
               </header>
 
+              @if (showDirectoryTree()) {
+                <section class="tree-selector">
+                  <div class="tree-selector-head">
+                    <div><span>ARBORESCENCE LOCALE</span><h2>Choisir exactement ce qui sera traité</h2><p>Décochez un dossier pour exclure automatiquement tout son contenu.</p></div>
+                    <div class="tree-summary"><strong>{{ includedTreeFileCount() }}</strong><small>fichier(s) inclus</small><b>{{ excludedTreeFileCount() }} exclu(s)</b></div>
+                  </div>
+                  <div class="tree-tools">
+                    <label><span>⌕</span><input type="search" placeholder="Filtrer l’arborescence…" [value]="treeSearch()" (input)="treeSearch.set($any($event.target).value)" /></label>
+                    <label class="pattern-field"><span>Exclusions rapides</span><input type="text" placeholder="node_modules; .git; *.tmp" [value]="exclusionPatternsText()" (input)="exclusionPatternsText.set($any($event.target).value)" /></label>
+                  </div>
+                  @if (store.treeLoading()) {
+                    <div class="tree-loading"><span class="spinner"></span> Énumération de l’arborescence…</div>
+                  } @else {
+                    <div class="tree-list">
+                      @for (asset of visibleTreeAssets(); track asset.data.id) {
+                        <label class="tree-row" [class.excluded]="isTreeExcluded(asset)" [class.directory]="asset.kind === 'directory'" [style.padding-left.px]="12 + treeDepth(asset) * 17">
+                          <input type="checkbox" [checked]="!isTreeExcluded(asset)" (change)="toggleTreeExclusion(asset)" />
+                          <span>{{ asset.kind === 'directory' ? '▱' : asset.kind === 'archive' ? '▣' : '·' }}</span>
+                          <strong>{{ asset.data.name }}</strong>
+                          <small>{{ asset.kind === 'directory' ? 'Dossier' : assetSize(asset) }}</small>
+                        </label>
+                      }
+                      @if (!visibleTreeAssets().length) { <div class="tree-empty">Aucun élément ne correspond à ce filtre.</div> }
+                    </div>
+                    @if (treeMatches().length > treeVisibleLimit()) { <button class="tree-more" type="button" (click)="treeVisibleLimit.update(value => value + 300)">Afficher 300 éléments de plus</button> }
+                    @if (store.treeTruncated()) { <p class="tree-warning">Aperçu limité à 50 000 éléments. Les règles d’exclusion restent appliquées au traitement complet.</p> }
+                  }
+                </section>
+              }
+
               <div class="configure-layout">
                 <div class="essential-settings">
                   <h2>Réglages essentiels</h2>
+
+                  @if (!selectedTask() && activeUiSpec(); as spec) {
+                    @if (spec.targetFormats.length) {
+                      <label class="setting-card">
+                        <span class="setting-icon">◎</span>
+                        <span><strong>Format cible</strong><small>Présélectionné depuis l’espace Advanced, mais modifiable.</small></span>
+                        <select [value]="targetFormat()" (change)="setTarget($any($event.target).value)">
+                          @for (format of spec.targetFormats; track format) { <option [value]="format">{{ targetFormatLabel(format) }}</option> }
+                        </select>
+                      </label>
+                    }
+                    @if (spec.parameters.length) {
+                      <div class="action-parameter-list">
+                        @for (field of spec.parameters; track field.key) {
+                          @if (field.kind === 'toggle') {
+                            <label class="setting-card parameter-toggle">
+                              <span class="setting-icon">◇</span><span><strong>{{ field.label }}</strong><small>{{ field.description }}</small></span>
+                              <input type="checkbox" [checked]="parameterBoolean(field)" (change)="setActionParameter(field, $any($event.target).checked)" />
+                            </label>
+                          } @else if (field.kind === 'select') {
+                            <label class="setting-card"><span class="setting-icon">⌄</span><span><strong>{{ field.label }}</strong><small>{{ field.description }}</small></span><select [value]="parameterValue(field)" (change)="setActionParameter(field, $any($event.target).value)">@for (option of field.options; track option.value) { <option [value]="option.value">{{ option.label }}</option> }</select></label>
+                          } @else if (field.kind === 'range') {
+                            <label class="setting-card"><span class="setting-icon">↔</span><span><strong>{{ field.label }}</strong><small>{{ field.description }}</small></span><span class="range-control"><input type="range" [min]="field.minimum ?? 0" [max]="field.maximum ?? 100" [step]="field.step ?? 1" [value]="parameterValue(field)" (input)="setActionParameter(field, $any($event.target).value)" /><output>{{ parameterValue(field) }}</output></span></label>
+                          } @else if (field.kind === 'color') {
+                            <label class="setting-card"><span class="setting-icon">◉</span><span><strong>{{ field.label }}</strong><small>{{ field.description }}</small></span><span class="parameter-color"><input type="color" [value]="parameterValue(field) || '#ffffff'" (input)="setActionParameter(field, $any($event.target).value)" /><input type="text" [value]="parameterValue(field)" (input)="setActionParameter(field, $any($event.target).value)" /></span></label>
+                          } @else {
+                            <label class="setting-card"><span class="setting-icon">{{ field.kind === 'password' ? '▣' : field.kind === 'pageRange' ? '☷' : field.kind === 'time' ? '◷' : '#' }}</span><span><strong>{{ field.label }}</strong><small>{{ field.description }}</small></span><input [type]="field.kind === 'password' ? 'password' : field.kind === 'number' || field.kind === 'time' ? 'number' : 'text'" [min]="field.minimum" [max]="field.maximum" [step]="field.step" [required]="field.required" [value]="parameterValue(field)" (input)="setActionParameter(field, $any($event.target).value)" /></label>
+                          }
+                        }
+                      </div>
+                    }
+                  }
 
                   @if (selectedTask() === 'convert' || selectedTask() === 'organize') {
                     <label class="setting-card">
@@ -134,17 +228,25 @@ const TASKS: TaskCard[] = [
                   @if (supportsQuality()) {
                     <label class="setting-card">
                       <span class="setting-icon">▥</span>
-                      <span><strong>Qualité</strong><small>Équilibrée est recommandée dans la plupart des cas.</small></span>
+                      <span><strong>{{ activeUiSpec()?.kind === 'archive' ? 'Profil de vitesse' : 'Qualité' }}</strong><small>{{ activeUiSpec()?.kind === 'archive' ? 'Turbo privilégie la vitesse, Petite archive le ratio.' : 'Équilibrée est recommandée dans la plupart des cas.' }}</small></span>
                       <select [value]="quality()" (change)="quality.set($any($event.target).value)">
-                        <option value="small">Petite taille</option><option value="balanced">Équilibrée (recommandée)</option><option value="high">Haute qualité</option>
+                        @if (activeUiSpec()?.kind === 'archive') { <option value="high">Turbo</option><option value="balanced">Très rapide (recommandé)</option><option value="small">Petite archive</option> }
+                        @else { <option value="small">Petite taille</option><option value="balanced">Équilibrée (recommandée)</option><option value="high">Haute qualité</option> }
                       </select>
                     </label>
                   }
 
-                  <div class="setting-card destination-setting">
+                  <div class="setting-card destination-setting" [class.destination-invalid]="destination() === 'choose' && destinationValidation()?.valid === false">
                     <span class="setting-icon">▱</span>
                     <span><strong>Destination</strong><small>{{ destinationLabel() }}</small></span>
-                    <button type="button" (click)="chooseDestination()">Changer…</button>
+                    <select [value]="destination()" (change)="setDestination($any($event.target).value)"><option value="subfolder">Sous-dossier FileFlow</option><option value="same">À côté de l’original</option><option value="choose">Dossier personnalisé</option></select>
+                    @if (destination() === 'choose') {
+                      <div class="destination-path-editor">
+                        <input type="text" spellcheck="false" autocomplete="off" placeholder="Saisir un dossier existant" [value]="destinationPath()" (input)="updateDestinationPath($any($event.target).value)" />
+                        <button type="button" (click)="chooseDestination()">Parcourir…</button>
+                        <small [class.ok]="destinationValidation()?.valid">{{ destinationChecking() ? 'Vérification…' : destinationValidation()?.message ?? 'Le dossier doit exister et être inscriptible.' }}</small>
+                      </div>
+                    }
                   </div>
 
                   @if (selectedTask() === 'organize' && isSinglePdf()) {
@@ -215,6 +317,8 @@ const TASKS: TaskCard[] = [
                     <button class="preview-clickable" type="button" (click)="openSourcePreview()"><iframe [src]="url" title="Aperçu du PDF" tabindex="-1"></iframe><span>Agrandir</span></button>
                   } @else if (imagePreviewUrl(); as image) {
                     <button class="image-preview preview-clickable" type="button" (click)="openSourcePreview()"><img [src]="image" alt="Aperçu du fichier" /><span>Agrandir</span></button>
+                  } @else if (preparedPreviewText(); as previewText) {
+                    <button class="text-preview preview-clickable" type="button" (click)="openSourcePreview()"><pre>{{ previewText }}</pre><span>Agrandir</span></button>
                   } @else if (previewLoading()) {
                     <div class="preview-placeholder preview-loading"><span class="spinner"></span><strong>Préparation de l’aperçu…</strong><small>FileFlow crée localement une représentation compatible de ce format.</small></div>
                   } @else {
@@ -308,6 +412,7 @@ const TASKS: TaskCard[] = [
             <div class="fullscreen-preview-content">
               @if (fullscreenPdfUrl(); as fullPdf) { <iframe [src]="fullPdf" title="Prévisualisation PDF"></iframe> }
               @else if (fullscreenImageUrl(); as fullImage) { <img [src]="fullImage" alt="Prévisualisation du fichier" /> }
+              @else if (fullscreenPreviewText(); as fullText) { <pre class="fullscreen-text-preview">{{ fullText }}</pre> }
               @else { <div class="preview-placeholder"><span>{{ fullscreenPreviewMark() }}</span><strong>{{ fullscreenPreviewTitle() }}</strong><small>Ce format ne possède pas encore de rendu intégré. Vous pouvez toujours l’ouvrir avec son application système.</small></div> }
             </div>
           </section>
@@ -317,7 +422,9 @@ const TASKS: TaskCard[] = [
   `,
   styles: [`
     :host{display:block}.guided-shell{max-width:1120px;margin:0 auto;padding:4px 0 32px}.flow-steps{display:grid;grid-template-columns:auto 20px auto 20px auto 20px auto 20px auto;align-items:center;justify-content:center;gap:7px;margin:3px auto 25px}.flow-step{display:flex;align-items:center;gap:7px;color:var(--text-faint);font-size:10px;font-weight:760}.flow-step span{width:25px;height:25px;display:grid;place-items:center;border-radius:50%;background:var(--surface-2);border:1px solid var(--border);font-size:10px}.flow-step.active{color:var(--text)}.flow-step.active span{background:var(--accent);border-color:var(--accent);color:white;box-shadow:0 5px 16px color-mix(in srgb,var(--accent) 25%,transparent)}.flow-step.done{color:var(--success)}.flow-step.done span{background:var(--success-soft);border-color:transparent}.flow-steps>i{color:var(--border-strong);font-style:normal}.stage-card,.state-card{position:relative;border:1px solid var(--border);border-radius:28px;background:var(--surface-1);box-shadow:var(--shadow-sm)}.stage-number{width:31px;height:31px;display:grid;place-items:center;border-radius:50%;background:var(--accent-soft);color:var(--accent);font-size:13px;font-weight:900}.stage-header{display:flex;justify-content:space-between;align-items:flex-start;gap:24px}.stage-header>div>.stage-number{display:inline-grid;margin-right:10px;vertical-align:middle}.stage-header .kicker{display:inline-block;margin:0;color:var(--text-faint);font-size:10px;font-weight:900;letter-spacing:.09em}.stage-header h1{margin:14px 0 0;font-size:42px;line-height:1.02;letter-spacing:-.055em}.stage-header p:last-child{max-width:650px;margin:9px 0 0;color:var(--text-muted);font-size:13px;line-height:1.55}.stage-header.compact h1{font-size:38px}.quiet-button{min-height:38px;padding:0 13px;border:1px solid var(--border);border-radius:11px;background:var(--surface-2);color:var(--text-muted);font-size:11px;font-weight:750}.quiet-button:hover{border-color:var(--border-strong);color:var(--text)}.action-stage,.configure-stage{padding:27px}.source-strip{display:flex;align-items:center;gap:8px;margin:24px 0 20px;padding:9px;border:1px solid var(--border);border-radius:15px;background:var(--surface-2);overflow:hidden}.source-strip article,.source-strip .source-preview-card{min-width:0;display:grid;grid-template-columns:38px minmax(0,1fr);align-items:center;gap:9px;padding:4px 7px}.source-strip article>div,.source-strip .source-preview-card>span:nth-child(2){min-width:0}.source-strip strong,.source-strip small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.source-strip strong{font-size:11px}.source-strip small{margin-top:2px;color:var(--text-muted);font-size:9px}.file-badge{width:36px;height:36px;display:grid;place-items:center;border-radius:10px;background:var(--accent-soft);color:var(--accent);font-size:9px;font-weight:900}.file-badge[data-family=pdf]{background:var(--danger-soft);color:var(--danger)}.file-badge[data-family=image]{background:var(--success-soft);color:var(--success)}.more-files{margin-left:auto;flex:none;padding:6px 9px;border-radius:999px;background:var(--surface-1);color:var(--text-muted);font-size:10px;font-weight:800}.source-preview-card{border:0;background:transparent;color:var(--text);text-align:left}.source-preview-card>b{color:var(--accent);font-size:12px}.source-preview-card:hover{background:var(--surface-1);border-radius:11px}.task-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.task-card{min-height:105px;display:grid;grid-template-columns:48px minmax(0,1fr) auto;align-items:center;gap:13px;padding:13px 15px;border:1px solid var(--border);border-radius:17px;background:var(--surface-1);color:var(--text);text-align:left;transition:var(--transition)}.task-card:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--accent) 24%,var(--border));box-shadow:var(--shadow-md)}.task-icon{width:45px;height:45px;display:grid;place-items:center;border-radius:13px;background:var(--accent-soft);color:var(--accent);font-size:21px;font-weight:800}.task-card[data-tone=green] .task-icon{background:var(--success-soft);color:var(--success)}.task-card[data-tone=violet] .task-icon{background:color-mix(in srgb,var(--violet) 12%,var(--surface-1));color:var(--violet)}.task-card[data-tone=orange] .task-icon{background:var(--warning-soft);color:var(--warning)}.task-card[data-tone=cyan] .task-icon{background:color-mix(in srgb,#16a7c8 12%,var(--surface-1));color:#1688a4}.task-card[data-tone=red] .task-icon{background:var(--danger-soft);color:var(--danger)}.task-card strong,.task-card small{display:block}.task-card strong{font-size:15px}.task-card small{margin-top:4px;color:var(--text-muted);font-size:11px}.task-card>b{color:var(--text-faint);font-size:23px}.smart-suggestion{display:grid;grid-template-columns:38px minmax(0,1fr) auto;align-items:center;gap:10px;margin-top:12px;padding:12px 14px;border-radius:15px;background:var(--accent-soft);color:var(--accent-strong)}.smart-suggestion>span{font-size:20px}.smart-suggestion strong,.smart-suggestion small{display:block}.smart-suggestion strong{font-size:11px}.smart-suggestion small{margin-top:2px;color:var(--text-muted);font-size:10px}.smart-suggestion button{padding:7px 10px;border:0;border-radius:9px;background:var(--surface-1);color:var(--accent);font-size:10px;font-weight:850}.configure-layout{display:grid;grid-template-columns:minmax(0,1.02fr) minmax(330px,.98fr);gap:15px;margin-top:22px}.essential-settings,.preview-panel{padding:18px;border:1px solid var(--border);border-radius:20px;background:var(--surface-2)}.essential-settings>h2{margin:0 0 12px;font-size:14px}.setting-card{min-height:78px;display:grid;grid-template-columns:42px minmax(0,1fr) minmax(145px,210px);align-items:center;gap:11px;padding:10px 12px;border:1px solid var(--border);border-radius:14px;background:var(--surface-1);color:var(--text)}.setting-card+.setting-card{margin-top:8px}.setting-icon{width:38px;height:38px;display:grid;place-items:center;border-radius:11px;background:var(--accent-soft);color:var(--accent);font-size:16px}.setting-card strong,.setting-card small{display:block}.setting-card strong{font-size:12px}.setting-card small{margin-top:3px;color:var(--text-muted);font-size:9.5px;line-height:1.4}.setting-card select,.setting-card input,.advanced-options select,.advanced-options input{width:100%;height:38px;padding:0 10px;border:1px solid var(--border-strong);border-radius:10px;background:var(--surface-2);color:var(--text);font:inherit;font-size:11px;outline:none}.setting-card select:focus,.setting-card input:focus,.advanced-options select:focus,.advanced-options input:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 12%,transparent)}.destination-setting button{height:37px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);color:var(--text);font-size:10px;font-weight:780}.read-only-value{justify-self:end;color:var(--text-muted);font-size:10px;font-weight:800}.password-wrap{position:relative}.password-wrap input{padding-right:38px}.password-wrap button{position:absolute;right:3px;top:3px;width:32px;height:32px;border:0;border-radius:8px;background:transparent;color:var(--text-muted);font-size:16px}.advanced-toggle{width:100%;min-height:50px;display:grid;grid-template-columns:28px minmax(0,1fr) auto auto;align-items:center;gap:7px;margin-top:10px;padding:0 11px;border:0;border-radius:12px;background:transparent;color:var(--accent);text-align:left}.advanced-toggle:hover{background:var(--accent-soft)}.advanced-toggle strong{font-size:11px}.advanced-toggle small{color:var(--text-faint);font-size:9px}.advanced-toggle b{font-size:17px}.advanced-options{display:grid;gap:9px;margin-top:4px;padding:12px;border:1px dashed color-mix(in srgb,var(--accent) 24%,var(--border));border-radius:14px;background:color-mix(in srgb,var(--accent-soft) 35%,var(--surface-1))}.advanced-group{display:grid;grid-template-columns:1fr 1fr;gap:9px;padding-bottom:10px;border-bottom:1px solid var(--border)}.advanced-group>div{grid-column:1/-1}.advanced-group strong,.advanced-group small{display:block}.advanced-group strong{font-size:11px}.advanced-group small{margin-top:3px;color:var(--text-muted);font-size:9px;line-height:1.45}.advanced-group label{display:grid;gap:4px;color:var(--text-muted);font-size:9px;font-weight:750}.check-line{grid-template-columns:auto 1fr!important;align-items:start}.check-line input{width:15px!important;height:15px!important;margin-top:2px;accent-color:var(--accent)}.suffix-input{position:relative}.suffix-input input{padding-right:34px}.suffix-input small{position:absolute;right:10px;top:11px}.signature-group{grid-template-columns:1fr}.route-info{display:grid;grid-template-columns:28px 1fr;gap:8px;align-items:center;padding:9px;border-radius:10px;background:var(--surface-1)}.route-info>span{color:var(--accent);font-size:18px}.route-info strong,.route-info small{display:block}.route-info strong{font-size:10px}.route-info small{margin-top:2px;color:var(--text-muted);font-size:9px}.launch-button{width:100%;min-height:50px;display:flex;align-items:center;justify-content:center;gap:9px;margin-top:13px;border:0;border-radius:13px;background:linear-gradient(135deg,var(--accent),var(--violet));color:white;font-size:13px;font-weight:850;box-shadow:0 12px 28px color-mix(in srgb,var(--accent) 22%,transparent)}.launch-button:disabled{opacity:.42;box-shadow:none}.inline-error{margin-top:8px;padding:9px 10px;border-radius:9px;background:var(--danger-soft);color:var(--danger);font-size:10px}.preview-panel{display:flex;flex-direction:column;min-height:520px;background:var(--surface-1)}.preview-head{display:flex;justify-content:space-between;align-items:center;padding-bottom:10px;border-bottom:1px solid var(--border)}.preview-head span{color:var(--text-faint);font-size:9px;font-weight:900;letter-spacing:.08em}.preview-head strong{font-size:11px}.preview-panel iframe{width:100%;flex:1;min-height:390px;margin-top:11px;border:1px solid var(--border);border-radius:12px;background:white}.image-preview{flex:1;display:grid;place-items:center;margin-top:11px;overflow:hidden;border:1px solid var(--border);border-radius:12px;background:linear-gradient(45deg,var(--surface-2) 25%,transparent 25%),linear-gradient(-45deg,var(--surface-2) 25%,transparent 25%);background-size:18px 18px}.image-preview img{max-width:90%;max-height:420px;object-fit:contain}.preview-placeholder{flex:1;display:grid;place-items:center;align-content:center;text-align:center;padding:28px}.preview-placeholder>span{width:68px;height:68px;display:grid;place-items:center;border-radius:18px;background:var(--accent-soft);color:var(--accent);font-size:20px;font-weight:900}.preview-placeholder strong{margin-top:12px;font-size:13px}.preview-placeholder small{max-width:330px;margin-top:6px;color:var(--text-muted);font-size:10px;line-height:1.5}.preview-trust{display:grid;grid-template-columns:26px 1fr;gap:6px;margin-top:10px;padding:10px;border-radius:11px;background:var(--success-soft);color:var(--success)}.preview-trust strong,.preview-trust small{display:block}.preview-trust strong{font-size:10px}.preview-trust small{margin-top:2px;color:var(--text-muted);font-size:9px}.treatment-card,.result-card{max-width:610px;min-height:610px;margin:0 auto;padding:34px;display:flex;flex-direction:column;align-items:center;text-align:center}.processing-orb,.success-orb,.failure-orb{width:92px;height:92px;display:grid;place-items:center;margin:44px 0 18px;border-radius:50%;font-size:37px}.processing-orb{background:var(--accent-soft);color:var(--accent);animation:softPulse 1.4s infinite alternate}.success-orb{background:var(--success-soft);color:var(--success)}.failure-orb{background:var(--danger-soft);color:var(--danger)}@keyframes softPulse{to{transform:scale(.96);opacity:.72}}.treatment-card h1,.result-card h1{margin:0;font-size:32px;letter-spacing:-.045em}.treatment-card>p,.result-card>p{margin:7px 0 0;color:var(--text-muted);font-size:12px}.progress{position:relative;width:100%;height:9px;margin-top:28px;border-radius:99px;background:var(--surface-3)}.progress>span{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--accent),var(--violet));transition:width .2s}.progress>b{position:absolute;left:calc(100% + 9px);top:-4px;color:var(--text-muted);font-size:10px}.progress.indeterminate span{width:34%;animation:slide 1.2s infinite alternate}@keyframes slide{to{margin-left:66%}}.timeline{width:100%;display:grid;gap:15px;margin-top:32px;text-align:left}.timeline>div{display:grid;grid-template-columns:28px 1fr;gap:9px;align-items:center;color:var(--text-faint)}.timeline>div>span{width:24px;height:24px;display:grid;place-items:center;border:2px solid var(--border-strong);border-radius:50%;font-size:10px}.timeline .done{color:var(--success)}.timeline .done>span{border-color:var(--success);background:var(--success);color:white}.timeline .active{color:var(--accent)}.timeline .active>span{border-color:var(--accent);box-shadow:inset 0 0 0 5px var(--surface-1),0 0 0 3px var(--accent-soft);background:var(--accent)}.timeline strong,.timeline small{display:block}.timeline strong{font-size:11px}.timeline small{margin-top:2px;color:var(--text-muted);font-size:9px}.cancel-button{margin-top:24px;padding:8px 14px;border:1px solid var(--border);border-radius:10px;background:transparent;color:var(--text-muted);font-size:10px}.privacy-note{margin-top:auto;padding:10px 12px;border-radius:11px;background:var(--accent-soft);color:var(--text-muted);font-size:9px}.result-file{width:100%;display:grid;grid-template-columns:42px minmax(0,1fr) 34px;align-items:center;gap:10px;margin-top:24px;padding:11px;border:1px solid var(--border);border-radius:13px;background:var(--surface-2);text-align:left}.result-file>span{width:39px;height:39px;display:grid;place-items:center;border-radius:10px;background:var(--accent-soft);color:var(--accent);font-size:10px;font-weight:900}.result-file strong,.result-file small{display:block}.result-file strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}.result-file small{margin-top:2px;color:var(--text-muted);font-size:9px}.result-file button{width:32px;height:32px;border:0;border-radius:9px;background:var(--surface-1);color:var(--accent)}.open-result,.secondary-result{width:100%;min-height:48px;margin-top:10px;border-radius:12px;font-size:11px;font-weight:820}.open-result{display:flex;align-items:center;justify-content:center;gap:8px;border:0;background:linear-gradient(135deg,var(--accent),var(--violet));color:white}.secondary-result{border:1px solid var(--border);background:var(--surface-1);color:var(--text)}.cleanup-note{margin-top:auto;color:var(--success);font-size:9px}.state-card{max-width:650px;margin:80px auto;padding:25px;display:grid;grid-template-columns:48px minmax(0,1fr) auto;align-items:center;gap:14px}.state-card>span{width:44px;height:44px;display:grid;place-items:center;border-radius:13px;background:var(--accent-soft);color:var(--accent)}.error-state>span{background:var(--danger-soft);color:var(--danger)}.state-card h2{margin:0;font-size:16px}.state-card p{margin:4px 0 0;color:var(--text-muted);font-size:10px}.spinner{border:3px solid var(--border)!important;border-top-color:var(--accent)!important;border-radius:50%!important;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(1turn)}}
-.preview-clickable{position:relative;width:100%;flex:1;min-height:0;margin-top:11px;padding:0;overflow:hidden;border:1px solid var(--border);border-radius:12px;background:var(--surface-1);cursor:zoom-in}.preview-clickable iframe{pointer-events:none;margin:0;border:0;border-radius:0}.preview-clickable>span{position:absolute;right:10px;bottom:10px;padding:6px 9px;border-radius:999px;background:rgb(20 24 39 / 76%);color:white;font-size:9px;font-weight:800;backdrop-filter:blur(7px)}.image-preview.preview-clickable{display:grid;place-items:center}.image-preview.preview-clickable img{max-width:100%;max-height:100%;object-fit:contain}.archive-preview-card{width:100%;flex:1;min-height:280px;display:grid;place-content:center;justify-items:center;gap:8px;margin-top:11px;padding:24px;border:1px dashed color-mix(in srgb,var(--accent) 35%,var(--border));border-radius:14px;background:linear-gradient(145deg,var(--surface-2),var(--accent-soft));color:var(--text);text-align:center}.archive-preview-icon{width:62px;height:62px;display:grid;place-items:center;border-radius:18px;background:var(--accent);color:white;font-size:12px;font-weight:900}.archive-preview-card strong{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.archive-preview-card small{color:var(--text-muted);font-size:10px}.archive-preview-card b{margin-top:5px;color:var(--accent);font-size:10px}.result-layout{width:100%;display:grid;grid-template-columns:minmax(220px,.9fr) minmax(260px,1.1fr);gap:14px;margin-top:22px}.result-preview-card{min-height:270px;display:grid;place-items:center;position:relative;overflow:hidden;border:1px solid var(--border);border-radius:15px;background:var(--surface-2);color:var(--text);cursor:zoom-in}.result-preview-card iframe,.result-preview-card img{width:100%;height:100%;min-height:270px;border:0;object-fit:contain;pointer-events:none}.result-preview-card>b{position:absolute;bottom:10px;padding:6px 10px;border-radius:999px;background:rgb(20 24 39 / 76%);color:#fff;font-size:9px}.result-preview-mark{width:72px;height:72px;display:grid;place-items:center;border-radius:20px;background:var(--accent-soft);color:var(--accent);font-size:15px;font-weight:900}.result-actions{min-width:0}.viewer-backdrop{position:fixed;inset:0;z-index:1600;display:grid;place-items:center;padding:clamp(12px,3vw,36px);background:rgb(11 14 25 / 64%);backdrop-filter:blur(12px)}.fullscreen-viewer,.archive-browser{width:min(1180px,100%);max-height:calc(100vh - 40px);display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--border-strong);border-radius:24px;background:var(--surface-1);box-shadow:var(--shadow-lg)}.fullscreen-viewer>header,.archive-browser>header{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:15px 18px;border-bottom:1px solid var(--border)}.fullscreen-viewer header div,.archive-browser header div{min-width:0}.fullscreen-viewer header span,.archive-browser header span{display:block;color:var(--text-faint);font-size:9px;font-weight:900;letter-spacing:.08em}.fullscreen-viewer header strong,.archive-browser header h2{display:block;margin:3px 0 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px}.archive-browser header p{margin:3px 0 0;color:var(--text-muted);font-size:10px}.fullscreen-viewer header button,.archive-browser header button{width:38px;height:38px;flex:none;border:0;border-radius:11px;background:var(--surface-2);color:var(--text);font-size:22px}.fullscreen-preview-content{min-height:0;flex:1;display:grid;place-items:center;overflow:auto;padding:14px;background:var(--surface-2)}.fullscreen-preview-content iframe{width:100%;height:min(76vh,850px);border:0;border-radius:12px;background:white}.fullscreen-preview-content img{max-width:100%;max-height:76vh;object-fit:contain;border-radius:10px}.archive-browser{height:min(820px,calc(100vh - 40px))}.archive-card-grid{min-height:0;flex:1;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));align-content:start;gap:10px;padding:14px}.archive-entry-card{min-width:0;min-height:150px;display:flex;flex-direction:column;align-items:flex-start;padding:13px;border:1px solid var(--border);border-radius:14px;background:var(--surface-2);color:var(--text);text-align:left}.archive-entry-card>span{width:38px;height:38px;display:grid;place-items:center;margin-bottom:11px;border-radius:11px;background:var(--accent-soft);color:var(--accent);font-size:9px;font-weight:900}.archive-entry-card strong{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}.archive-entry-card small{margin-top:3px;color:var(--text-muted);font-size:9px}.archive-entry-card em{max-width:100%;margin-top:auto;overflow:hidden;color:var(--text-faint);font-size:8px;font-style:normal;text-overflow:ellipsis;white-space:nowrap}.archive-pagination{display:flex;justify-content:center;align-items:center;gap:12px;padding:11px;border-top:1px solid var(--border)}.archive-pagination button{min-height:34px;padding:0 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);color:var(--text);font-size:10px}.archive-pagination button:disabled{opacity:.4}.archive-pagination span{color:var(--text-muted);font-size:10px}.viewer-loading,.viewer-error{min-height:260px;display:grid;place-items:center;align-content:center;gap:10px;color:var(--text-muted);font-size:11px}.viewer-error{color:var(--danger)}
+.intake-stage{max-width:900px;margin:0 auto;padding:28px}.intent-summary{display:grid;grid-template-columns:52px minmax(0,1fr) auto;align-items:center;gap:12px;margin-top:22px;padding:14px;border:1px solid color-mix(in srgb,var(--accent) 20%,var(--border));border-radius:16px;background:var(--accent-soft)}.intent-mark{width:48px;height:48px;display:grid;place-items:center;border-radius:14px;background:var(--accent);color:white;font-size:10px;font-weight:900}.intent-summary strong,.intent-summary small{display:block}.intent-summary small{margin-top:4px;color:var(--text-muted);font-size:10px}.intent-summary b{padding:6px 9px;border-radius:999px;background:var(--surface-1);color:var(--accent);font-size:10px}.accepted-formats{display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin-top:13px}.accepted-formats>span{margin-right:4px;color:var(--text-faint);font-size:9px;font-weight:850;text-transform:uppercase}.accepted-formats code{padding:4px 6px;border-radius:7px;background:var(--surface-2);color:var(--text-muted);font-size:9px}.intake-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:23px}.intake-choice{min-height:170px;display:grid;place-items:center;align-content:center;gap:7px;padding:20px;border:1px solid var(--border);border-radius:19px;background:var(--surface-2);color:var(--text);text-align:center}.intake-choice:hover{border-color:var(--accent);background:var(--accent-soft)}.intake-choice>span{width:52px;height:52px;display:grid;place-items:center;border-radius:16px;background:var(--surface-1);color:var(--accent);font-size:25px}.intake-choice strong{font-size:14px}.intake-choice small{max-width:300px;color:var(--text-muted);font-size:10px;line-height:1.45}.intake-choice.primary{background:linear-gradient(145deg,var(--accent-soft),var(--accent-soft-2))}.manual-path{margin-top:12px;padding:14px;border:1px solid var(--danger);border-radius:15px;background:color-mix(in srgb,var(--danger-soft) 60%,var(--surface-1))}.manual-path.valid{border-color:var(--success);background:var(--success-soft)}.manual-path-head{display:flex;justify-content:space-between;gap:12px}.manual-path-head strong,.manual-path-head small{display:block}.manual-path-head small{margin-top:3px;color:var(--text-muted);font-size:9px}.manual-path-head>span{color:var(--danger);font-size:9px;font-weight:850}.manual-path.valid .manual-path-head>span{color:var(--success)}.path-input-row{display:grid;grid-template-columns:1fr auto;gap:7px;margin-top:10px}.path-input-row input,.destination-path-editor input{height:40px;padding:0 10px;border:1px solid var(--border-strong);border-radius:10px;background:var(--surface-1);color:var(--text);font-family:ui-monospace,monospace;font-size:10px}.path-input-row button,.analyze-path{min-height:40px;padding:0 12px;border:0;border-radius:10px;background:var(--surface-2);color:var(--text);font-size:9px;font-weight:800}.manual-path>p{margin:7px 0;color:var(--danger);font-size:9px}.manual-path.valid>p{color:var(--success)}.analyze-path{background:var(--accent);color:white}.analyze-path:disabled{opacity:.42}.action-parameter-list{display:grid;gap:8px;margin-top:8px}.parameter-toggle{grid-template-columns:42px minmax(0,1fr) auto}.parameter-toggle input{width:19px;height:19px;accent-color:var(--accent)}.range-control{display:grid;grid-template-columns:minmax(100px,1fr) 62px;gap:7px;align-items:center}.range-control input[type=range]{padding:0;border:0;background:transparent}.range-control output{padding:7px;border-radius:8px;background:var(--surface-2);font-size:10px;text-align:center}.parameter-color{display:grid;grid-template-columns:44px 1fr;gap:7px}.parameter-color input[type=color]{padding:3px}.destination-setting{grid-template-columns:42px minmax(0,1fr) minmax(145px,210px)}.destination-setting.destination-invalid{border-color:var(--danger)}.destination-path-editor{grid-column:1/-1;display:grid;grid-template-columns:1fr auto;gap:7px;width:100%;padding-top:8px;border-top:1px solid var(--border)}.destination-path-editor button{height:40px}.destination-path-editor small{grid-column:1/-1;color:var(--danger);font-size:8.5px}.destination-path-editor small.ok{color:var(--success)}@media(max-width:700px){.intake-actions{grid-template-columns:1fr}.intake-stage{padding:16px}.path-input-row{grid-template-columns:1fr}.destination-path-editor{grid-template-columns:1fr}}
+.preview-clickable{position:relative;width:100%;flex:1;min-height:0;margin-top:11px;padding:0;overflow:hidden;border:1px solid var(--border);border-radius:12px;background:var(--surface-1);cursor:zoom-in}.preview-clickable iframe{pointer-events:none;margin:0;border:0;border-radius:0}.preview-clickable>span{position:absolute;right:10px;bottom:10px;padding:6px 9px;border-radius:999px;background:rgb(20 24 39 / 76%);color:white;font-size:9px;font-weight:800;backdrop-filter:blur(7px)}.image-preview.preview-clickable{display:grid;place-items:center}.image-preview.preview-clickable img{max-width:100%;max-height:100%;object-fit:contain}.text-preview{display:block;text-align:left}.text-preview pre,.fullscreen-text-preview{width:100%;height:100%;margin:0;padding:18px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface-1);color:var(--text);font:11px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace}.archive-preview-card{width:100%;flex:1;min-height:280px;display:grid;place-content:center;justify-items:center;gap:8px;margin-top:11px;padding:24px;border:1px dashed color-mix(in srgb,var(--accent) 35%,var(--border));border-radius:14px;background:linear-gradient(145deg,var(--surface-2),var(--accent-soft));color:var(--text);text-align:center}.archive-preview-icon{width:62px;height:62px;display:grid;place-items:center;border-radius:18px;background:var(--accent);color:white;font-size:12px;font-weight:900}.archive-preview-card strong{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.archive-preview-card small{color:var(--text-muted);font-size:10px}.archive-preview-card b{margin-top:5px;color:var(--accent);font-size:10px}.result-layout{width:100%;display:grid;grid-template-columns:minmax(220px,.9fr) minmax(260px,1.1fr);gap:14px;margin-top:22px}.result-preview-card{min-height:270px;display:grid;place-items:center;position:relative;overflow:hidden;border:1px solid var(--border);border-radius:15px;background:var(--surface-2);color:var(--text);cursor:zoom-in}.result-preview-card iframe,.result-preview-card img{width:100%;height:100%;min-height:270px;border:0;object-fit:contain;pointer-events:none}.result-preview-card>b{position:absolute;bottom:10px;padding:6px 10px;border-radius:999px;background:rgb(20 24 39 / 76%);color:#fff;font-size:9px}.result-preview-mark{width:72px;height:72px;display:grid;place-items:center;border-radius:20px;background:var(--accent-soft);color:var(--accent);font-size:15px;font-weight:900}.result-actions{min-width:0}.viewer-backdrop{position:fixed;inset:0;z-index:1600;display:grid;place-items:center;padding:clamp(12px,3vw,36px);background:rgb(11 14 25 / 64%);backdrop-filter:blur(12px)}.fullscreen-viewer,.archive-browser{width:min(1180px,100%);max-height:calc(100vh - 40px);display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--border-strong);border-radius:24px;background:var(--surface-1);box-shadow:var(--shadow-lg)}.fullscreen-viewer>header,.archive-browser>header{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:15px 18px;border-bottom:1px solid var(--border)}.fullscreen-viewer header div,.archive-browser header div{min-width:0}.fullscreen-viewer header span,.archive-browser header span{display:block;color:var(--text-faint);font-size:9px;font-weight:900;letter-spacing:.08em}.fullscreen-viewer header strong,.archive-browser header h2{display:block;margin:3px 0 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px}.archive-browser header p{margin:3px 0 0;color:var(--text-muted);font-size:10px}.fullscreen-viewer header button,.archive-browser header button{width:38px;height:38px;flex:none;border:0;border-radius:11px;background:var(--surface-2);color:var(--text);font-size:22px}.fullscreen-preview-content{min-height:0;flex:1;display:grid;place-items:center;overflow:auto;padding:14px;background:var(--surface-2)}.fullscreen-preview-content iframe{width:100%;height:min(76vh,850px);border:0;border-radius:12px;background:white}.fullscreen-preview-content img{max-width:100%;max-height:76vh;object-fit:contain;border-radius:10px}.fullscreen-text-preview{max-height:76vh;border:1px solid var(--border);border-radius:12px}.archive-browser{height:min(820px,calc(100vh - 40px))}.archive-card-grid{min-height:0;flex:1;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));align-content:start;gap:10px;padding:14px}.archive-entry-card{min-width:0;min-height:150px;display:flex;flex-direction:column;align-items:flex-start;padding:13px;border:1px solid var(--border);border-radius:14px;background:var(--surface-2);color:var(--text);text-align:left}.archive-entry-card>span{width:38px;height:38px;display:grid;place-items:center;margin-bottom:11px;border-radius:11px;background:var(--accent-soft);color:var(--accent);font-size:9px;font-weight:900}.archive-entry-card strong{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}.archive-entry-card small{margin-top:3px;color:var(--text-muted);font-size:9px}.archive-entry-card em{max-width:100%;margin-top:auto;overflow:hidden;color:var(--text-faint);font-size:8px;font-style:normal;text-overflow:ellipsis;white-space:nowrap}.archive-pagination{display:flex;justify-content:center;align-items:center;gap:12px;padding:11px;border-top:1px solid var(--border)}.archive-pagination button{min-height:34px;padding:0 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);color:var(--text);font-size:10px}.archive-pagination button:disabled{opacity:.4}.archive-pagination span{color:var(--text-muted);font-size:10px}.viewer-loading,.viewer-error{min-height:260px;display:grid;place-items:center;align-content:center;gap:10px;color:var(--text-muted);font-size:11px}.viewer-error{color:var(--danger)}
+.tree-selector{margin-top:20px;padding:15px;border:1px solid var(--border);border-radius:18px;background:var(--surface-2)}.tree-selector-head{display:flex;justify-content:space-between;gap:20px}.tree-selector-head>div>span{color:var(--accent);font-size:9px;font-weight:900;letter-spacing:.08em}.tree-selector-head h2{margin:5px 0 0;font-size:15px}.tree-selector-head p{margin:4px 0 0;color:var(--text-muted);font-size:9.5px}.tree-summary{display:grid;grid-template-columns:auto auto;align-items:end;column-gap:7px;text-align:right}.tree-summary strong{font-size:20px;color:var(--success)}.tree-summary small{font-size:9px;color:var(--text-muted)}.tree-summary b{grid-column:1/-1;color:var(--danger);font-size:9px}.tree-tools{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}.tree-tools label{min-height:39px;display:flex;align-items:center;gap:7px;padding:0 10px;border:1px solid var(--border);border-radius:10px;background:var(--surface-1)}.tree-tools input{width:100%;height:35px;border:0;background:transparent;color:var(--text);font:inherit;font-size:10px;outline:none}.tree-tools .pattern-field>span{flex:none;color:var(--text-faint);font-size:8px;font-weight:850;text-transform:uppercase}.tree-list{max-height:310px;margin-top:9px;overflow:auto;border:1px solid var(--border);border-radius:11px;background:var(--surface-1)}.tree-row{min-height:34px;display:grid;grid-template-columns:16px 20px minmax(0,1fr) auto;align-items:center;gap:5px;padding-right:10px;border-bottom:1px solid color-mix(in srgb,var(--border) 70%,transparent);font-size:10px}.tree-row:last-child{border-bottom:0}.tree-row input{accent-color:var(--accent)}.tree-row>span{color:var(--text-faint);font-size:14px}.tree-row strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px}.tree-row small{color:var(--text-faint);font-size:8.5px}.tree-row.directory strong{font-weight:850}.tree-row.excluded{opacity:.48;background:var(--danger-soft)}.tree-row.excluded strong{text-decoration:line-through}.tree-loading,.tree-empty{min-height:70px;display:flex;align-items:center;justify-content:center;gap:8px;color:var(--text-muted);font-size:10px}.tree-loading .spinner{width:17px;height:17px}.tree-more{width:100%;min-height:34px;margin-top:7px;border:1px solid var(--border);border-radius:9px;background:var(--surface-1);color:var(--accent);font-size:9px;font-weight:850}.tree-warning{margin:7px 0 0;color:var(--warning);font-size:9px}
 @media(max-width:1180px){.guided-shell{max-width:none}.configure-layout{grid-template-columns:minmax(0,1fr) minmax(280px,.85fr)}.stage-header h1{font-size:clamp(32px,4vw,40px)}}
 .archive-preview-progress{display:flex;align-items:center;justify-content:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--border);background:var(--accent-soft);color:var(--accent);font-size:10px;font-weight:800}.archive-preview-progress .spinner{width:16px;height:16px}.archive-entry-card:disabled{cursor:wait;opacity:.58}
 @media(max-width:980px){.configure-layout{grid-template-columns:1fr}.preview-panel{min-height:390px}.result-layout{grid-template-columns:1fr}.result-preview-card{min-height:240px}.setting-card{grid-template-columns:42px minmax(0,1fr) minmax(130px,190px)}}
@@ -331,9 +438,12 @@ export class WorkspacePage {
   protected readonly capabilities = inject(CapabilityStore);
   protected readonly prefs = inject(PreferencesService);
   private readonly auth = inject(AuthStore);
-  private readonly router = inject(Router);
+  protected readonly router = inject(Router);
+  private readonly route = inject(ActivatedRoute);
   private readonly memory = inject(UiMemoryService);
   private readonly sanitizer = inject(DomSanitizer);
+  private readonly intents = inject(ConversionIntentStore);
+  private readonly bridge = inject(TauriBridgeService);
 
   protected readonly tasks = TASKS;
   protected readonly selectedTask = signal<SimpleTask | null>(null);
@@ -350,6 +460,21 @@ export class WorkspacePage {
   protected readonly advancedOpen = signal(false);
   protected readonly pdfPassword = signal('');
   protected readonly showPdfPassword = signal(false);
+  protected readonly actionParameters = signal<Record<string, string | number | boolean | null>>({});
+  protected readonly sourcePath = signal('');
+  protected readonly sourcePathValidation = signal<PathValidation | null>(null);
+  protected readonly sourcePathChecking = signal(false);
+  protected readonly destinationPath = signal('');
+  protected readonly destinationValidation = signal<PathValidation | null>(null);
+  protected readonly destinationChecking = signal(false);
+  protected readonly excludedRelativePaths = signal<ReadonlySet<string>>(new Set());
+  protected readonly exclusionPatternsText = signal('');
+  protected readonly treeSearch = signal('');
+  protected readonly treeVisibleLimit = signal(300);
+  private sourceValidationRequest = 0;
+  private destinationValidationRequest = 0;
+  private sourceValidationTimer: ReturnType<typeof setTimeout> | null = null;
+  private destinationValidationTimer: ReturnType<typeof setTimeout> | null = null;
   protected readonly archiveBrowserOpen = signal(false);
   protected readonly archiveBrowserTitle = signal('Archive');
   protected readonly archivePage = signal(0);
@@ -359,17 +484,37 @@ export class WorkspacePage {
   protected readonly fullscreenPreviewPath = signal<string | null>(null);
   protected readonly fullscreenPreviewTitle = signal('Aperçu');
   protected readonly fullscreenPreviewFamily = signal<FormatFamily>('unknown');
+  protected readonly fullscreenPreviewText = signal<string | null>(null);
   protected readonly preparedPreviewPath = signal<string | null>(null);
   protected readonly preparedPreviewFamily = signal<FormatFamily>('unknown');
+  protected readonly preparedPreviewText = signal<string | null>(null);
   protected readonly previewLoading = signal(false);
   protected readonly previewError = signal<string | null>(null);
   private previewRequest = 0;
   private archivePreviewRequest = 0;
+  private treeWorkspaceId: string | null = null;
 
   protected readonly firstAsset = computed(() => this.store.selectedAssets()[0] ?? this.store.assets().find(a => a.kind === 'file' || a.kind === 'archive') ?? null);
   protected readonly primaryFamily = computed<FormatFamily>(() => this.firstAsset() ? this.assetFamily(this.firstAsset()!) : 'unknown');
   protected readonly selectionCount = computed(() => this.store.selectedCount() || this.store.counts().files + this.store.counts().archives);
+  protected readonly requestedActionId = computed(() => this.store.activeActionId() ?? this.store.pendingActionId() ?? this.route.snapshot.paramMap.get('actionId'));
+  protected readonly requestedAction = computed(() => this.capabilities.action(this.requestedActionId()));
+  protected readonly activeUiSpec = computed(() => this.capabilities.uiSpec(this.requestedActionId()));
+  protected readonly requestedTarget = computed(() => this.intents.forAction(this.requestedActionId())?.targetFormat ?? this.activeUiSpec()?.defaultTarget ?? null);
+  protected readonly acceptedFormats = computed(() => this.intents.forAction(this.requestedActionId())?.sourceFormats ?? this.activeUiSpec()?.sourceFormats ?? []);
+  protected readonly strictSourceFormat = computed(() => this.intents.forAction(this.requestedActionId())?.strictSourceFormat === true);
+  protected readonly pickerFormats = computed(() => this.strictSourceFormat() || (this.requestedAction()?.accepts.length ?? 0) > 0 ? this.acceptedFormats() : []);
+  protected readonly requestedInputMode = computed(() => this.intents.forAction(this.requestedActionId())?.inputMode ?? this.activeUiSpec()?.inputMode ?? 'files');
   protected readonly isSinglePdf = computed(() => this.selectionCount() === 1 && this.primaryFamily() === 'pdf');
+  protected readonly showDirectoryTree = computed(() => this.requestedInputMode() !== 'files' || this.store.counts().directories > 0);
+  protected readonly treeMatches = computed(() => {
+    const search = this.treeSearch().trim().toLocaleLowerCase('fr');
+    const assets = this.store.treeAssets();
+    return search ? assets.filter((asset) => asset.data.relativePath.toLocaleLowerCase('fr').includes(search)) : assets;
+  });
+  protected readonly visibleTreeAssets = computed(() => this.treeMatches().slice(0, this.treeVisibleLimit()));
+  protected readonly excludedTreeFileCount = computed(() => this.store.treeAssets().filter((asset) => asset.kind !== 'directory' && this.isTreeExcluded(asset)).length);
+  protected readonly includedTreeFileCount = computed(() => this.store.treeAssets().filter((asset) => asset.kind !== 'directory' && !this.isTreeExcluded(asset)).length);
   protected readonly currentStep = computed(() => {
     if (this.store.executionSummary()) return 5;
     if (this.store.executing()) return 4;
@@ -412,13 +557,24 @@ export class WorkspacePage {
   });
 
   constructor() {
+    const routeActionId = this.route.snapshot.paramMap.get('actionId');
+    if (routeActionId) {
+      this.store.setPendingAction(routeActionId);
+      this.selectedTask.set(null);
+    }
+    const intent = this.intents.forAction(routeActionId ?? this.store.pendingActionId());
+    if (intent) {
+      this.targetFormat.set(intent.targetFormat ?? 'pdf');
+      this.actionParameters.set({ ...intent.parameters });
+    }
     const draft = this.memory.guidedFlowDraft();
-    if (draft) {
+    if (draft && !intent) {
       this.targetFormat.set(draft.targetFormat ?? 'pdf');
       this.quality.set(draft.quality ?? 'balanced');
       if (draft.destination === 'choose' && draft.customDirectory) {
         this.destination.set('choose');
-        this.customDirectory.set(draft.customDirectory);
+        this.destinationPath.set(draft.customDirectory);
+        void this.validateDestinationPath(draft.customDirectory);
       }
       this.finalCompression.set(draft.finalCompression ?? 'balanced');
       this.improve.set(draft.improve ?? false);
@@ -431,9 +587,14 @@ export class WorkspacePage {
     }
     effect(() => {
       const preference = this.prefs.destination();
-      if (this.destination() === 'choose' && this.customDirectory()) return;
-      this.destination.set(preference === 'sameFolder' ? 'same' : preference === 'ask' ? 'choose' : 'subfolder');
-      this.customDirectory.set(null);
+      // Only the preference itself must retrigger this synchronization. Tracking
+      // the editable path made an empty intermediate value restore the default
+      // destination while the user was typing a replacement path.
+      untracked(() => {
+        if (this.destination() === 'choose' && (this.customDirectory() || this.destinationPath())) return;
+        this.destination.set(preference === 'sameFolder' ? 'same' : preference === 'ask' ? 'choose' : 'subfolder');
+        this.customDirectory.set(null);
+      });
     });
     effect(() => this.memory.saveGuidedFlowDraft({
       actionId: this.selectedTask(), targetFormat: this.targetFormat(), quality: this.quality(), destination: this.destination(), customDirectory: this.customDirectory(), finalCompression: this.finalCompression(), improve: this.improve(), stripMetadata: this.stripMetadata(), targetSizeMb: this.targetSizeMb(), signatureText: this.signatureText(), collectionOrder: this.collectionOrder(), advancedOpen: this.advancedOpen(),
@@ -443,11 +604,27 @@ export class WorkspacePage {
       const request = ++this.previewRequest;
       this.preparedPreviewPath.set(null);
       this.preparedPreviewFamily.set('unknown');
+      this.preparedPreviewText.set(null);
       this.previewError.set(null);
       if (asset?.kind === 'file') void this.preparePreview(asset, request);
     });
-    if (this.store.activeActionId()) this.selectedTask.set(null);
-    if (!this.store.hasWorkspace()) void this.store.restoreRememberedWorkspace();
+    effect(() => {
+      const spec = this.activeUiSpec();
+      if (!spec?.targetFormats.length || spec.targetFormats.includes(this.targetFormat())) return;
+      this.targetFormat.set(spec.defaultTarget ?? spec.targetFormats[0]);
+    });
+    effect(() => {
+      const workspaceId = this.store.workspace()?.id ?? null;
+      if (!workspaceId || !this.showDirectoryTree()) return;
+      if (this.treeWorkspaceId === workspaceId) return;
+      this.treeWorkspaceId = workspaceId;
+      this.excludedRelativePaths.set(new Set());
+      this.exclusionPatternsText.set('');
+      this.treeVisibleLimit.set(300);
+      untracked(() => { void this.store.loadTreeAssets(); });
+    });
+    if (this.store.activeActionId() || routeActionId) this.selectedTask.set(null);
+    if (!this.store.hasWorkspace() && !this.store.pendingActionId() && !routeActionId) void this.store.restoreRememberedWorkspace();
   }
 
   protected openSourcePreview(): void {
@@ -463,16 +640,30 @@ export class WorkspacePage {
     if (asset.kind !== 'file') return;
     let path = asset.data.path;
     let family = this.assetFamily(asset);
-    try {
-      const preview = await this.store.prepareAssetPreview(asset.data.id);
-      path = preview.path;
-      family = preview.family;
-    } catch (error) {
-      this.previewError.set(this.readableError(error));
+    let content: string | null = null;
+    const first = this.firstAsset();
+    const prepared = first?.kind === 'file' && first.data.id === asset.data.id
+      ? this.preparedPreviewPath()
+      : null;
+    if (prepared) {
+      path = prepared;
+      family = this.preparedPreviewFamily();
+      content = this.preparedPreviewText();
+    } else {
+      if (first?.kind === 'file' && first.data.id === asset.data.id && this.previewLoading()) return;
+      try {
+        const preview = await this.store.prepareAssetPreview(asset.data.id);
+        path = preview.path;
+        family = preview.family;
+        content = preview.content ?? null;
+      } catch (error) {
+        this.previewError.set(this.readableError(error));
+      }
     }
     this.fullscreenPreviewPath.set(path);
     this.fullscreenPreviewTitle.set(asset.data.name);
     this.fullscreenPreviewFamily.set(family);
+    this.fullscreenPreviewText.set(content);
   }
 
   protected openResultPreview(): void {
@@ -481,11 +672,13 @@ export class WorkspacePage {
     this.fullscreenPreviewPath.set(path);
     this.fullscreenPreviewTitle.set(this.fileName(path));
     this.fullscreenPreviewFamily.set(this.pathFamily(path));
+    this.fullscreenPreviewText.set(null);
   }
 
   protected closeFullscreenPreview(): void {
     this.fullscreenPreviewPath.set(null);
     this.fullscreenPreviewFamily.set('unknown');
+    this.fullscreenPreviewText.set(null);
   }
 
   protected async openArchiveBrowser(asset: Asset | null = null): Promise<void> {
@@ -529,6 +722,7 @@ export class WorkspacePage {
       this.fullscreenPreviewPath.set(preview.path);
       this.fullscreenPreviewTitle.set(this.archiveEntryName(path));
       this.fullscreenPreviewFamily.set(preview.family);
+      this.fullscreenPreviewText.set(preview.content ?? null);
     } finally {
       if (request === this.archivePreviewRequest) this.archiveEntryPreviewLoading.set(false);
     }
@@ -544,7 +738,9 @@ export class WorkspacePage {
     return 'unknown';
   }
 
-  protected stepLabel(step: number): string { return ['','Accueil','Action','Configurer','Traitement','Résultat'][step] ?? ''; }
+  protected stepLabel(step: number): string {
+    return (this.requestedActionId() ? ['','Advanced','Sources','Options','Traitement','Résultat'] : ['','Accueil','Action','Configurer','Traitement','Résultat'])[step] ?? '';
+  }
   protected selectionLabel(): string { return this.selectionCount() === 1 ? 'ce fichier' : `ces ${this.selectionCount()} fichiers`; }
   protected visibleSourceAssets(): Asset[] { return this.store.assets().filter(a => a.kind === 'file' || a.kind === 'archive').slice(0, 3); }
   protected sourceOverflow(): number { return Math.max(0, this.selectionCount() - this.visibleSourceAssets().length); }
@@ -559,9 +755,156 @@ export class WorkspacePage {
   }
   protected returnToActions(): void { this.store.resetExecutionResult(); this.store.closeAction(); this.selectedTask.set(null); this.pdfPassword.set(''); }
   protected async backHome(): Promise<void> { await this.router.navigate(['/']); }
-  protected async chooseDestination(): Promise<void> { const paths = await this.store.pickDirectories(); if (paths.length) { this.customDirectory.set(paths[0]); this.destination.set('choose'); } }
+  protected intakeTitle(): string { return this.requestedAction() ? 'Sélectionnez d’abord vos fichiers.' : 'Ajoutez les fichiers à traiter.'; }
+  protected intakeSubtitle(): string {
+    const action = this.requestedAction();
+    return action ? `FileFlow filtrera la sélection pour « ${action.title} » puis ouvrira uniquement ses réglages.` : 'Choisissez des fichiers ou un dossier pour commencer une nouvelle conversion.';
+  }
+  protected async chooseCompatibleFiles(): Promise<void> {
+    const paths = await this.store.pickFiles(this.pickerFormats());
+    if (paths.length) await this.store.start(paths);
+  }
+  protected async chooseSourceDirectories(): Promise<void> {
+    const paths = await this.store.pickDirectories();
+    if (paths.length) await this.store.start(paths);
+  }
+  protected updateSourcePath(path: string): void {
+    this.sourcePath.set(path);
+    this.sourcePathValidation.set(null);
+    if (this.sourceValidationTimer) clearTimeout(this.sourceValidationTimer);
+    if (!path.trim()) return;
+    this.sourceValidationTimer = setTimeout(() => void this.validateSourcePath(path), 320);
+  }
+  protected async chooseSourceDirectoryWithoutStarting(): Promise<void> {
+    const paths = await this.store.pickDirectories();
+    if (!paths.length) return;
+    this.sourcePath.set(paths[0]);
+    await this.validateSourcePath(paths[0]);
+  }
+  protected async startValidatedSourcePath(): Promise<void> {
+    const path = this.sourcePathValidation()?.normalized;
+    if (path) await this.store.start([path]);
+  }
+  protected async chooseDestination(): Promise<void> {
+    const paths = await this.store.pickDirectories();
+    if (!paths.length) return;
+    this.destination.set('choose');
+    this.destinationPath.set(paths[0]);
+    await this.validateDestinationPath(paths[0]);
+  }
+  protected setDestination(value: WorkspaceDestination): void {
+    this.destination.set(value);
+    if (value === 'choose') {
+      const path = this.destinationPath().trim();
+      if (path) void this.validateDestinationPath(path);
+      return;
+    }
+    this.customDirectory.set(null);
+    this.destinationValidation.set(null);
+  }
+  protected updateDestinationPath(path: string): void {
+    this.destinationPath.set(path);
+    this.customDirectory.set(null);
+    this.destinationValidation.set(null);
+    if (this.destinationValidationTimer) clearTimeout(this.destinationValidationTimer);
+    if (!path.trim()) return;
+    this.destinationValidationTimer = setTimeout(() => void this.validateDestinationPath(path), 320);
+  }
   protected setTarget(value: string): void { this.targetFormat.set(value); }
   protected setTargetSize(value: string): void { const n = Number(value); this.targetSizeMb.set(Number.isFinite(n) && n > 0 ? n : null); }
+
+  private async validateSourcePath(path: string): Promise<void> {
+    const request = ++this.sourceValidationRequest;
+    this.sourcePathChecking.set(true);
+    try {
+      const validation = await this.bridge.validateSystemPath(path, 'read', true);
+      if (request === this.sourceValidationRequest && this.sourcePath().trim() === path.trim()) this.sourcePathValidation.set(validation);
+    } catch (error) {
+      if (request === this.sourceValidationRequest) this.sourcePathValidation.set(invalidPath(path, error));
+    } finally {
+      if (request === this.sourceValidationRequest) this.sourcePathChecking.set(false);
+    }
+  }
+
+  private async validateDestinationPath(path: string): Promise<void> {
+    const request = ++this.destinationValidationRequest;
+    this.destinationChecking.set(true);
+    try {
+      const validation = await this.bridge.validateSystemPath(path, 'write', true);
+      if (request !== this.destinationValidationRequest || this.destinationPath().trim() !== path.trim()) return;
+      this.destinationValidation.set(validation);
+      this.customDirectory.set(validation.valid ? validation.normalized ?? path : null);
+    } catch (error) {
+      if (request === this.destinationValidationRequest) this.destinationValidation.set(invalidPath(path, error));
+    } finally {
+      if (request === this.destinationValidationRequest) this.destinationChecking.set(false);
+    }
+  }
+  protected parameterValue(field: ActionParameterDescriptor): string | number {
+    const value = this.actionParameters()[field.key];
+    return typeof value === 'string' || typeof value === 'number' ? value : field.defaultValue ?? '';
+  }
+  protected targetFormatLabel(format: string): string {
+    if (format === 'smart') return 'Smart · TAR.ZST ultra rapide';
+    if (format === 'zip') return 'ZIP · compatibilité maximale';
+    if (format === 'tar') return 'TAR · emballage sans compression';
+    return format.toUpperCase();
+  }
+  protected parameterBoolean(field: ActionParameterDescriptor): boolean { return this.actionParameters()[field.key] === true; }
+  protected setActionParameter(field: ActionParameterDescriptor, raw: string | boolean): void {
+    let value: string | number | boolean | null = raw;
+    if (['number','range','time'].includes(field.kind)) {
+      const numeric = Number(raw);
+      value = Number.isFinite(numeric) ? numeric : null;
+    }
+    this.actionParameters.update((current) => ({ ...current, [field.key]: value }));
+  }
+
+  protected treeDepth(asset: Asset): number {
+    return Math.min(10, asset.data.relativePath.replace(/\\/g, '/').split('/').filter(Boolean).length - 1);
+  }
+  protected isTreeExcluded(asset: Asset): boolean {
+    return this.isExplicitlyTreeExcluded(asset) || this.matchingExclusionPatterns(asset).length > 0;
+  }
+  private isExplicitlyTreeExcluded(asset: Asset): boolean {
+    const path = this.normalizeRelativePath(asset.data.relativePath);
+    if (!path) return false;
+    const prefix = `${asset.data.rootIndex}:`;
+    return [...this.excludedRelativePaths()].some((stored) => {
+      if (!stored.startsWith(prefix)) return false;
+      const rule = stored.slice(prefix.length);
+      return path === rule || path.startsWith(`${rule}/`);
+    });
+  }
+  protected toggleTreeExclusion(asset: Asset): void {
+    const path = this.normalizeRelativePath(asset.data.relativePath);
+    if (!path) return;
+    const prefix = `${asset.data.rootIndex}:`;
+    const storedPath = `${prefix}${path}`;
+    if (!this.isExplicitlyTreeExcluded(asset)) {
+      const matched = new Set(this.matchingExclusionPatterns(asset));
+      if (matched.size) {
+        this.exclusionPatternsText.set(this.exclusionPatterns().filter((pattern) => !matched.has(pattern)).join('; '));
+        return;
+      }
+    }
+    this.excludedRelativePaths.update((current) => {
+      const next = new Set(current);
+      if (this.isExplicitlyTreeExcluded(asset)) {
+        for (const stored of next) {
+          if (!stored.startsWith(prefix)) continue;
+          const rule = stored.slice(prefix.length);
+          if (path === rule || path.startsWith(`${rule}/`)) next.delete(stored);
+        }
+      } else {
+        for (const stored of next) {
+          if (stored.startsWith(`${storedPath}/`)) next.delete(stored);
+        }
+        next.add(storedPath);
+      }
+      return next;
+    });
+  }
 
   protected configureTitle(): string {
     if (this.store.activeActionId()) return this.capabilities.action(this.store.activeActionId())?.title ?? 'Configurer l’action';
@@ -581,14 +924,27 @@ export class WorkspacePage {
     if (guided) return `Dossier FileFlow · ${this.folderName(guided)}`;
     return 'Sous-dossier FileFlow';
   }
-  protected supportsQuality(): boolean { return ['convert','compress','organize'].includes(this.selectedTask() ?? '') || this.activeAction()?.category === 'optimize'; }
+  protected supportsQuality(): boolean {
+    return ['convert','compress','organize'].includes(this.selectedTask() ?? '')
+      || this.activeAction()?.category === 'optimize'
+      || ['archive-package','tar-zstd-create','zstd-compress','media-compress','image-convert','audio-convert','video-convert'].includes(this.activeAction()?.id ?? '');
+  }
   protected canRun(): boolean {
     const action = this.activeAction();
     if (this.selectedTask() === 'rename') return true;
     if (!action || !this.capabilities.isActionExecutable(action)) return false;
     if (this.selectedTask() === 'protect' && !this.pdfPassword().trim()) return false;
+    if (!this.requiredActionParametersValid()) return false;
     if (this.destination() === 'choose' && !this.customDirectory()) return false;
     return true;
+  }
+
+  private requiredActionParametersValid(): boolean {
+    const parameters = this.actionParameters();
+    return (this.activeUiSpec()?.parameters ?? []).filter((field) => field.required).every((field) => {
+      const value = parameters[field.key];
+      return typeof value === 'string' ? value.trim().length > 0 : value !== null && value !== undefined;
+    });
   }
   protected launchLabel(): string { if (this.selectedTask() === 'rename') return 'Ouvrir le renommage'; if (this.selectedTask() === 'organize' && this.isSinglePdf()) return 'Diviser le PDF'; if (this.willProducePdf()) return 'Créer le PDF'; return `Lancer ${this.configureTitle().toLowerCase()}`; }
 
@@ -598,6 +954,10 @@ export class WorkspacePage {
     const workspaceId = this.store.workspace()?.id;
     if (!action || !workspaceId || !this.capabilities.isActionExecutable(action)) return;
     if (this.selectedTask() === 'protect' && !this.pdfPassword().trim()) return;
+    if (this.destination() === 'choose' && this.destinationPath()) {
+      await this.validateDestinationPath(this.destinationPath());
+      if (!this.destinationValidation()?.valid) return;
+    }
     if (this.destination() === 'choose' && !this.customDirectory()) {
       await this.chooseDestination();
       if (!this.customDirectory()) return;
@@ -609,6 +969,7 @@ export class WorkspacePage {
       this.prefs.beginnerMode() ? this.auth.onboarding()?.storageDirectory ?? null : null,
     );
     const parameters: Record<string, string | number | boolean | null> = {
+      ...this.actionParameters(),
       finalCompression: this.finalCompression(), improve: this.improve(), stripMetadata: this.stripMetadata(), targetSizeMb: this.targetSizeMb(), signatureText: this.signatureText().trim() || null, collectionOrder: this.collectionOrder(),
     };
     if (this.selectedTask() === 'protect') parameters['password'] = this.pdfPassword();
@@ -617,6 +978,9 @@ export class WorkspacePage {
       workspaceId,
       actionId: action.id,
       selectedAssetIds: [...this.store.selectedIds()],
+      expectedSourceFormats: this.strictSourceFormat() ? this.acceptedFormats() : [],
+      excludedRelativePaths: [...this.excludedRelativePaths()],
+      exclusionPatterns: this.exclusionPatterns(),
       targetFormat: this.actionTargetFormat(action),
       quality: this.supportsQuality() ? this.quality() : null,
       parameters,
@@ -639,10 +1003,32 @@ export class WorkspacePage {
     }
   }
   protected phaseDetail(): string {
+    if (this.store.executionBytesTotal() > 0) {
+      const speed = `${this.formatBytes(this.store.executionBytesPerSecond())}/s`;
+      const output = this.store.executionOutputBytes() > 0 ? ` · sortie ${this.formatBytes(this.store.executionOutputBytes())}` : '';
+      return `${this.formatBytes(this.store.executionBytesProcessed())} / ${this.formatBytes(this.store.executionBytesTotal())} · ${speed}${output}`;
+    }
     if (!this.store.executionPhaseActive()) return `${this.store.executionCompleted()} / ${Math.max(1,this.store.executionTotal() || this.selectionCount())} fichier(s)`;
     const completed = this.store.executionPhaseCompleted();
     const total = this.store.executionPhaseTotal();
     return this.store.executionPhase() === 'conversion' ? `${completed} / ${Math.max(1,total)} fichier(s)` : 'FileFlow prépare le traitement';
+  }
+  private exclusionPatterns(): string[] {
+    return this.exclusionPatternsText().split(/[;,\n]/).map((value) => value.trim()).filter(Boolean);
+  }
+  private matchingExclusionPatterns(asset: Asset): string[] {
+    const path = this.normalizeRelativePath(asset.data.relativePath);
+    const components = path.split('/').filter(Boolean);
+    const extension = asset.data.name.toLocaleLowerCase('fr').split('.').pop() ?? '';
+    return this.exclusionPatterns().filter((raw) => {
+      const pattern = this.normalizeRelativePath(raw);
+      if (pattern.startsWith('*.')) return extension === pattern.slice(2);
+      if (pattern.includes('/')) return path === pattern || path.startsWith(`${pattern}/`);
+      return components.includes(pattern);
+    });
+  }
+  private normalizeRelativePath(value: string): string {
+    return value.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+|\/+$/g, '').toLocaleLowerCase('fr');
   }
   protected previewTitle(): string { return this.primaryFileName(); }
   protected primaryFileName(): string { return this.firstAsset()?.data.name ?? 'Votre sélection'; }
@@ -679,11 +1065,12 @@ export class WorkspacePage {
       return 'smart-to-pdf';
     }
     if (task === 'compress') {
+      if (this.selectionCount() > 1 || this.store.counts().directories > 0) return 'archive-package';
       if (family === 'pdf') return 'pdf-compress';
       if (family === 'image') return 'image-optimize';
       if (family === 'audio' || family === 'video') return 'media-compress';
       if (family === 'archive') return 'archive-package';
-      return 'smart-to-pdf';
+      return 'zstd-compress';
     }
     if (task === 'extract') {
       if (family === 'pdf') return 'pdf-extract-text';
@@ -699,9 +1086,10 @@ export class WorkspacePage {
 
   private actionTargetFormat(action: ActionDescriptor): string | null {
     if (['smart-to-pdf','collection-to-pdf','pdf-compress','pdf-protect','pdf-split','pdf-extract-text','ocr-image','archive-extract'].includes(action.id)) return null;
-    if (action.id === 'archive-package') return 'zip';
     if (action.id === 'pdf-to-images') return this.targetFormat() === 'txt' ? null : this.targetFormat();
-    return this.targetFormat();
+    return this.activeUiSpec()?.targetFormats.length || this.selectedTask() === 'convert' || this.selectedTask() === 'organize'
+      ? this.targetFormat()
+      : action.outputFormat ?? null;
   }
 
   private computeTargetOptions(task = this.selectedTask()): { value: string; label: string }[] {
@@ -746,6 +1134,7 @@ export class WorkspacePage {
       if (request !== this.previewRequest) return;
       this.preparedPreviewPath.set(preview.path);
       this.preparedPreviewFamily.set(preview.family);
+      this.preparedPreviewText.set(preview.content ?? null);
     } catch (error) {
       if (request === this.previewRequest) this.previewError.set(this.readableError(error));
     } finally {
@@ -758,3 +1147,18 @@ export class WorkspacePage {
 }
 
 function options(values: string[]): { value: string; label: string }[] { return values.map(value => ({ value, label: value === 'jpg' ? 'JPEG / JPG' : value === 'tiff' ? 'TIFF' : value.toUpperCase() })); }
+
+function invalidPath(input: string, error: unknown): PathValidation {
+  return {
+    input,
+    normalized: null,
+    valid: false,
+    exists: false,
+    isDirectory: false,
+    isFile: false,
+    isSymlink: false,
+    readable: false,
+    writable: false,
+    message: error instanceof Error ? error.message : String(error || 'Chemin inaccessible.'),
+  };
+}

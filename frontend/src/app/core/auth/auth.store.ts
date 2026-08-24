@@ -21,7 +21,9 @@ export class AuthStore {
   readonly session = signal<AuthSessionResponse | null>(null);
   readonly error = signal<string | null>(null);
   readonly avatarUrl = signal<string | null>(null);
+  readonly avatarBusy = signal(false);
   private initialization: Promise<void> | null = null;
+  private avatarLoadRequest = 0;
 
   readonly authenticated = computed(() => this.phase() === 'authenticated' && this.session() !== null);
   readonly profile = computed(() => this.session()?.profile ?? null);
@@ -97,6 +99,7 @@ export class AuthStore {
     if (token && this.bridge.isDesktop()) {
       try { await this.bridge.logout(token); } catch { /* session is local and may already be gone */ }
     }
+    this.avatarLoadRequest += 1;
     this.revokeAvatarUrl();
     this.session.set(null);
     this.phase.set('signedOut');
@@ -142,18 +145,25 @@ export class AuthStore {
 
   async chooseAvatar(): Promise<void> {
     const session = this.session();
-    if (!session || !this.bridge.isDesktop()) return;
+    if (!session || !this.bridge.isDesktop() || this.avatarBusy()) return;
+    this.avatarBusy.set(true);
+    this.error.set(null);
     try {
       const profile = await this.bridge.chooseProfileAvatar(session.token);
       if (!profile) return;
-      this.session.set({ ...session, profile });
+      const current = this.session();
+      if (!current || current.token !== session.token) return;
+      this.session.set({ ...current, profile });
       await this.loadAvatar();
     } catch (error) {
       this.error.set(this.message(error));
+    } finally {
+      this.avatarBusy.set(false);
     }
   }
 
   async loadAvatar(): Promise<void> {
+    const request = ++this.avatarLoadRequest;
     const session = this.session();
     if (!session || !session.profile.avatarPath || !this.bridge.isDesktop()) {
       this.revokeAvatarUrl();
@@ -161,12 +171,16 @@ export class AuthStore {
     }
     try {
       const payload = await this.bridge.profileAvatar(session.token);
-      if (!payload) return;
+      if (request !== this.avatarLoadRequest || this.session()?.token !== session.token) return;
+      if (!payload) {
+        this.revokeAvatarUrl();
+        return;
+      }
       this.revokeAvatarUrl();
       const blob = new Blob([new Uint8Array(payload.bytes)], { type: payload.mimeType });
       this.avatarUrl.set(URL.createObjectURL(blob));
     } catch {
-      this.revokeAvatarUrl();
+      if (request === this.avatarLoadRequest) this.revokeAvatarUrl();
     }
   }
 

@@ -1,8 +1,8 @@
 import { DatePipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
-import { open } from '@tauri-apps/plugin-dialog';
 import { ActionDescriptor, RecipeRecord, WorkflowStep } from '../../core/ipc/tauri.models';
 import { CapabilityStore } from '../../core/catalog/capability.store';
+import { TauriBridgeService } from '../../core/ipc/tauri-bridge.service';
 import { WorkspaceStore } from '../workspace/data-access/workspace.store';
 import { AutomationStore } from './automation.store';
 
@@ -95,7 +95,7 @@ interface RecipeTemplate {
       @if (watchOpen()) {
         <div class="modal-backdrop" (click)="watchOpen.set(false)"><section class="modal ff-card" (click)="$event.stopPropagation()">
           <button class="close" type="button" (click)="watchOpen.set(false)">×</button><p class="ff-kicker">DOSSIER SURVEILLÉ</p><h2>Que doit faire FileFlow ?</h2>
-          <label>Dossier<button class="picker" type="button" (click)="chooseWatchFolder()">{{ watchPath() || 'Choisir un dossier…' }}</button></label>
+          <label>Dossier<button class="picker" type="button" [disabled]="dialogBusy()" (click)="chooseWatchFolder()">{{ dialogBusy() ? 'Sélecteur ouvert…' : watchPath() || 'Choisir un dossier…' }}</button></label>
           <label>Recette<select #watchRecipe (change)="watchRecipeId.set(watchRecipe.value)"><option value="">Choisir…</option>@for (recipe of store.recipes(); track recipe.id) {<option [value]="recipe.id">{{ recipe.name }}</option>}</select></label>
           <label>Extensions (facultatif)<input #extensions value="" placeholder="pdf, jpg, png" (input)="watchExtensions.set(extensions.value)" /></label>
           <label class="toggle"><input #recursive type="checkbox" (change)="watchRecursive.set(recursive.checked)" /><span>Inclure les sous-dossiers</span></label>
@@ -128,6 +128,8 @@ export class AutomationsPage {
   protected readonly store = inject(AutomationStore);
   protected readonly workspace = inject(WorkspaceStore);
   private readonly capabilities = inject(CapabilityStore);
+  private readonly bridge = inject(TauriBridgeService);
+  protected readonly dialogBusy = this.bridge.nativeDialogBusy;
   protected readonly builderOpen = signal(false);
   protected readonly watchOpen = signal(false);
   protected readonly watchPath = signal('');
@@ -189,8 +191,8 @@ export class AutomationsPage {
   }
 
   protected async chooseWatchFolder(): Promise<void> {
-    const selected = await open({directory: true, multiple: false, title: 'Dossier à surveiller', canCreateDirectories: true});
-    if (typeof selected === 'string') this.watchPath.set(selected);
+    const selected = await this.bridge.pickDirectory('Dossier à surveiller', true);
+    if (selected) this.watchPath.set(selected);
   }
 
   protected async saveWatch(): Promise<void> {

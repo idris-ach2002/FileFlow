@@ -61,11 +61,11 @@ export class HomePage {
 
   protected async chooseFiles(): Promise<void> {
     const paths = await this.store.pickFiles();
-    if (paths.length && await this.store.start(paths)) await this.router.navigate(['/workspace']);
+    if (paths.length && await this.store.start(paths)) await this.router.navigate(['/conversion']);
   }
 
   protected async chooseDirectories(): Promise<void> {
     const paths = await this.store.pickDirectories();
-    if (paths.length && await this.store.start(paths)) await this.router.navigate(['/workspace']);
+    if (paths.length && await this.store.start(paths)) await this.router.navigate(['/conversion']);
   }
 }

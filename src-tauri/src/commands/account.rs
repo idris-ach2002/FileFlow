@@ -7,7 +7,6 @@ use fileflow_storage::auth::{
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, State};
-use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
 const SESSION_HOURS: i64 = 12;
@@ -357,21 +356,12 @@ pub fn update_profile(
 }
 
 #[tauri::command]
-pub fn choose_profile_avatar(
-    app: AppHandle,
+pub fn set_profile_avatar(
     state: State<'_, AppState>,
     token: String,
-) -> Result<Option<AccountProfile>, String> {
+    source: PathBuf,
+) -> Result<AccountProfile, String> {
     let account_id = require_session(&state, &token)?;
-    let Some(file) = app
-        .dialog()
-        .file()
-        .set_title("Choisir une photo de profil")
-        .blocking_pick_file()
-    else {
-        return Ok(None);
-    };
-    let source = file.into_path().map_err(|error| error.to_string())?;
     let metadata = std::fs::metadata(&source).map_err(|error| error.to_string())?;
     if !metadata.is_file() || metadata.len() > MAX_AVATAR_BYTES {
         return Err("La photo doit être une image de moins de 4 Mo.".into());
@@ -393,7 +383,7 @@ pub fn choose_profile_avatar(
         .storage
         .update_profile(&profile)
         .map_err(|error| error.to_string())?;
-    Ok(Some(profile))
+    Ok(profile)
 }
 
 #[tauri::command]

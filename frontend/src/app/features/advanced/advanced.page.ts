@@ -1,17 +1,13 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
 import { CapabilityStore } from '../../core/catalog/capability.store';
-import { ActionDescriptor } from '../../core/ipc/tauri.models';
+import { ConversionIntentStore } from '../../core/conversion/conversion-intent.store';
+import { ActionDescriptor, ActionParameterDescriptor, ActionUiKind } from '../../core/ipc/tauri.models';
 import { WorkspaceStore } from '../workspace/data-access/workspace.store';
 
-interface ExpertArea {
-  title: string;
-  description: string;
-  icon: string;
-  tone: 'accent' | 'violet' | 'orange' | 'green' | 'blue' | 'neutral';
-  route: string;
-  badge?: string;
-}
+type AdvancedGroup = 'all' | 'conversion' | 'pdf' | 'image' | 'document' | 'media' | 'archive' | 'organization' | 'privacy';
+
+interface GroupItem { id: AdvancedGroup; label: string; icon: string; }
 
 @Component({
   selector: 'ff-advanced-page',
@@ -20,64 +16,83 @@ interface ExpertArea {
       <header class="advanced-hero">
         <div>
           <div class="expert-badge"><span>✦</span> ESPACE EXPERT</div>
-          <h1 class="ff-title">Toute la puissance de FileFlow, au même endroit.</h1>
-          <p class="ff-subtitle">Cet espace est volontairement séparé de l’accueil. Vous pouvez explorer les formats, les moteurs, les automatisations et l’intégralité des actions sans compliquer l’expérience quotidienne.</p>
+          <h1 class="ff-title">Choisissez précisément votre opération.</h1>
+          <p class="ff-subtitle">Chaque outil ouvre ensuite l’onglet Conversion avec les bons formats, les fichiers compatibles et ses réglages spécifiques.</p>
         </div>
         <div class="health-card">
           <span class="health-orb">{{ capabilities.engineReadyCount() }}</span>
           <div><strong>moteurs disponibles</strong><small>sur {{ capabilities.engines().length }} détectés</small></div>
-          <span class="ff-badge success">● Local</span>
+          <span class="ff-badge success">● Traitement local</span>
         </div>
       </header>
 
-      <section class="expert-grid ff-section" aria-label="Espaces avancés">
-        @for (area of areas; track area.title) {
-          <button class="expert-card" [attr.data-tone]="area.tone" type="button" (click)="router.navigate([area.route])">
-            <span class="area-icon">{{ area.icon }}</span>
-            <span class="area-copy"><span class="area-top"><strong>{{ area.title }}</strong>@if(area.badge){<em>{{ area.badge }}</em>}</span><small>{{ area.description }}</small></span>
-            <b>↗</b>
-          </button>
-        }
-      </section>
-
-      <section class="catalog ff-section ff-panel">
-        <header class="catalog-head">
-          <div><p class="ff-kicker">CATALOGUE COMPLET</p><h2 class="ff-section-title">Toutes les actions</h2><p>{{ capabilities.actions().length }} fonctions recensées · seules les fonctions exécutables sur cette machine peuvent être lancées.</p></div>
-          <label class="catalog-search"><span>⌕</span><input #query type="search" placeholder="Rechercher OCR, PDF, HEIC, audio…" [value]="search()" (input)="search.set(query.value)" /></label>
-        </header>
-
-        <div class="catalog-toolbar">
-          <span class="ff-badge accent">{{ filteredActions().length }} action(s)</span>
-          <span class="ff-badge success">{{ readyActionCount() }} prête(s)</span>
-          <span class="ff-badge">{{ capabilities.formats().length }} profils de format</span>
-        </div>
-
-        <div class="catalog-grid">
-          @for (action of filteredActions(); track action.id) {
-            <article class="catalog-action" [class.unavailable]="!capabilities.isActionExecutable(action)">
-              <button class="catalog-main" type="button" [disabled]="capabilities.actionState(action) === 'planned'" (click)="startAction(action)">
-                <span class="action-mark">{{ action.title.slice(0,2).toUpperCase() }}</span>
-                <span><strong>{{ action.title }}</strong><small>{{ action.description }}</small><em>{{ categoryLabel(action.category) }}</em></span>
-                <b>{{ capabilities.isActionExecutable(action) ? 'Ouvrir' : capabilities.actionState(action) === 'missing-engine' ? 'Moteur absent' : 'Planifié' }}</b>
-              </button>
-              <button class="star" type="button" (click)="toggleFavorite(action)" [attr.aria-label]="capabilities.isFavorite(action.id) ? 'Retirer des favoris' : 'Ajouter aux favoris'">{{ capabilities.isFavorite(action.id) ? '★' : '☆' }}</button>
-            </article>
-          } @empty {
-            <div class="catalog-empty"><span>⌕</span><strong>Aucune action trouvée</strong><small>Essayez un terme plus général.</small></div>
+      <section class="advanced-layout ff-section">
+        <aside class="group-rail ff-panel" aria-label="Familles d’opérations">
+          <p class="ff-kicker">OPÉRATIONS</p>
+          @for (group of groups; track group.id) {
+            <button type="button" [class.active]="selectedGroup() === group.id" (click)="selectedGroup.set(group.id)">
+              <span>{{ group.icon }}</span><strong>{{ group.label }}</strong><small>{{ groupCount(group.id) }}</small>
+            </button>
           }
-        </div>
-      </section>
+          <div class="rail-separator"></div>
+          <button type="button" (click)="router.navigate(['/automations'])"><span>⚡</span><strong>Automatisations</strong><small>↗</small></button>
+          <button type="button" (click)="router.navigate(['/formats'])"><span>◇</span><strong>Formats</strong><small>↗</small></button>
+          <button type="button" (click)="router.navigate(['/settings'], { queryParams: { section: 'engines' } })"><span>▣</span><strong>Moteurs</strong><small>↗</small></button>
+        </aside>
 
-      <aside class="expert-note">
-        <span>i</span><div><strong>Pourquoi cet espace est séparé&nbsp;?</strong><p>L’accueil reste simple pour les personnes qui ne connaissent pas les formats ou les outils. Ici, un utilisateur du domaine peut inspecter tout le catalogue et accéder aux contrôles avancés.</p></div>
-      </aside>
+        <main class="catalog ff-panel">
+          <header class="catalog-head">
+            <div><p class="ff-kicker">CATALOGUE AVANCÉ</p><h2>{{ groupTitle() }}</h2><p>{{ filteredActions().length }} action(s) · paramètres et formats fournis par le moteur FileFlow.</p></div>
+            <label class="catalog-search"><span>⌕</span><input #query type="search" placeholder="OCR, WebP, rotation, TAR.ZST…" [value]="search()" (input)="search.set(query.value)" /></label>
+          </header>
+
+          @if (selectedGroup() === 'conversion') {
+            <section class="conversion-composer">
+              <div><span class="composer-mark">↻</span><div><strong>Conversion avancée</strong><small>Définissez le format de départ et la cible avant de sélectionner les fichiers.</small></div></div>
+              <label><span>Format de départ</span><select [value]="conversionSource()" (change)="setConversionSource($any($event.target).value)">@for (format of conversionSources(); track format.id) { <option [value]="format.id">{{ format.label }} ({{ format.id.toUpperCase() }})</option> }</select></label>
+              <span class="composer-arrow">→</span>
+              <label><span>Format cible</span><select [value]="conversionTarget()" (change)="conversionTarget.set($any($event.target).value)">@for (target of conversionTargets(); track target) { <option [value]="target">{{ target.toUpperCase() }}</option> }</select></label>
+              <button type="button" [disabled]="!conversionTarget()" (click)="launchFormatConversion()">Préparer <span>→</span></button>
+            </section>
+          }
+
+          <div class="catalog-toolbar">
+            <button type="button" [class.active]="availability() === 'all'" (click)="availability.set('all')">Toutes</button>
+            <button type="button" [class.active]="availability() === 'ready'" (click)="availability.set('ready')">Prêtes</button>
+            <button type="button" [class.active]="availability() === 'favorites'" (click)="availability.set('favorites')">Favorites</button>
+            <span>{{ capabilities.formats().length }} profils de format</span>
+          </div>
+
+          <div class="catalog-grid">
+            @for (action of filteredActions(); track action.id) {
+              <article class="action-card" [class.unavailable]="!capabilities.isActionExecutable(action)" [attr.data-kind]="uiKind(action)">
+                <div class="action-top">
+                  <span class="action-mark">{{ actionMark(action) }}</span>
+                  <span class="kind-label">{{ uiKindLabel(action) }}</span>
+                  <button class="star" type="button" (click)="toggleFavorite(action)" [attr.aria-label]="capabilities.isFavorite(action.id) ? 'Retirer des favoris' : 'Ajouter aux favoris'">{{ capabilities.isFavorite(action.id) ? '★' : '☆' }}</button>
+                </div>
+                <h3>{{ action.title }}</h3>
+                <p>{{ action.description }}</p>
+                <div class="action-meta">
+                  @if (sourceSummary(action); as source) { <span><b>Entrée</b>{{ source }}</span> }
+                  @if (targetSummary(action); as target) { <span><b>Sortie</b>{{ target }}</span> }
+                  @if (parameterCount(action)) { <span><b>Réglages</b>{{ parameterCount(action) }}</span> }
+                </div>
+                @if (!capabilities.isActionReady(action)) { <div class="missing">Moteur requis : {{ capabilities.missingEngines(action).join(', ') }}</div> }
+                <button class="open-action" type="button" [disabled]="!capabilities.isActionExecutable(action)" (click)="startAction(action)">
+                  {{ capabilities.actionState(action) === 'planned' ? 'Fonction planifiée' : capabilities.isActionReady(action) ? 'Configurer dans Conversion' : 'Moteur absent' }} <span>→</span>
+                </button>
+              </article>
+            } @empty {
+              <div class="catalog-empty"><span>⌕</span><strong>Aucune action trouvée</strong><small>Modifiez la famille, le filtre ou la recherche.</small></div>
+            }
+          </div>
+        </main>
+      </section>
     </div>
   `,
   styles: [`
-    :host{display:block}.advanced-shell{padding-bottom:20px}.advanced-hero{display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:28px;align-items:end}.expert-badge{display:inline-flex;align-items:center;gap:8px;margin-bottom:14px;padding:7px 10px;border:1px solid color-mix(in srgb,var(--accent) 14%,var(--border));border-radius:999px;background:var(--accent-soft);color:var(--accent-strong);font-size:10px;font-weight:900;letter-spacing:.1em}.expert-badge span{font-size:15px}.advanced-hero .ff-title{max-width:820px}.health-card{min-height:120px;display:grid;grid-template-columns:64px minmax(0,1fr);align-items:center;gap:12px;padding:18px;border:1px solid var(--border);border-radius:20px;background:linear-gradient(145deg,var(--surface-1),var(--accent-soft-2));box-shadow:var(--shadow-sm)}.health-orb{width:62px;height:62px;display:grid;place-items:center;grid-row:1/3;border-radius:20px;background:linear-gradient(145deg,var(--accent),var(--violet));color:white;font-size:24px;font-weight:900;box-shadow:0 12px 28px color-mix(in srgb,var(--accent) 22%,transparent)}.health-card strong,.health-card small{display:block}.health-card strong{font-size:14px}.health-card small{margin-top:3px;color:var(--text-muted);font-size:11.5px}.health-card .ff-badge{width:max-content}
-    .expert-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:11px}.expert-card{min-height:140px;display:grid;grid-template-columns:52px minmax(0,1fr) auto;align-items:center;gap:13px;padding:18px;border:1px solid var(--border);border-radius:20px;background:var(--surface-1);color:var(--text);text-align:left;box-shadow:var(--shadow-sm);transition:var(--transition)}.expert-card:hover{transform:translateY(-3px);border-color:color-mix(in srgb,var(--accent) 25%,var(--border));box-shadow:var(--shadow-md)}.area-icon{width:50px;height:50px;display:grid;place-items:center;border-radius:16px;background:var(--accent-soft);color:var(--accent);font-size:19px;font-weight:900}.expert-card[data-tone='violet'] .area-icon{background:var(--accent-soft-2);color:var(--violet)}.expert-card[data-tone='orange'] .area-icon{background:var(--warning-soft);color:var(--warning)}.expert-card[data-tone='green'] .area-icon{background:var(--success-soft);color:var(--success)}.expert-card[data-tone='blue'] .area-icon{background:#eaf7fb;color:var(--cyan)}.expert-card[data-tone='neutral'] .area-icon{background:var(--surface-2);color:var(--text-muted)}.area-copy strong,.area-copy small{display:block}.area-copy strong{font-size:15px}.area-copy small{margin-top:6px;color:var(--text-muted);font-size:12.5px;line-height:1.48}.area-top{display:flex;align-items:center;gap:7px}.area-top em{padding:2px 6px;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-size:8px;font-style:normal;font-weight:900}.expert-card>b{color:var(--text-faint);font-size:18px}
-    .catalog{padding:23px}.catalog-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,410px);gap:20px;align-items:end;padding-bottom:18px;border-bottom:1px solid var(--border)}.catalog-head p:not(.ff-kicker){margin:6px 0 0;color:var(--text-muted);font-size:13px}.catalog-search{height:48px;display:grid;grid-template-columns:22px minmax(0,1fr);align-items:center;gap:8px;padding:0 12px;border:1px solid var(--border);border-radius:14px;background:var(--surface-2);color:var(--text-faint)}.catalog-search input{min-height:0!important;width:100%;border:0!important;background:transparent!important;box-shadow:none!important}.catalog-toolbar{display:flex;flex-wrap:wrap;gap:7px;margin:16px 0}.catalog-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.catalog-action{position:relative}.catalog-main{width:100%;min-height:88px;display:grid;grid-template-columns:40px minmax(0,1fr) auto;align-items:center;gap:11px;padding:11px 42px 11px 11px;border:1px solid var(--border);border-radius:14px;background:var(--bg-elevated);color:var(--text);text-align:left;transition:var(--transition)}.catalog-main:hover:not(:disabled){background:var(--surface-2);border-color:var(--border-strong)}.catalog-action.unavailable .catalog-main{opacity:.66}.action-mark{width:38px;height:38px;display:grid;place-items:center;border-radius:12px;background:var(--accent-soft);color:var(--accent);font-size:9px;font-weight:900}.catalog-main strong,.catalog-main small,.catalog-main em{display:block}.catalog-main strong{font-size:13.5px}.catalog-main small{margin-top:3px;color:var(--text-muted);font-size:11.5px;line-height:1.35}.catalog-main em{margin-top:5px;color:var(--text-faint);font-size:9px;font-style:normal;text-transform:uppercase;font-weight:800}.catalog-main>b{color:var(--accent);font-size:10px;white-space:nowrap}.star{position:absolute;right:8px;top:8px;width:28px;height:28px;border:0;border-radius:8px;background:transparent;color:var(--warning);font-size:17px}.catalog-empty{grid-column:1/-1;display:grid;justify-items:center;gap:6px;padding:46px;color:var(--text-muted)}.catalog-empty>span{font-size:28px}.expert-note{display:flex;gap:12px;margin-top:20px;padding:16px 18px;border:1px solid color-mix(in srgb,var(--accent) 15%,var(--border));border-radius:16px;background:color-mix(in srgb,var(--accent-soft) 46%,var(--surface-1))}.expert-note>span{width:30px;height:30px;display:grid;place-items:center;flex:none;border-radius:10px;background:var(--accent);color:white;font-weight:900}.expert-note strong{font-size:13px}.expert-note p{margin:4px 0 0;color:var(--text-muted);font-size:12.5px;line-height:1.5}
-    @media(max-width:1050px){.advanced-hero{grid-template-columns:1fr}.health-card{max-width:360px}.expert-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:760px){.expert-grid,.catalog-grid,.catalog-head{grid-template-columns:1fr}.catalog-search{width:100%}}
+    :host{display:block}.advanced-shell{padding-bottom:24px}.advanced-hero{display:grid;grid-template-columns:minmax(0,1fr) 290px;gap:28px;align-items:end}.expert-badge{display:inline-flex;align-items:center;gap:8px;margin-bottom:14px;padding:7px 10px;border:1px solid color-mix(in srgb,var(--accent) 14%,var(--border));border-radius:999px;background:var(--accent-soft);color:var(--accent-strong);font-size:10px;font-weight:900;letter-spacing:.1em}.advanced-hero .ff-title{max-width:790px}.health-card{min-height:120px;display:grid;grid-template-columns:64px minmax(0,1fr);align-items:center;gap:12px;padding:18px;border:1px solid var(--border);border-radius:20px;background:linear-gradient(145deg,var(--surface-1),var(--accent-soft-2));box-shadow:var(--shadow-sm)}.health-orb{width:62px;height:62px;display:grid;place-items:center;grid-row:1/3;border-radius:20px;background:linear-gradient(145deg,var(--accent),var(--violet));color:white;font-size:24px;font-weight:900}.health-card strong,.health-card small{display:block}.health-card small{margin-top:3px;color:var(--text-muted);font-size:11px}.health-card .ff-badge{width:max-content}.advanced-layout{display:grid;grid-template-columns:230px minmax(0,1fr);gap:14px;align-items:start}.group-rail{position:sticky;top:20px;padding:12px}.group-rail>.ff-kicker{padding:5px 8px}.group-rail button{width:100%;min-height:43px;display:grid;grid-template-columns:28px minmax(0,1fr) auto;align-items:center;gap:8px;padding:0 9px;border:0;border-radius:11px;background:transparent;color:var(--text-muted);text-align:left}.group-rail button:hover,.group-rail button.active{background:var(--accent-soft);color:var(--accent)}.group-rail button span{font-size:15px;text-align:center}.group-rail button strong{font-size:11px}.group-rail button small{font-size:9px}.rail-separator{height:1px;margin:9px;background:var(--border)}.catalog{padding:22px}.catalog-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(270px,390px);gap:18px;align-items:end;padding-bottom:17px;border-bottom:1px solid var(--border)}.catalog-head h2{margin:2px 0 0;font-size:25px;letter-spacing:-.035em}.catalog-head p:not(.ff-kicker){margin:6px 0 0;color:var(--text-muted);font-size:11px}.catalog-search{height:46px;display:grid;grid-template-columns:22px 1fr;align-items:center;gap:7px;padding:0 12px;border:1px solid var(--border);border-radius:13px;background:var(--surface-2);color:var(--text-faint)}.catalog-search input{width:100%;border:0!important;outline:0!important;background:transparent!important;box-shadow:none!important;color:var(--text)}.conversion-composer{display:grid;grid-template-columns:minmax(170px,1.2fr) minmax(130px,.8fr) auto minmax(130px,.8fr) auto;align-items:end;gap:10px;margin:16px 0 4px;padding:15px;border:1px solid color-mix(in srgb,var(--accent) 25%,var(--border));border-radius:15px;background:linear-gradient(145deg,var(--accent-soft),var(--surface-2))}.conversion-composer>div{display:grid;grid-template-columns:40px 1fr;align-items:center;gap:9px}.composer-mark{width:38px;height:38px;display:grid;place-items:center;border-radius:11px;background:var(--accent);color:white}.conversion-composer strong,.conversion-composer small{display:block}.conversion-composer small{margin-top:3px;color:var(--text-muted);font-size:9px;line-height:1.35}.conversion-composer label{display:grid;gap:4px;color:var(--text-muted);font-size:8.5px;font-weight:800}.conversion-composer select{height:38px;padding:0 8px;border:1px solid var(--border);border-radius:9px;background:var(--surface-1);color:var(--text);font-size:10px}.composer-arrow{align-self:center;color:var(--accent);font-size:20px}.conversion-composer>button{height:38px;display:flex;align-items:center;gap:9px;padding:0 12px;border:0;border-radius:10px;background:var(--accent);color:white;font-size:10px;font-weight:850}.catalog-toolbar{display:flex;align-items:center;gap:6px;margin:14px 0}.catalog-toolbar button{min-height:31px;padding:0 10px;border:1px solid var(--border);border-radius:999px;background:var(--surface-2);color:var(--text-muted);font-size:9px;font-weight:800}.catalog-toolbar button.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}.catalog-toolbar>span{margin-left:auto;color:var(--text-faint);font-size:9px}.catalog-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.action-card{min-height:270px;display:flex;flex-direction:column;padding:15px;border:1px solid var(--border);border-radius:17px;background:var(--bg-elevated);transition:var(--transition)}.action-card:hover{transform:translateY(-2px);border-color:var(--border-strong);box-shadow:var(--shadow-sm)}.action-card.unavailable{opacity:.72}.action-top{display:flex;align-items:center;gap:8px}.action-mark{width:40px;height:40px;display:grid;place-items:center;border-radius:12px;background:var(--accent-soft);color:var(--accent);font-size:9px;font-weight:900}.kind-label{padding:4px 7px;border-radius:999px;background:var(--surface-2);color:var(--text-muted);font-size:8px;font-weight:850;text-transform:uppercase}.star{margin-left:auto;width:30px;height:30px;border:0;border-radius:9px;background:transparent;color:var(--warning);font-size:17px}.action-card h3{margin:14px 0 5px;font-size:15px}.action-card>p{min-height:34px;margin:0;color:var(--text-muted);font-size:10.5px;line-height:1.5}.action-meta{display:flex;flex-wrap:wrap;gap:5px;margin-top:11px}.action-meta span{max-width:100%;padding:5px 7px;border-radius:8px;background:var(--surface-2);overflow:hidden;color:var(--text-muted);font-size:8.5px;text-overflow:ellipsis;white-space:nowrap}.action-meta b{margin-right:4px;color:var(--text);font-size:8px}.missing{margin-top:8px;color:var(--warning);font-size:8.5px}.open-action{min-height:40px;display:flex;align-items:center;justify-content:space-between;margin-top:auto;padding:0 11px;border:0;border-radius:11px;background:linear-gradient(135deg,var(--accent),var(--violet));color:white;font-size:10px;font-weight:850}.open-action:disabled{background:var(--surface-3);color:var(--text-faint)}.catalog-empty{grid-column:1/-1;display:grid;justify-items:center;gap:5px;padding:54px;color:var(--text-muted)}.catalog-empty>span{font-size:28px}@media(max-width:1120px){.conversion-composer{grid-template-columns:1fr 1fr auto 1fr}.conversion-composer>div{grid-column:1/-1}}@media(max-width:1050px){.advanced-hero{grid-template-columns:1fr}.health-card{max-width:360px}.advanced-layout{grid-template-columns:1fr}.group-rail{position:static;display:flex;flex-wrap:wrap}.group-rail>.ff-kicker,.rail-separator{width:100%}.group-rail button{width:auto;min-width:150px;flex:1}}@media(max-width:760px){.catalog-grid,.catalog-head,.conversion-composer{grid-template-columns:1fr}.composer-arrow{display:none}.catalog{padding:14px}.catalog-toolbar>span{display:none}}
   `],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
@@ -85,33 +100,102 @@ export class AdvancedPage {
   protected readonly capabilities = inject(CapabilityStore);
   protected readonly router = inject(Router);
   private readonly workspace = inject(WorkspaceStore);
+  private readonly intents = inject(ConversionIntentStore);
   protected readonly search = signal('');
-  protected readonly areas: ExpertArea[] = [
-    {title:'Formats & possibilités',description:'Formats pris en charge, conversions, lecture, écriture et compatibilités réelles.',icon:'◇',tone:'accent',route:'/formats'},
-    {title:'Organiser & nettoyer',description:'Renommage en lot, classement, doublons et opérations structurées.',icon:'⇄',tone:'green',route:'/organize'},
-    {title:'Automatisations',description:'Règles, enchaînements et actions répétitives pour les usages avancés.',icon:'⚡',tone:'orange',route:'/automations'},
-    {title:'Moteurs & diagnostic',description:'Voir les outils disponibles localement et diagnostiquer une fonctionnalité.',icon:'▣',tone:'blue',route:'/settings',badge:'LOCAL'},
-    {title:'Aide technique',description:'Guides détaillés, comportements et explications des traitements.',icon:'?',tone:'violet',route:'/help'},
-    {title:'Préférences expertes',description:'Performances, sécurité, destination, apparence et détails techniques.',icon:'⚙',tone:'neutral',route:'/settings'},
+  protected readonly selectedGroup = signal<AdvancedGroup>('all');
+  protected readonly availability = signal<'all' | 'ready' | 'favorites'>('all');
+  protected readonly conversionSource = signal('png');
+  protected readonly conversionTarget = signal('webp');
+  protected readonly conversionSources = computed(() => this.capabilities.formats().filter((format) => format.convertTo.length > 0));
+  protected readonly conversionTargets = computed(() => this.capabilities.formatCapability(this.conversionSource())?.convertTo ?? []);
+  protected readonly groups: GroupItem[] = [
+    { id: 'all', label: 'Vue d’ensemble', icon: '✦' }, { id: 'conversion', label: 'Conversion', icon: '↻' },
+    { id: 'pdf', label: 'PDF & OCR', icon: 'PDF' }, { id: 'image', label: 'Images', icon: '◫' },
+    { id: 'document', label: 'Documents', icon: 'T' }, { id: 'media', label: 'Audio & vidéo', icon: '▶' },
+    { id: 'archive', label: 'Archives', icon: '▱' }, { id: 'organization', label: 'Organisation', icon: '⇄' },
+    { id: 'privacy', label: 'Confidentialité', icon: '▣' },
   ];
+
   protected readonly filteredActions = computed(() => {
     const query = this.search().trim().toLowerCase();
-    const actions = this.capabilities.actions();
-    if (!query) return actions;
-    return actions.filter((action) => `${action.title} ${action.description} ${action.category} ${action.accepts.join(' ')} ${action.outputFormat ?? ''}`.toLowerCase().includes(query));
+    const group = this.selectedGroup();
+    const availability = this.availability();
+    return this.capabilities.actions().filter((action) => {
+      if (!this.inGroup(action, group)) return false;
+      if (availability === 'ready' && !this.capabilities.isActionExecutable(action)) return false;
+      if (availability === 'favorites' && !this.capabilities.isFavorite(action.id)) return false;
+      if (!query) return true;
+      const spec = this.capabilities.uiSpec(action.id);
+      return `${action.title} ${action.description} ${action.category} ${action.accepts.join(' ')} ${spec?.sourceFormats.join(' ') ?? ''} ${spec?.targetFormats.join(' ') ?? ''}`.toLowerCase().includes(query);
+    });
   });
-  protected readonly readyActionCount = computed(() => this.capabilities.actions().filter((action) => this.capabilities.isActionExecutable(action)).length);
 
-  protected categoryLabel(category: string): string { return category.replace(/[-_]/g,' '); }
+  protected groupCount(group: AdvancedGroup): number { return this.capabilities.actions().filter((action) => this.inGroup(action, group)).length; }
+  protected groupTitle(): string { return this.groups.find((group) => group.id === this.selectedGroup())?.label ?? 'Toutes les actions'; }
+  protected actionMark(action: ActionDescriptor): string { return action.title.slice(0, 2).toUpperCase(); }
+  protected uiKind(action: ActionDescriptor): ActionUiKind { return this.capabilities.uiSpec(action.id)?.kind ?? 'generic'; }
+  protected uiKindLabel(action: ActionDescriptor): string { return ({conversion:'Conversion',image:'Image',pdf:'PDF',media:'Média',archive:'Archive',extract:'Extraction',organization:'Organisation',privacy:'Confidentialité',generic:'Outil'} as Record<ActionUiKind,string>)[this.uiKind(action)]; }
+  protected sourceSummary(action: ActionDescriptor): string { const formats = this.capabilities.uiSpec(action.id)?.sourceFormats ?? []; return formats.length ? summarize(formats) : 'Tout type compatible'; }
+  protected targetSummary(action: ActionDescriptor): string { const formats = this.capabilities.uiSpec(action.id)?.targetFormats ?? []; return formats.length ? summarize(formats) : action.outputFormat?.toUpperCase() ?? ''; }
+  protected parameterCount(action: ActionDescriptor): number { return this.capabilities.uiSpec(action.id)?.parameters.length ?? 0; }
   protected async toggleFavorite(action: ActionDescriptor): Promise<void> { try { await this.capabilities.toggleFavorite(action.id); } catch { /* rollback in store */ } }
+
   protected async startAction(action: ActionDescriptor): Promise<void> {
-    this.workspace.setPendingAction(action.id);
-    if (this.workspace.hasWorkspace()) { this.workspace.openAction(action.id); await this.router.navigate(['/workspace']); return; }
-    const paths = DIRECTORY_FIRST_ACTIONS.has(action.id) ? await this.workspace.pickDirectories() : await this.workspace.pickFiles();
-    if (!paths.length) return;
-    await this.router.navigate(['/workspace']);
-    await this.workspace.start(paths);
+    const spec = this.capabilities.uiSpec(action.id);
+    const parameters = Object.fromEntries((spec?.parameters ?? []).map((field) => [field.key, defaultParameterValue(field)]));
+    this.intents.start({ actionId: action.id, sourceFormats: spec?.sourceFormats ?? [], targetFormat: spec?.defaultTarget ?? action.outputFormat ?? null, inputMode: spec?.inputMode ?? 'files', uiKind: spec?.kind ?? 'generic', parameters });
+    this.workspace.startNewConversion(action.id);
+    await this.router.navigate(['/conversion', action.id]);
+  }
+
+  protected setConversionSource(source: string): void {
+    this.conversionSource.set(source);
+    const targets = this.capabilities.formatCapability(source)?.convertTo ?? [];
+    this.conversionTarget.set(targets[0] ?? '');
+  }
+
+  protected async launchFormatConversion(): Promise<void> {
+    const source = this.conversionSource();
+    const target = this.conversionTarget();
+    const family = this.capabilities.formatCapability(source)?.family;
+    const actionId = family === 'image' ? 'image-convert'
+      : ['document','spreadsheet','presentation'].includes(family ?? '') ? 'office-convert'
+      : family === 'audio' ? 'audio-convert'
+      : family === 'video' ? (target === 'gif' ? 'video-to-gif' : 'video-convert')
+      : family === 'pdf' ? (target === 'txt' ? 'pdf-extract-text' : target === 'pdf' ? 'smart-to-pdf' : 'pdf-to-images')
+      : family === 'ebook' ? 'ebook-convert'
+      : family === 'text' ? (target === 'pdf' ? 'text-to-pdf' : 'text-convert')
+      : 'smart-to-pdf';
+    const action = this.capabilities.action(actionId);
+    if (!action || !this.capabilities.isActionExecutable(action)) return;
+    const spec = this.capabilities.uiSpec(action.id);
+    const parameters = Object.fromEntries((spec?.parameters ?? []).map((field) => [field.key, defaultParameterValue(field)]));
+    this.intents.start({ actionId: action.id, sourceFormats: [source], strictSourceFormat: true, targetFormat: target, inputMode: 'files', uiKind: spec?.kind ?? 'conversion', parameters });
+    this.workspace.startNewConversion(action.id);
+    await this.router.navigate(['/conversion', action.id]);
+  }
+
+  private inGroup(action: ActionDescriptor, group: AdvancedGroup): boolean {
+    if (group === 'all') return true;
+    if (group === 'conversion') return action.category === 'convert';
+    if (group === 'pdf') return action.category === 'pdf' || action.id.includes('ocr');
+    if (group === 'image') return action.category === 'image' || (action.category === 'optimize' && action.accepts.includes('image'));
+    if (group === 'document') return action.category === 'document' || action.accepts.some((family) => ['document','spreadsheet','presentation','ebook','text'].includes(family));
+    if (group === 'media') return action.category === 'media';
+    if (group === 'archive') return action.category === 'archive' || ['zstd-compress','zstd-decompress','lz4-compress','lz4-decompress'].includes(action.id);
+    if (group === 'organization') return action.category === 'organize';
+    return action.category === 'privacy';
   }
 }
 
-const DIRECTORY_FIRST_ACTIONS = new Set(['tar-zstd-create','tar-lz4-create','archive-create']);
+function summarize(values: string[]): string {
+  const labels = values.slice(0, 4).map((value) => value.toUpperCase());
+  return `${labels.join(', ')}${values.length > labels.length ? ` +${values.length - labels.length}` : ''}`;
+}
+
+function defaultParameterValue(field: ActionParameterDescriptor): string | number | boolean | null {
+  const value = field.defaultValue ?? null;
+  if (field.kind === 'toggle') return value === 'true';
+  if (['number','range','time'].includes(field.kind)) { const numeric = Number(value); return Number.isFinite(numeric) ? numeric : null; }
+  return value;
+}

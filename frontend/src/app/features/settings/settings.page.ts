@@ -1,11 +1,13 @@
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
-import { Router } from '@angular/router';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { ActivatedRoute, Router } from '@angular/router';
 import { AuthStore } from '../../core/auth/auth.store';
 import { CapabilityStore } from '../../core/catalog/capability.store';
 import { EngineProbe } from '../../core/ipc/tauri.models';
 import { PreferencesService } from '../../core/preferences/preferences.service';
+import { UpdateService } from '../../core/update/update.service';
 
-type SettingsSection = 'general' | 'appearance' | 'files' | 'security' | 'account' | 'performance' | 'engines';
+type SettingsSection = 'general' | 'appearance' | 'files' | 'security' | 'account' | 'performance' | 'updates' | 'engines';
 
 @Component({
   selector: 'ff-settings-page',
@@ -15,7 +17,7 @@ type SettingsSection = 'general' | 'appearance' | 'files' | 'security' | 'accoun
 
       <div class="settings-layout">
         <nav class="settings-nav" aria-label="Catégories de paramètres">
-          @for (item of sections; track item.id) { <button type="button" [class.active]="section() === item.id" (click)="section.set(item.id)"><span>{{ item.icon }}</span><span><strong>{{ item.title }}</strong><small>{{ item.subtitle }}</small></span></button> }
+          @for (item of sections; track item.id) { <button type="button" [class.active]="section() === item.id" (click)="selectSection(item.id)"><span>{{ item.icon }}</span><span><strong>{{ item.title }}</strong><small>{{ item.subtitle }}</small></span></button> }
         </nav>
 
         <main class="settings-content">
@@ -57,7 +59,7 @@ type SettingsSection = 'general' | 'appearance' | 'files' | 'security' | 'accoun
             @case ('account') {
               <section class="panel"><header><h2>Mon profil</h2><p>Photo, nom et adresse utilisés dans l’application.</p></header>
                 <div class="profile-editor">
-                  <button class="avatar-editor" type="button" (click)="auth.chooseAvatar()">@if(auth.avatarUrl(); as avatar){<img [src]="avatar" alt="Photo de profil" />}@else{<span>{{ auth.initials() }}</span>}<small>Changer</small></button>
+                  <button class="avatar-editor" type="button" [disabled]="auth.avatarBusy()" (click)="auth.chooseAvatar()">@if(auth.avatarUrl(); as avatar){<img [src]="avatar" alt="Photo de profil" />}@else{<span>{{ auth.initials() }}</span>}<small>{{ auth.avatarBusy() ? 'Sélecteur ouvert…' : 'Changer' }}</small></button>
                   <div><strong>{{ auth.profile()?.displayName }}</strong><p>{{ auth.profile()?.email }}</p><span>Session ouverte jusqu’au {{ sessionExpiry() }}</span></div>
                 </div>
                 <div class="form-grid"><label><span>Prénom</span><input #first [value]="auth.profile()?.firstName || ''" /></label><label><span>Nom</span><input #last [value]="auth.profile()?.lastName || ''" /></label><label class="full"><span>Nom affiché</span><input #display [value]="auth.profile()?.displayName || ''" /></label><label class="full"><span>E-mail</span><input #email type="email" [value]="auth.profile()?.email || ''" /></label></div>
@@ -69,6 +71,18 @@ type SettingsSection = 'general' | 'appearance' | 'files' | 'security' | 'accoun
                 <div class="performance-options"><button [class.active]="prefs.performanceMode() === 'eco'" (click)="prefs.performanceMode.set('eco')"><span>🌿</span><strong>Éco</strong><small>Moins de CPU et d’I/O en parallèle.</small></button><button [class.active]="prefs.performanceMode() === 'balanced'" (click)="prefs.performanceMode.set('balanced')"><span>⚖</span><strong>Équilibré</strong><small>Recommandé pour garder l’ordinateur fluide.</small></button><button [class.active]="prefs.performanceMode() === 'fast'" (click)="prefs.performanceMode.set('fast')"><span>⚡</span><strong>Rapide</strong><small>Priorité aux conversions lourdes.</small></button></div>
                 @if(capabilities.health(); as health){<div class="budget-grid"><div><span>CPU disponible</span><strong>{{ health.scheduler.budget.cpuTokens }}</strong><small>sur {{ health.cpuThreads }} threads logiques</small></div><div><span>Budget mémoire</span><strong>{{ formatMemory(health.scheduler.budget.memoryMb) }}</strong><small>plafond concurrent</small></div><div><span>File I/O</span><strong>{{ health.scheduler.budget.ioTokens }}</strong><small>opérations simultanées</small></div></div>}
                 <div class="info-note"><strong>Anti-saturation</strong><p>FFmpeg, libvips, OCR et archives passent par le scheduler Rust. Un moteur déjà multithreadé reçoit aussi un quota de threads.</p></div>
+              </section>
+            }
+            @case ('updates') {
+              <section class="panel"><header><h2>Mises à jour</h2><p>FileFlow vérifie uniquement la dernière publication stable, complète et signée pour votre appareil.</p></header>
+                <div class="update-settings-card" [attr.data-state]="updater.state()">
+                  <span class="update-orb">{{ updater.available() ? '↓' : updater.state() === 'current' ? '✓' : updater.state() === 'error' || updater.configurationMissing() ? '!' : '↻' }}</span>
+                  <div><strong>Version installée {{ updater.currentVersion() ?? '—' }}</strong><small>{{ updater.statusLabel() }}</small>@if (updater.version()) { <b>Version stable {{ updater.version() }}</b> }</div>
+                  <button class="ff-button" type="button" [disabled]="updater.busy() || updater.configurationMissing()" (click)="updater.available() ? updater.install() : updater.check(false)">{{ updater.available() ? 'Télécharger et installer' : updater.busy() ? 'Vérification…' : updater.configurationMissing() ? 'Updater non configuré' : 'Rechercher une mise à jour' }}</button>
+                </div>
+                @if (updater.state() === 'downloading' || updater.state() === 'installing') { <div class="settings-update-progress"><span [style.width.%]="updater.state() === 'installing' ? 100 : updater.progress()"></span><b>{{ updater.statusLabel() }}</b></div> }
+                @if (updater.configurationMissing()) { <div class="info-note updater-setup"><strong>Initialisation nécessaire pour ce build</strong><p>Exécutez <code>pnpm run updater:setup</code>, conservez la clé privée hors du dépôt, puis reconstruisez FileFlow. La route de publication utilisera ensuite le manifeste signé de GitHub Releases.</p></div> }
+                <div class="info-note"><strong>Canal stable et atomique</strong><p>Une version n’est proposée que lorsque macOS Intel/Apple Silicon, Windows x64 et Linux x64/ARM64 ont tous réussi leurs builds. La signature Tauri est contrôlée avant l’installation et les moteurs locaux ne sont pas remplacés.</p></div>
               </section>
             }
             @case ('engines') {
@@ -85,6 +99,8 @@ type SettingsSection = 'general' | 'appearance' | 'files' | 'security' | 'accoun
   `,
   styles: [`
     :host{display:block}.settings-shell{max-width:1180px;margin:0 auto}.settings-head{display:flex;justify-content:space-between;gap:20px;align-items:end}.settings-head h1{margin:0;font-size:48px;letter-spacing:-.055em}.settings-head>div>p:last-child{margin:9px 0 0;color:var(--text-muted);font-size:12px}.reset{min-height:36px;padding:0 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface-1);color:var(--text-muted);font-size:12px;font-weight:750}.settings-layout{display:grid;grid-template-columns:250px minmax(0,1fr);gap:16px;margin-top:30px;align-items:start}.settings-nav{position:sticky;top:24px;display:grid;gap:4px}.settings-nav button{min-height:58px;display:grid;grid-template-columns:30px 1fr;align-items:center;gap:8px;padding:8px 10px;border:0;border-radius:11px;background:transparent;color:var(--text-muted);text-align:left}.settings-nav button:hover{background:var(--surface-2)}.settings-nav button.active{background:var(--accent-soft);color:var(--accent-strong)}.settings-nav button>span:first-child{font-size:16px;text-align:center}.settings-nav strong,.settings-nav small{display:block}.settings-nav strong{font-size:13px}.settings-nav small{margin-top:2px;color:var(--text-faint);font-size:11px}.settings-content{min-width:0}.panel{padding:20px;border:1px solid var(--border);border-radius:16px;background:var(--surface-1);box-shadow:var(--shadow-sm)}.panel>header{padding-bottom:16px;border-bottom:1px solid var(--border)}.panel h2{margin:0;font-size:24px;letter-spacing:-.035em}.panel header p{margin:6px 0 0;color:var(--text-muted);font-size:12px;line-height:1.55}.setting-line,.switch-row{min-height:72px;display:grid;grid-template-columns:minmax(220px,1fr) auto;align-items:center;gap:16px;border-bottom:1px solid var(--border)}.setting-line>div:first-child strong,.setting-line>div:first-child small,.switch-row span strong,.switch-row span small{display:block}.setting-line strong,.switch-row strong{font-size:13px}.setting-line small,.switch-row small{margin-top:4px;color:var(--text-muted);font-size:11.5px;line-height:1.5}.switch-row{cursor:pointer}.switch-row input{width:37px;height:21px;accent-color:var(--accent)}.segmented{display:flex;padding:3px;border-radius:10px;background:var(--surface-2)}.segmented button{min-height:31px;padding:0 10px;border:0;border-radius:8px;background:transparent;color:var(--text-muted);font-size:11px;font-weight:750}.segmented button.active{background:var(--surface-1);color:var(--text);box-shadow:var(--shadow-sm)}select,input:not([type=checkbox]):not([type=range]){height:39px;padding:0 10px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);color:var(--text);outline:0}.zoom-control{display:grid;grid-template-columns:32px 160px 32px;gap:7px;align-items:center}.zoom-control button{height:32px;border:1px solid var(--border);border-radius:8px;background:var(--surface-2);color:var(--text)}.storage-card{display:grid;grid-template-columns:42px minmax(0,1fr) auto;align-items:center;gap:11px;margin:16px 0 3px;padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--bg-elevated)}.folder{width:40px;height:40px;display:grid;place-items:center;border-radius:11px;background:var(--accent-soft);color:var(--accent)}.storage-card strong,.storage-card small{display:block}.storage-card strong{font-size:13px}.storage-card small{overflow:hidden;margin-top:4px;color:var(--text-muted);font-size:11px;text-overflow:ellipsis;white-space:nowrap}.storage-card button{border:0;background:transparent;color:var(--accent);font-size:11px;font-weight:800}.safety,.info-note{display:flex;gap:10px;margin-top:16px;padding:12px;border-radius:11px;background:var(--success-soft);color:var(--success)}.safety strong,.safety p,.info-note strong,.info-note p{margin:0}.safety strong,.info-note strong{font-size:12px}.safety p,.info-note p{margin-top:3px;color:var(--text-muted);font-size:11px;line-height:1.5}.info-note{display:block;background:var(--bg-elevated);color:var(--text)}.security-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:16px}.security-grid article{padding:13px;border:1px solid var(--border);border-radius:11px;background:var(--bg-elevated)}.security-grid article>span{color:var(--accent);font-weight:900}.security-grid strong{display:block;margin-top:8px;font-size:12px}.security-grid p{margin:5px 0 0;color:var(--text-muted);font-size:11px;line-height:1.5}.password-panel{display:grid;grid-template-columns:minmax(180px,1fr) minmax(260px,1.5fr) auto;gap:12px;align-items:center;margin-top:16px;padding:14px;border:1px solid var(--border);border-radius:12px;background:var(--bg-elevated)}.password-panel strong{font-size:12px}.password-panel p{margin:5px 0 0;color:var(--text-muted);font-size:11px;line-height:1.45}.password-fields{display:grid;gap:7px}.password-status{grid-column:1/-1;color:var(--text-muted);font-size:11px}.password-status.success{color:var(--success)}.profile-editor{display:grid;grid-template-columns:84px 1fr;gap:15px;align-items:center;margin:18px 0}.avatar-editor{position:relative;width:78px;height:78px;overflow:hidden;border:1px solid var(--border);border-radius:24px;background:var(--accent-soft);color:var(--accent);font-size:20px;font-weight:900}.avatar-editor img{width:100%;height:100%;object-fit:cover}.avatar-editor small{position:absolute;inset:auto 0 0;padding:5px;background:rgb(0 0 0/.55);color:white;font-size:10px}.profile-editor>div>strong{font-size:17px}.profile-editor p,.profile-editor div>span{margin:4px 0 0;color:var(--text-muted);font-size:11px}.form-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.form-grid label{display:grid;gap:5px;color:var(--text-muted);font-size:11px;font-weight:750}.form-grid .full{grid-column:1/-1}.account-actions{display:flex;gap:8px;margin-top:16px}.performance-options{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:16px}.performance-options button{min-height:110px;padding:13px;border:1px solid var(--border);border-radius:12px;background:var(--bg-elevated);color:var(--text);text-align:left}.performance-options button.active{border-color:var(--accent);background:var(--accent-soft)}.performance-options span,.performance-options strong,.performance-options small{display:block}.performance-options span{font-size:19px}.performance-options strong{margin-top:9px;font-size:12px}.performance-options small{margin-top:4px;color:var(--text-muted);font-size:11px;line-height:1.4}.budget-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}.budget-grid>div{padding:12px;border-radius:11px;background:var(--surface-2)}.budget-grid span,.budget-grid strong,.budget-grid small{display:block}.budget-grid span{color:var(--text-faint);font-size:10px;text-transform:uppercase;font-weight:850}.budget-grid strong{margin-top:5px;font-size:20px}.budget-grid small{margin-top:3px;color:var(--text-muted);font-size:10px}.engine-title{display:flex;justify-content:space-between;align-items:start}.engine-summary{display:flex;align-items:baseline;gap:7px;margin:16px 0}.engine-summary strong{font-size:32px}.engine-summary span{color:var(--text-muted);font-size:11px}.engine-list{display:grid;grid-template-columns:repeat(2,1fr);border:1px solid var(--border);border-radius:12px;overflow:hidden}.engine-list article{min-height:60px;display:grid;grid-template-columns:10px 1fr auto;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid var(--border)}.engine-list article:nth-child(odd){border-right:1px solid var(--border)}.dot{width:7px;height:7px;border-radius:50%;background:var(--success)}.dot.off{background:var(--text-faint)}.engine-list strong,.engine-list small{display:block}.engine-list strong{font-size:11px}.engine-list small{margin-top:3px;color:var(--text-faint);font-size:10px}.engine-list b{color:var(--text-faint);font-size:9px}@media(max-width:900px){.settings-layout{grid-template-columns:1fr}.settings-nav{position:static;display:flex;overflow:auto;padding-bottom:5px}.settings-nav button{min-width:150px}.security-grid,.engine-list{grid-template-columns:1fr}.engine-list article:nth-child(odd){border-right:0}}@media(max-width:620px){.settings-head h1{font-size:38px}.settings-head .reset{display:none}.setting-line{grid-template-columns:1fr;gap:8px;padding:12px 0}.segmented{width:100%}.segmented button{flex:1}.performance-options,.budget-grid,.form-grid{grid-template-columns:1fr}.form-grid .full{grid-column:auto}}
+  `, `
+    .update-settings-card{display:grid;grid-template-columns:58px minmax(0,1fr) auto;align-items:center;gap:14px;padding:16px;border:1px solid var(--border);border-radius:17px;background:var(--surface-2)}.update-orb{width:54px;height:54px;display:grid;place-items:center;border-radius:16px;background:var(--accent-soft);color:var(--accent);font-size:24px;font-weight:900}.update-settings-card[data-state=current] .update-orb{background:var(--success-soft);color:var(--success)}.update-settings-card[data-state=error] .update-orb,.update-settings-card[data-state=unavailable] .update-orb{background:var(--danger-soft);color:var(--danger)}.update-settings-card strong,.update-settings-card small,.update-settings-card b{display:block}.update-settings-card strong{font-size:13px}.update-settings-card small{margin-top:4px;color:var(--text-muted);font-size:10px}.update-settings-card b{margin-top:6px;color:var(--accent);font-size:9px}.settings-update-progress{position:relative;height:8px;margin:13px 0 31px;border-radius:99px;background:var(--surface-3)}.settings-update-progress span{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--accent),var(--violet));transition:width .2s}.settings-update-progress b{position:absolute;top:13px;left:0;color:var(--text-muted);font-size:9px}.updater-setup{border:1px solid color-mix(in srgb,var(--danger) 25%,var(--border));background:var(--danger-soft)}.updater-setup code{font-weight:800}@media(max-width:700px){.update-settings-card{grid-template-columns:48px 1fr}.update-settings-card .ff-button{grid-column:1/-1}.update-orb{width:46px;height:46px}}
   `],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
@@ -92,7 +108,9 @@ export class SettingsPage {
   protected readonly capabilities = inject(CapabilityStore);
   protected readonly prefs = inject(PreferencesService);
   protected readonly auth = inject(AuthStore);
+  protected readonly updater = inject(UpdateService);
   private readonly router = inject(Router);
+  private readonly route = inject(ActivatedRoute);
   protected readonly section = signal<SettingsSection>('general');
   protected readonly passwordStatus = signal<string | null>(null);
   protected readonly sections: {id:SettingsSection;icon:string;title:string;subtitle:string}[] = [
@@ -102,8 +120,26 @@ export class SettingsPage {
     {id:'security',icon:'◇',title:'Sécurité',subtitle:'Confidentialité et confirmations'},
     {id:'account',icon:'●',title:'Compte & profil',subtitle:'Photo et informations'},
     {id:'performance',icon:'⚡',title:'Performances',subtitle:'Éco, équilibre, vitesse'},
+    {id:'updates',icon:'↓',title:'Mises à jour',subtitle:'Version stable et installation'},
     {id:'engines',icon:'⚙',title:'Moteurs locaux',subtitle:'Diagnostic avancé'},
   ];
+
+  constructor() {
+    this.route.paramMap.pipe(takeUntilDestroyed()).subscribe((parameters) => {
+      const requested = parameters.get('section');
+      const section = this.sections.find((item) => item.id === requested)?.id;
+      if (section) {
+        this.section.set(section);
+      } else {
+        void this.router.navigate(['/settings', 'general'], { replaceUrl: true });
+      }
+    });
+  }
+
+  protected selectSection(section: SettingsSection): void {
+    this.section.set(section);
+    void this.router.navigate(['/settings', section]);
+  }
 
   protected refresh(): void { void this.capabilities.refreshEngines(); }
   protected executableLabel(engine: EngineProbe): string { return engine.executable?.split('/').pop() ?? 'Disponible'; }

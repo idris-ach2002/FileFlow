@@ -66,7 +66,7 @@ Le paquet est fragmenté uniquement pour son transport Git. Aucun moteur n'est i
 
 ## Releases signées
 
-Les workflows `release-linux.yml`, `release-macos.yml` et `release-windows.yml` restent indépendants.
+Un tag unique `vX.Y.Z` déclenche `release.yml`. Celui-ci appelle les trois workflows de build réutilisables et ne publie la release qu’après la réussite des cinq cibles natives. Le manifeste `latest.json`, ses cinq signatures et `SHA256SUMS` sont vérifiés ensemble avant publication ; un build partiel n’est donc jamais proposé par l’updater.
 
 ### Updater
 
@@ -79,6 +79,8 @@ Secrets :
 Variable :
 
 - `FILEFLOW_UPDATE_ENDPOINT`
+
+La valeur recommandée est `https://github.com/OWNER/REPOSITORY/releases/latest/download/latest.json`. L’application consulte ainsi uniquement une release atomique publiée, jamais les exécutions GitHub Actions ni un artefact intermédiaire.
 
 ### macOS
 

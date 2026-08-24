@@ -15,15 +15,15 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     ffi::OsString,
-    io::SeekFrom,
+    io::{self, SeekFrom},
     path::{Path, PathBuf},
-    process::Stdio,
+    process::{ExitStatus, Stdio},
     sync::Arc,
     time::{Duration, Instant},
 };
 use thiserror::Error;
 use tokio::{
-    io::{AsyncReadExt, AsyncSeekExt},
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
     process::{Child, Command},
     sync::mpsc,
     task::JoinSet,
@@ -40,6 +40,8 @@ const BROWSER_SCRIPT_TIMEOUT: Duration = Duration::from_secs(14);
 const BROWSER_STATIC_TIMEOUT: Duration = Duration::from_secs(7);
 const BROWSER_TEXT_TIMEOUT: Duration = Duration::from_secs(6);
 const PREVIEW_RENDER_TIMEOUT: Duration = Duration::from_secs(20);
+const NATIVE_TEXT_PREVIEW_BYTES: u64 = 2 * 1024 * 1024;
+const NATIVE_TEXT_PREVIEW_CHARS: usize = 250_000;
 
 #[cfg(target_os = "linux")]
 fn configure_external_command(command: &mut Command) {
@@ -75,10 +77,317 @@ fn configure_external_command(command: &mut Command) {
     for variable in APPIMAGE_ENV_VARS {
         command.env_remove(variable);
     }
+
+    // Every engine gets its own process group. Cancellation and timeouts can
+    // therefore stop helpers created by Chrome, LibreOffice, FFmpeg, etc.
+    // without ever targeting an unrelated user process by executable name.
+    command.process_group(0);
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(unix, not(target_os = "linux")))]
+fn configure_external_command(command: &mut Command) {
+    command.process_group(0);
+}
+
+#[cfg(windows)]
+fn configure_external_command(command: &mut Command) {
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
+    // Conversion engines are command-line tools. Never let Windows create a
+    // console window while FileFlow is running them in the background.
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(any(unix, windows)))]
 fn configure_external_command(_command: &mut Command) {}
+
+struct ManagedChild {
+    child: Child,
+    #[cfg(unix)]
+    process_group: Option<i32>,
+    #[cfg(windows)]
+    job: Option<WindowsJob>,
+}
+
+impl ManagedChild {
+    fn spawn(command: &mut Command) -> io::Result<Self> {
+        command.kill_on_drop(true);
+        let child = command.spawn()?;
+
+        #[cfg(unix)]
+        let process_group = child
+            .id()
+            .and_then(|value| i32::try_from(value).ok())
+            .ok_or_else(|| {
+                io::Error::other("le moteur a été lancé sans identifiant de processus valide")
+            })?;
+
+        #[cfg(windows)]
+        let job = Some(WindowsJob::attach(&child)?);
+
+        Ok(Self {
+            child,
+            #[cfg(unix)]
+            process_group: Some(process_group),
+            #[cfg(windows)]
+            job,
+        })
+    }
+
+    fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        self.child.try_wait()
+    }
+
+    async fn terminate(&mut self) {
+        if self.child.try_wait().ok().flatten().is_some() {
+            self.cleanup_descendants();
+            return;
+        }
+
+        #[cfg(unix)]
+        if let Some(process_group) = self.process_group {
+            // SAFETY: a negative PID targets exactly the process group created
+            // for this child. No process name matching or shell is involved.
+            unsafe {
+                libc::kill(-process_group, libc::SIGTERM);
+            }
+        }
+
+        #[cfg(windows)]
+        if let Some(job) = self.job.as_ref() {
+            job.terminate();
+        }
+
+        if tokio::time::timeout(Duration::from_millis(700), self.child.wait())
+            .await
+            .is_err()
+        {
+            self.force_stop();
+            let _ = tokio::time::timeout(Duration::from_secs(1), self.child.wait()).await;
+        }
+        self.cleanup_descendants();
+    }
+
+    fn force_stop(&mut self) {
+        #[cfg(unix)]
+        if let Some(process_group) = self.process_group {
+            // SAFETY: see the SIGTERM call above. SIGKILL is the bounded
+            // fallback for engines that ignore a graceful shutdown request.
+            unsafe {
+                libc::kill(-process_group, libc::SIGKILL);
+            }
+        }
+
+        #[cfg(windows)]
+        if let Some(job) = self.job.as_ref() {
+            job.terminate();
+        }
+
+        let _ = self.child.start_kill();
+    }
+
+    fn cleanup_descendants(&mut self) {
+        #[cfg(unix)]
+        if let Some(process_group) = self.process_group.take() {
+            // The main engine has ended; any process still in its private group
+            // is an orphan helper and must not survive the conversion.
+            unsafe {
+                libc::kill(-process_group, libc::SIGKILL);
+            }
+        }
+
+        #[cfg(windows)]
+        if let Some(job) = self.job.take() {
+            job.terminate();
+        }
+    }
+}
+
+impl Drop for ManagedChild {
+    fn drop(&mut self) {
+        self.force_stop();
+    }
+}
+
+#[cfg(windows)]
+struct WindowsJob {
+    handle: windows_sys::Win32::Foundation::HANDLE,
+}
+
+// SAFETY: a Win32 kernel HANDLE can be used and closed from any thread. The
+// WindowsJob value owns the handle and never aliases ownership of it.
+#[cfg(windows)]
+unsafe impl Send for WindowsJob {}
+
+#[cfg(windows)]
+impl WindowsJob {
+    fn attach(child: &Child) -> io::Result<Self> {
+        use std::{mem::size_of, ptr};
+        use windows_sys::Win32::{
+            Foundation::CloseHandle,
+            System::JobObjects::{
+                AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                SetInformationJobObject,
+            },
+        };
+
+        // SAFETY: the unnamed job has no security descriptor, both pointers
+        // are valid for the documented Win32 calls, and the handle is owned by
+        // WindowsJob immediately after successful creation.
+        let handle = unsafe { CreateJobObjectW(ptr::null(), ptr::null()) };
+        if handle.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let configured = unsafe {
+            SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                (&raw const limits).cast(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        };
+        if configured == 0 {
+            let error = io::Error::last_os_error();
+            unsafe {
+                CloseHandle(handle);
+            }
+            return Err(error);
+        }
+
+        let process_handle = child
+            .raw_handle()
+            .ok_or_else(|| io::Error::other("le moteur s’est arrêté avant son confinement"))?
+            as windows_sys::Win32::Foundation::HANDLE;
+        let assigned = unsafe { AssignProcessToJobObject(handle, process_handle) };
+        if assigned == 0 {
+            let error = io::Error::last_os_error();
+            unsafe {
+                CloseHandle(handle);
+            }
+            return Err(error);
+        }
+        Ok(Self { handle })
+    }
+
+    fn terminate(&self) {
+        use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+
+        // SAFETY: handle remains owned and valid for this WindowsJob.
+        unsafe {
+            TerminateJobObject(self.handle, 1);
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WindowsJob {
+    fn drop(&mut self) {
+        use windows_sys::Win32::Foundation::CloseHandle;
+
+        // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE guarantees that helpers cannot be
+        // orphaned if FileFlow itself exits while a conversion is active.
+        unsafe {
+            CloseHandle(self.handle);
+        }
+    }
+}
+
+struct ManagedOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+async fn wait_for_managed_output(
+    process: &mut ManagedChild,
+    program: &str,
+    cancellation: &CancellationToken,
+    timeout: Duration,
+) -> Result<ManagedOutput, ExecutionError> {
+    let mut stdout = process.child.stdout.take();
+    let mut stderr = process.child.stderr.take();
+    let mut stdout_task = tokio::spawn(async move {
+        let mut bytes = Vec::new();
+        if let Some(pipe) = stdout.as_mut() {
+            pipe.read_to_end(&mut bytes).await?;
+        }
+        Ok::<_, io::Error>(bytes)
+    });
+    let mut stderr_task = tokio::spawn(async move {
+        let mut bytes = Vec::new();
+        if let Some(pipe) = stderr.as_mut() {
+            pipe.read_to_end(&mut bytes).await?;
+        }
+        Ok::<_, io::Error>(bytes)
+    });
+
+    enum Outcome {
+        Completed(io::Result<ExitStatus>),
+        Cancelled,
+        TimedOut,
+    }
+
+    let outcome = tokio::select! {
+        result = process.child.wait() => Outcome::Completed(result),
+        _ = cancellation.cancelled() => Outcome::Cancelled,
+        _ = tokio::time::sleep(timeout) => Outcome::TimedOut,
+    };
+
+    match outcome {
+        Outcome::Completed(result) => {
+            let status = match result {
+                Ok(status) => status,
+                Err(error) => {
+                    process.terminate().await;
+                    stdout_task.abort();
+                    stderr_task.abort();
+                    return Err(error.into());
+                }
+            };
+            process.cleanup_descendants();
+            let stdout = finish_pipe_read(&mut stdout_task).await?;
+            let stderr = finish_pipe_read(&mut stderr_task).await?;
+            Ok(ManagedOutput {
+                status,
+                stdout,
+                stderr,
+            })
+        }
+        Outcome::Cancelled => {
+            process.terminate().await;
+            stdout_task.abort();
+            stderr_task.abort();
+            Err(ExecutionError::Cancelled)
+        }
+        Outcome::TimedOut => {
+            process.terminate().await;
+            stdout_task.abort();
+            stderr_task.abort();
+            Err(ExecutionError::ProcessFailed {
+                program: program.to_owned(),
+                message: format!(
+                    "délai maximal de traitement dépassé ({} s); le processus et ses assistants ont été arrêtés",
+                    timeout.as_secs()
+                ),
+            })
+        }
+    }
+}
+
+async fn finish_pipe_read(
+    task: &mut tokio::task::JoinHandle<io::Result<Vec<u8>>>,
+) -> io::Result<Vec<u8>> {
+    match tokio::time::timeout(Duration::from_secs(1), &mut *task).await {
+        Ok(result) => result.map_err(io::Error::other)?,
+        Err(_) => {
+            task.abort();
+            Ok(Vec::new())
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -175,6 +484,13 @@ pub enum ExecutionEvent {
         job_id: JobId,
         completed: usize,
         total: usize,
+    },
+    BytesProgress {
+        job_id: JobId,
+        processed_bytes: u64,
+        total_bytes: u64,
+        output_bytes: u64,
+        bytes_per_second: u64,
     },
     Phase {
         job_id: JobId,
@@ -1052,6 +1368,8 @@ async fn execute_collective_action(
                 scheduler,
                 cancellation,
                 resolver,
+                job_id,
+                &events,
             )
             .await
         }
@@ -1064,11 +1382,22 @@ async fn execute_collective_action(
                 scheduler,
                 cancellation,
                 resolver,
+                job_id,
+                &events,
             )
             .await
         }
         "archive-package" => {
-            execute_archive_package(request, engines, scheduler, cancellation, resolver).await
+            execute_archive_package(
+                request,
+                engines,
+                scheduler,
+                cancellation,
+                resolver,
+                job_id,
+                &events,
+            )
+            .await
         }
         "archive-create" => {
             let engine = engines.get("archive")?;
@@ -2396,7 +2725,7 @@ async fn run_browser_process(
         .and_then(|value| value.to_str())
         .unwrap_or("browser")
         .to_owned();
-    let mut child = command.spawn()?;
+    let mut child = ManagedChild::spawn(&mut command)?;
     let started = Instant::now();
     let mut last_complete_size = None;
 
@@ -2450,12 +2779,8 @@ async fn run_browser_process(
     }
 }
 
-async fn stop_browser_child(child: &mut Child) {
-    if child.try_wait().ok().flatten().is_some() {
-        return;
-    }
-    let _ = child.start_kill();
-    let _ = tokio::time::timeout(Duration::from_secs(1), child.wait()).await;
+async fn stop_browser_child(child: &mut ManagedChild) {
+    child.terminate().await;
 }
 
 async fn browser_complete_pdf_size(path: &Path) -> Result<Option<u64>, ExecutionError> {
@@ -2923,14 +3248,189 @@ fn escape_html(value: &str) -> String {
         .replace('\'', "&#39;")
 }
 
+#[derive(Debug)]
+struct ArchiveCommandLayout {
+    working_directory: PathBuf,
+    entries: Vec<String>,
+}
+
+fn prepare_archive_inputs(
+    inputs: &[ExecutionInput],
+) -> Result<Vec<ExecutionInput>, ExecutionError> {
+    let mut seen = HashSet::new();
+    let mut prepared = Vec::new();
+    for input in inputs {
+        let metadata = std::fs::symlink_metadata(&input.path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(ExecutionError::InvalidInput(format!(
+                "{} est un lien symbolique et ne peut pas entrer dans l’archive sûre.",
+                input.path.display()
+            )));
+        }
+        // A workspace contains both directory assets and every file below them.
+        // Passing both to 7-Zip makes each descendant appear twice. Directories
+        // are therefore represented by their already enumerated regular files.
+        if metadata.is_dir() {
+            continue;
+        }
+        if !metadata.is_file() {
+            return Err(ExecutionError::InvalidInput(format!(
+                "{} n’est pas un fichier ordinaire.",
+                input.path.display()
+            )));
+        }
+        let canonical = std::fs::canonicalize(&input.path)?;
+        if seen.insert(canonical) {
+            prepared.push(input.clone());
+        }
+    }
+    if prepared.is_empty() {
+        return Err(ExecutionError::InvalidInput(
+            "Aucun fichier ordinaire à placer dans l’archive.".into(),
+        ));
+    }
+    Ok(prepared)
+}
+
+fn archive_base_candidate(input: &ExecutionInput) -> Option<PathBuf> {
+    input
+        .source_root
+        .as_deref()
+        .filter(|root| input.path.starts_with(root))
+        .and_then(Path::parent)
+        .or_else(|| input.path.parent())
+        .map(Path::to_path_buf)
+}
+
+fn archive_command_layout(
+    inputs: &[ExecutionInput],
+) -> Result<ArchiveCommandLayout, ExecutionError> {
+    let mut working_directory = inputs
+        .first()
+        .and_then(archive_base_candidate)
+        .ok_or_else(|| ExecutionError::InvalidInput("Racine d’archive introuvable.".into()))?;
+    for input in inputs.iter().skip(1) {
+        let candidate = archive_base_candidate(input).ok_or_else(|| {
+            ExecutionError::InvalidInput(format!(
+                "Racine d’archive introuvable pour {}.",
+                input.path.display()
+            ))
+        })?;
+        while !candidate.starts_with(&working_directory) {
+            if !working_directory.pop() {
+                return Err(ExecutionError::InvalidInput(
+                    "Les sources d’une même archive doivent se trouver sur un volume commun."
+                        .into(),
+                ));
+            }
+        }
+    }
+    if working_directory.as_os_str().is_empty() {
+        return Err(ExecutionError::InvalidInput(
+            "Racine d’archive commune introuvable.".into(),
+        ));
+    }
+
+    let mut seen_entries = HashSet::new();
+    let mut entries = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        let relative = input.path.strip_prefix(&working_directory).map_err(|_| {
+            ExecutionError::InvalidInput(format!(
+                "{} ne peut pas être converti en chemin d’archive relatif.",
+                input.path.display()
+            ))
+        })?;
+        let mut components = Vec::new();
+        for component in relative.components() {
+            match component {
+                std::path::Component::Normal(value) => {
+                    let value = value.to_str().ok_or_else(|| {
+                        ExecutionError::InvalidInput(
+                            "Un nom de fichier d’archive n’est pas encodé en UTF-8.".into(),
+                        )
+                    })?;
+                    if value.contains('\n') || value.contains('\r') {
+                        return Err(ExecutionError::InvalidInput(
+                            "Un nom de fichier contient un saut de ligne incompatible avec les archives."
+                                .into(),
+                        ));
+                    }
+                    components.push(value);
+                }
+                std::path::Component::CurDir => {}
+                _ => {
+                    return Err(ExecutionError::InvalidInput(
+                        "Un chemin d’archive relatif contient une composante interdite.".into(),
+                    ));
+                }
+            }
+        }
+        if components.is_empty() {
+            return Err(ExecutionError::InvalidInput("Nom d’archive vide.".into()));
+        }
+        let entry = components.join("/");
+        let collision_key = if cfg!(windows) {
+            entry.to_ascii_lowercase()
+        } else {
+            entry.clone()
+        };
+        if !seen_entries.insert(collision_key) {
+            return Err(ExecutionError::InvalidInput(format!(
+                "Deux sources produisent le même chemin dans l’archive : {entry}."
+            )));
+        }
+        entries.push(entry);
+    }
+    Ok(ArchiveCommandLayout {
+        working_directory,
+        entries,
+    })
+}
+
+async fn create_archive_with_7zip(
+    engine: &Path,
+    archive_type: &str,
+    compression: &str,
+    output: &Path,
+    inputs: &[ExecutionInput],
+    list_directory: &Path,
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    let layout = archive_command_layout(inputs)?;
+    let list_path = list_directory.join(format!(
+        ".fileflow-archive-{}.list",
+        Uuid::new_v4().simple()
+    ));
+    let mut list = layout.entries.join("\n");
+    list.push('\n');
+    tokio::fs::write(&list_path, list).await?;
+    let args = [
+        OsString::from("a"),
+        OsString::from(archive_type),
+        OsString::from(compression),
+        output.as_os_str().into(),
+        OsString::from("-scsUTF-8"),
+        OsString::from(format!("@{}", list_path.to_string_lossy())),
+    ];
+    let result =
+        run_process_in_directory(engine, &args, &layout.working_directory, cancellation).await;
+    let _ = tokio::fs::remove_file(&list_path).await;
+    result
+}
+
 async fn execute_archive_package(
     request: &ExecutionRequest,
     engines: &EnginePaths,
     scheduler: Arc<ResourceScheduler>,
     cancellation: CancellationToken,
     resolver: OutputResolver,
+    job_id: JobId,
+    events: &mpsc::Sender<ExecutionEvent>,
 ) -> Result<Option<PathBuf>, ExecutionError> {
-    let target = request.target_format.as_deref().unwrap_or("zip");
+    let target = match request.target_format.as_deref().unwrap_or("smart") {
+        "smart" => "tar.zst",
+        target => target,
+    };
     if target == "tar.zst" {
         return execute_tar_compressed_archive(
             request,
@@ -2940,6 +3440,8 @@ async fn execute_archive_package(
             scheduler,
             cancellation,
             resolver,
+            job_id,
+            events,
         )
         .await;
     }
@@ -2952,15 +3454,17 @@ async fn execute_archive_package(
             scheduler,
             cancellation,
             resolver,
+            job_id,
+            events,
         )
         .await;
     }
+    let archive_inputs = prepare_archive_inputs(&request.inputs)?;
     let archive_engine = engines.get("archive")?;
     let _lease = scheduler
         .acquire("archive", ResourceProfile::ARCHIVE, &cancellation)
         .await?;
-    let first = request
-        .inputs
+    let first = archive_inputs
         .first()
         .ok_or_else(|| ExecutionError::InvalidInput("Aucun élément à compresser.".into()))?;
     let plan = resolver.plan(&OutputRequest {
@@ -2984,15 +3488,21 @@ async fn execute_archive_package(
             "7z" => "-t7z",
             _ => "-ttar",
         };
-        let mut args = vec![
-            OsString::from("a"),
-            OsString::from(archive_type),
-            plan.temporary_path.as_os_str().into(),
-        ];
-        for input in &request.inputs {
-            args.push(input.path.as_os_str().into());
-        }
-        run_process(archive_engine, &args, &cancellation).await
+        create_archive_with_7zip(
+            archive_engine,
+            archive_type,
+            match (target, request.quality.as_deref()) {
+                ("zip", Some("high")) => "-mx=0",
+                ("zip", Some("small")) => "-mx=5",
+                ("zip", _) => "-mx=1",
+                _ => "-mx=0",
+            },
+            &plan.temporary_path,
+            &archive_inputs,
+            &plan.destination_directory,
+            &cancellation,
+        )
+        .await
     } else {
         let compression_type = match target {
             "tar.gz" => "-tgzip",
@@ -3008,15 +3518,16 @@ async fn execute_archive_package(
         let staging_tar = plan
             .destination_directory
             .join(format!(".fileflow-package-{}.tar", Uuid::new_v4().simple()));
-        let mut tar_args = vec![
-            OsString::from("a"),
-            OsString::from("-ttar"),
-            staging_tar.as_os_str().into(),
-        ];
-        for input in &request.inputs {
-            tar_args.push(input.path.as_os_str().into());
-        }
-        run_process(archive_engine, &tar_args, &cancellation).await?;
+        create_archive_with_7zip(
+            archive_engine,
+            "-ttar",
+            "-mx=0",
+            &staging_tar,
+            &archive_inputs,
+            &plan.destination_directory,
+            &cancellation,
+        )
+        .await?;
         let compression = run_process(
             archive_engine,
             &[
@@ -3048,11 +3559,13 @@ async fn execute_tar_compressed_archive(
     scheduler: Arc<ResourceScheduler>,
     cancellation: CancellationToken,
     resolver: OutputResolver,
+    job_id: JobId,
+    events: &mpsc::Sender<ExecutionEvent>,
 ) -> Result<Option<PathBuf>, ExecutionError> {
+    let archive_inputs = prepare_archive_inputs(&request.inputs)?;
     let archive_engine = engines.get("archive")?;
     let compressor = engines.get(compressor_id)?;
-    let first = request
-        .inputs
+    let first = archive_inputs
         .first()
         .ok_or_else(|| ExecutionError::InvalidInput("Aucun élément à compresser.".into()))?;
     let plan = resolver.plan(&OutputRequest {
@@ -3070,6 +3583,32 @@ async fn execute_tar_compressed_archive(
     }
     resolver.prepare(&plan).await?;
 
+    if compressor_id == "zstd" {
+        send_phase(events, job_id, "preparation", 1, 1).await?;
+        let _compression_lease = scheduler
+            .acquire("zstd", ResourceProfile::ARCHIVE, &cancellation)
+            .await?;
+        send_phase(events, job_id, "conversion", 0, 1).await?;
+        let result = stream_tar_to_zstd(
+            compressor,
+            &archive_inputs,
+            &plan.temporary_path,
+            request.quality.as_deref(),
+            scheduler.budget().cpu_tokens.max(1),
+            &cancellation,
+            job_id,
+            events,
+        )
+        .await;
+        if let Err(error) = result {
+            resolver.cleanup(&plan).await;
+            return Err(error);
+        }
+        send_phase(events, job_id, "finalisation", 1, 1).await?;
+        resolver.finalize(&plan).await?;
+        return Ok(Some(plan.final_path));
+    }
+
     let staging_tar = plan
         .destination_directory
         .join(format!(".fileflow-stage-{}.tar", Uuid::new_v4().simple()));
@@ -3078,15 +3617,17 @@ async fn execute_tar_compressed_archive(
         let _archive_lease = scheduler
             .acquire("archive", ResourceProfile::ARCHIVE, &cancellation)
             .await?;
-        let mut args = vec![
-            OsString::from("a"),
-            OsString::from("-ttar"),
-            staging_tar.as_os_str().into(),
-        ];
-        for input in &request.inputs {
-            args.push(input.path.as_os_str().into());
-        }
-        if let Err(error) = run_process(archive_engine, &args, &cancellation).await {
+        if let Err(error) = create_archive_with_7zip(
+            archive_engine,
+            "-ttar",
+            "-mx=0",
+            &staging_tar,
+            &archive_inputs,
+            &plan.destination_directory,
+            &cancellation,
+        )
+        .await
+        {
             let _ = tokio::fs::remove_file(&staging_tar).await;
             resolver.cleanup(&plan).await;
             return Err(error);
@@ -3136,6 +3677,290 @@ async fn execute_tar_compressed_archive(
     }
     resolver.finalize(&plan).await?;
     Ok(Some(plan.final_path))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn stream_tar_to_zstd(
+    zstd: &Path,
+    inputs: &[ExecutionInput],
+    output: &Path,
+    quality: Option<&str>,
+    thread_count: usize,
+    cancellation: &CancellationToken,
+    job_id: JobId,
+    events: &mpsc::Sender<ExecutionEvent>,
+) -> Result<(), ExecutionError> {
+    let mut total_bytes = 0_u64;
+    for input in inputs {
+        let metadata = tokio::fs::symlink_metadata(&input.path).await?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(ExecutionError::InvalidInput(format!(
+                "{} n’est pas un fichier ordinaire et ne peut pas entrer dans l’archive sûre.",
+                input.path.display()
+            )));
+        }
+        total_bytes = total_bytes.saturating_add(metadata.len());
+    }
+
+    let level = match quality {
+        Some("small") => "-15",
+        Some("high") => "--fast=5",
+        _ => "--fast=1",
+    };
+    let mut command = Command::new(zstd);
+    configure_external_command(&mut command);
+    command
+        .args([
+            OsString::from("-q"),
+            OsString::from("-f"),
+            OsString::from(format!("-T{}", thread_count.max(1))),
+            OsString::from(level),
+            OsString::from("-"),
+            OsString::from("-o"),
+            output.as_os_str().into(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = ManagedChild::spawn(&mut command)?;
+    let mut writer = child
+        .child
+        .stdin
+        .take()
+        .ok_or_else(|| ExecutionError::ProcessFailed {
+            program: "zstd".into(),
+            message: "entrée standard indisponible".into(),
+        })?;
+    let started = Instant::now();
+    let mut last_event = Instant::now() - Duration::from_secs(1);
+    let mut processed = 0_u64;
+    let mut buffer = vec![0_u8; 256 * 1024];
+
+    for input in inputs {
+        let metadata = tokio::fs::metadata(&input.path).await?;
+        let entry_name = safe_tar_entry_name(input)?;
+        let header = ustar_file_header(&entry_name, metadata.len(), &metadata)?;
+        write_with_cancellation(&mut writer, &header, cancellation).await?;
+
+        let mut source = tokio::fs::File::open(&input.path).await?;
+        loop {
+            let read = tokio::select! {
+                result = source.read(&mut buffer) => result?,
+                _ = cancellation.cancelled() => return Err(ExecutionError::Cancelled),
+            };
+            if read == 0 {
+                break;
+            }
+            write_with_cancellation(&mut writer, &buffer[..read], cancellation).await?;
+            processed = processed.saturating_add(read as u64);
+            if last_event.elapsed() >= Duration::from_millis(120) {
+                send_bytes_progress(events, job_id, processed, total_bytes, output, started)
+                    .await?;
+                last_event = Instant::now();
+            }
+        }
+        let padding = (512 - metadata.len() % 512) % 512;
+        if padding > 0 {
+            let zeros = [0_u8; 512];
+            write_with_cancellation(&mut writer, &zeros[..padding as usize], cancellation).await?;
+        }
+    }
+    write_with_cancellation(&mut writer, &[0_u8; 1024], cancellation).await?;
+    tokio::select! {
+        result = writer.shutdown() => result?,
+        _ = cancellation.cancelled() => return Err(ExecutionError::Cancelled),
+    }
+    drop(writer);
+
+    send_bytes_progress(events, job_id, processed, total_bytes, output, started).await?;
+    let result = wait_for_managed_output(
+        &mut child,
+        "zstd",
+        cancellation,
+        process_timeout(zstd),
+    )
+    .await?;
+    if !result.status.success() {
+        return Err(ExecutionError::ProcessFailed {
+            program: "zstd".into(),
+            message: tail_message(&String::from_utf8_lossy(&result.stderr), result.status),
+        });
+    }
+    send_bytes_progress(events, job_id, total_bytes, total_bytes, output, started).await?;
+    Ok(())
+}
+
+async fn write_with_cancellation(
+    writer: &mut tokio::process::ChildStdin,
+    bytes: &[u8],
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    tokio::select! {
+        result = writer.write_all(bytes) => Ok(result?),
+        _ = cancellation.cancelled() => Err(ExecutionError::Cancelled),
+    }
+}
+
+async fn send_bytes_progress(
+    events: &mpsc::Sender<ExecutionEvent>,
+    job_id: JobId,
+    processed_bytes: u64,
+    total_bytes: u64,
+    output: &Path,
+    started: Instant,
+) -> Result<(), ExecutionError> {
+    let output_bytes = tokio::fs::metadata(output)
+        .await
+        .map(|value| value.len())
+        .unwrap_or(0);
+    let elapsed = started.elapsed().as_secs_f64().max(0.001);
+    send(
+        events,
+        ExecutionEvent::BytesProgress {
+            job_id,
+            processed_bytes,
+            total_bytes,
+            output_bytes,
+            bytes_per_second: (processed_bytes as f64 / elapsed).min(u64::MAX as f64) as u64,
+        },
+    )
+    .await
+}
+
+fn safe_tar_entry_name(input: &ExecutionInput) -> Result<String, ExecutionError> {
+    let relative = input
+        .source_root
+        .as_deref()
+        .and_then(|root| input.path.strip_prefix(root).ok())
+        .filter(|path| !path.as_os_str().is_empty());
+    let mut parts = Vec::new();
+    if relative.is_some()
+        && let Some(root_name) = input
+            .source_root
+            .as_deref()
+            .and_then(Path::file_name)
+            .and_then(|value| value.to_str())
+    {
+        parts.push(root_name.to_owned());
+    }
+    let fallback = input
+        .path
+        .file_name()
+        .map(Path::new)
+        .ok_or_else(|| ExecutionError::InvalidInput("Nom de fichier introuvable.".into()))?;
+    let path = relative.unwrap_or(fallback);
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(value) => {
+                let value = value.to_str().ok_or_else(|| {
+                    ExecutionError::InvalidInput(
+                        "Un nom de fichier n’est pas encodé en UTF-8.".into(),
+                    )
+                })?;
+                if !value.is_empty() {
+                    parts.push(value.to_owned());
+                }
+            }
+            std::path::Component::CurDir => {}
+            _ => {
+                return Err(ExecutionError::InvalidInput(
+                    "Un chemin d’archive contient une remontée ou une racine interdite.".into(),
+                ));
+            }
+        }
+    }
+    if parts.is_empty() {
+        return Err(ExecutionError::InvalidInput("Nom d’archive vide.".into()));
+    }
+    Ok(parts.join("/"))
+}
+
+fn ustar_file_header(
+    entry_name: &str,
+    size: u64,
+    metadata: &std::fs::Metadata,
+) -> Result<[u8; 512], ExecutionError> {
+    let (name, prefix) = split_ustar_name(entry_name)?;
+    let mut header = [0_u8; 512];
+    copy_tar_field(&mut header[0..100], name.as_bytes())?;
+    #[cfg(unix)]
+    let mode = {
+        use std::os::unix::fs::MetadataExt;
+        u64::from(metadata.mode() & 0o7777)
+    };
+    #[cfg(not(unix))]
+    let mode = 0o644;
+    write_tar_number(&mut header[100..108], mode);
+    write_tar_number(&mut header[108..116], 0);
+    write_tar_number(&mut header[116..124], 0);
+    write_tar_number(&mut header[124..136], size);
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|value| value.as_secs())
+        .unwrap_or(0);
+    write_tar_number(&mut header[136..148], modified);
+    header[148..156].fill(b' ');
+    header[156] = b'0';
+    header[257..263].copy_from_slice(b"ustar\0");
+    header[263..265].copy_from_slice(b"00");
+    copy_tar_field(&mut header[265..297], b"fileflow")?;
+    copy_tar_field(&mut header[297..329], b"fileflow")?;
+    copy_tar_field(&mut header[345..500], prefix.as_bytes())?;
+    let checksum = header.iter().map(|value| u64::from(*value)).sum::<u64>();
+    let checksum = format!("{checksum:06o}");
+    header[148..154].copy_from_slice(checksum.as_bytes());
+    header[154] = 0;
+    header[155] = b' ';
+    Ok(header)
+}
+
+fn split_ustar_name(value: &str) -> Result<(&str, &str), ExecutionError> {
+    if value.len() <= 100 {
+        return Ok((value, ""));
+    }
+    let split = value
+        .match_indices('/')
+        .filter(|(index, _)| *index <= 155 && value.len().saturating_sub(*index + 1) <= 100)
+        .map(|(index, _)| index)
+        .next_back()
+        .ok_or_else(|| {
+            ExecutionError::InvalidInput(format!(
+                "Le chemin « {value} » est trop long pour une archive TAR portable."
+            ))
+        })?;
+    Ok((&value[split + 1..], &value[..split]))
+}
+
+fn copy_tar_field(field: &mut [u8], value: &[u8]) -> Result<(), ExecutionError> {
+    if value.len() > field.len() {
+        return Err(ExecutionError::InvalidInput(
+            "Un champ dépasse la taille maximale du format TAR.".into(),
+        ));
+    }
+    field[..value.len()].copy_from_slice(value);
+    Ok(())
+}
+
+fn write_tar_number(field: &mut [u8], value: u64) {
+    let octal = format!("{value:o}");
+    if octal.len() < field.len() {
+        field.fill(b'0');
+        let start = field.len() - octal.len() - 1;
+        field[start..start + octal.len()].copy_from_slice(octal.as_bytes());
+        let last = field.len() - 1;
+        field[last] = 0;
+        return;
+    }
+    field.fill(0);
+    let bytes = value.to_be_bytes();
+    let copy = field.len().min(bytes.len());
+    let field_start = field.len() - copy;
+    let bytes_start = bytes.len() - copy;
+    field[field_start..].copy_from_slice(&bytes[bytes_start..]);
+    field[0] |= 0x80;
 }
 
 fn item_output<'a>(
@@ -3717,6 +4542,7 @@ async fn run_office_convert(
             OsString::from("--nodefault"),
             OsString::from("--nofirststartwizard"),
             OsString::from("--nolockcheck"),
+            OsString::from("--norestore"),
             OsString::from("--convert-to"),
             OsString::from(target_format),
             OsString::from("--outdir"),
@@ -3915,6 +4741,7 @@ async fn run_ffmpeg(
     let thread_count = thread_count.max(1);
     let mut args = vec![
         OsString::from("-hide_banner"),
+        OsString::from("-nostdin"),
         OsString::from("-loglevel"),
         OsString::from("error"),
         OsString::from("-y"),
@@ -4611,6 +5438,8 @@ pub struct PreparedFilePreview {
     pub path: PathBuf,
     pub family: FormatFamily,
     pub generated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
 }
 
 pub async fn prepare_file_preview(
@@ -4630,6 +5459,7 @@ pub async fn prepare_file_preview(
             path: input.to_path_buf(),
             family: FormatFamily::Pdf,
             generated: false,
+            content: None,
         });
     }
     if detected.family == FormatFamily::Image
@@ -4642,6 +5472,20 @@ pub async fn prepare_file_preview(
             path: input.to_path_buf(),
             family: FormatFamily::Image,
             generated: false,
+            content: None,
+        });
+    }
+
+    // Passive previews must never start the user's browser. Text, HTML and
+    // e-mail files are converted to bounded plain text and rendered directly
+    // by FileFlow's webview. Browser-backed PDF rendering remains available
+    // only for an explicit conversion action such as HTML -> PDF.
+    if detected.family == FormatFamily::Text {
+        return Ok(PreparedFilePreview {
+            path: input.to_path_buf(),
+            family: FormatFamily::Text,
+            generated: false,
+            content: Some(native_text_preview(input, &extension).await?),
         });
     }
 
@@ -4659,6 +5503,7 @@ pub async fn prepare_file_preview(
                 path: output,
                 family: FormatFamily::Image,
                 generated: true,
+                content: None,
             }
         }
         FormatFamily::Document | FormatFamily::Spreadsheet | FormatFamily::Presentation => {
@@ -4679,55 +5524,22 @@ pub async fn prepare_file_preview(
                 path: output,
                 family: FormatFamily::Pdf,
                 generated: true,
-            }
-        }
-        FormatFamily::Text => {
-            let output = destination.join("preview.pdf");
-            match extension.as_str() {
-                "html" | "htm" => {
-                    run_browser_print(engines.get("browser")?, input, &output, true, cancellation)
-                        .await?;
-                }
-                "eml" | "mail" => {
-                    run_eml_to_pdf(engines.get("browser")?, input, &output, cancellation).await?;
-                }
-                _ => {
-                    let text = tokio::fs::read_to_string(input).await.map_err(|_| {
-                        ExecutionError::InvalidInput(
-                            "Ce fichier texte n’utilise pas un encodage compatible avec l’aperçu."
-                                .into(),
-                        )
-                    })?;
-                    let html = destination.join("preview.html");
-                    let document = format!(
-                        "<!doctype html><meta charset=\"utf-8\"><style>@page{{size:A4;margin:18mm}}body{{color:#182033;font:13px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}}</style>{}",
-                        escape_html(&text)
-                    );
-                    tokio::fs::write(&html, document).await?;
-                    run_browser_print(engines.get("browser")?, &html, &output, false, cancellation)
-                        .await?;
-                }
-            }
-            PreparedFilePreview {
-                path: output,
-                family: FormatFamily::Pdf,
-                generated: true,
+                content: None,
             }
         }
         FormatFamily::Ebook if matches!(extension.as_str(), "epub" | "fb2") => {
-            let html = destination.join("book.html");
-            let output = destination.join("preview.pdf");
+            let output = destination.join("preview.txt");
             let pandoc = engines.get("pandoc")?;
             let _lease = scheduler
                 .acquire("pandoc", ResourceProfile::LIGHT, cancellation)
                 .await?;
-            run_pandoc(pandoc, input, &html, cancellation).await?;
-            drop(_lease);
-            run_browser_print(engines.get("browser")?, &html, &output, false, cancellation).await?;
+            run_pandoc(pandoc, input, &output, cancellation).await?;
+            let content = native_text_preview(&output, "txt").await?;
             PreparedFilePreview {
                 path: output,
-                family: FormatFamily::Pdf,
+                family: FormatFamily::Text,
                 generated: true,
+                content: Some(content),
             }
         }
         FormatFamily::Video => {
@@ -4751,6 +5563,7 @@ pub async fn prepare_file_preview(
                 path: output,
                 family: FormatFamily::Image,
                 generated: true,
+                content: None,
             }
         }
         _ => {
@@ -4762,6 +5575,49 @@ pub async fn prepare_file_preview(
         }
     };
     Ok(result)
+}
+
+async fn native_text_preview(input: &Path, extension: &str) -> Result<String, ExecutionError> {
+    let metadata = tokio::fs::metadata(input).await?;
+    let file = tokio::fs::File::open(input).await?;
+    let mut bytes = Vec::new();
+    file.take(NATIVE_TEXT_PREVIEW_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .await?;
+    let byte_truncated = metadata.len() > NATIVE_TEXT_PREVIEW_BYTES;
+    bytes.truncate(NATIVE_TEXT_PREVIEW_BYTES as usize);
+    let raw = String::from_utf8_lossy(&bytes);
+
+    let text = match extension {
+        "html" | "htm" | "fb2" => html_to_plain_text(&raw),
+        "eml" | "mail" => {
+            let (header_block, body_block) = split_header_body(&raw);
+            let headers = parse_mail_headers(header_block);
+            let subject =
+                decoded_header(&headers, "subject").unwrap_or_else(|| "Sans objet".into());
+            let sender = decoded_header(&headers, "from").unwrap_or_else(|| "—".into());
+            let recipients = decoded_header(&headers, "to").unwrap_or_else(|| "—".into());
+            let date = decoded_header(&headers, "date").unwrap_or_else(|| "—".into());
+            let body = extract_mail_text(&headers, body_block, 0);
+            format!(
+                "Objet : {subject}\nDe : {sender}\nÀ : {recipients}\nDate : {date}\n\n{}",
+                body.trim()
+            )
+        }
+        _ => raw.into_owned(),
+    };
+    let char_truncated = text.chars().count() > NATIVE_TEXT_PREVIEW_CHARS;
+    let mut visible = text
+        .chars()
+        .take(NATIVE_TEXT_PREVIEW_CHARS)
+        .collect::<String>();
+    if visible.trim().is_empty() {
+        visible = "[Fichier vide]".into();
+    }
+    if byte_truncated || char_truncated {
+        visible.push_str("\n\n[Aperçu limité par FileFlow]");
+    }
+    Ok(visible)
 }
 
 /// Prepares an extracted archive entry for the desktop viewer.
@@ -4782,6 +5638,7 @@ pub async fn prepare_archive_entry_file_preview(
         path: input.to_path_buf(),
         family: detected.family,
         generated: false,
+        content: None,
     };
 
     if detected.family == FormatFamily::Pdf {
@@ -4846,6 +5703,7 @@ async fn prepare_pdf_first_page_preview(
         path: output,
         family: FormatFamily::Image,
         generated: true,
+        content: None,
     })
 }
 
@@ -5339,18 +6197,14 @@ async fn capture_process(
         .and_then(|value| value.to_str())
         .unwrap_or("engine")
         .to_owned();
-    let future = command.output();
-    tokio::pin!(future);
-    let output = tokio::select! {
-        result = &mut future => result?,
-        _ = cancellation.cancelled() => return Err(ExecutionError::Cancelled),
-        _ = tokio::time::sleep(process_timeout(engine)) => {
-            return Err(ExecutionError::ProcessFailed {
-                program: program.clone(),
-                message: "délai maximal de traitement dépassé; le processus a été arrêté".into(),
-            });
-        }
-    };
+    let mut child = ManagedChild::spawn(&mut command)?;
+    let output = wait_for_managed_output(
+        &mut child,
+        &program,
+        cancellation,
+        process_timeout(engine),
+    )
+    .await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(ExecutionError::ProcessFailed {
@@ -5384,18 +6238,14 @@ async fn run_process_with_env(
         .and_then(|value| value.to_str())
         .unwrap_or("engine")
         .to_owned();
-    let future = command.output();
-    tokio::pin!(future);
-    let output = tokio::select! {
-        result = &mut future => result?,
-        _ = cancellation.cancelled() => return Err(ExecutionError::Cancelled),
-        _ = tokio::time::sleep(process_timeout(engine)) => {
-            return Err(ExecutionError::ProcessFailed {
-                program: program.clone(),
-                message: "délai maximal de traitement dépassé; le processus a été arrêté".into(),
-            });
-        }
-    };
+    let mut child = ManagedChild::spawn(&mut command)?;
+    let output = wait_for_managed_output(
+        &mut child,
+        &program,
+        cancellation,
+        process_timeout(engine),
+    )
+    .await?;
     if output.status.success() {
         return Ok(());
     }
@@ -5414,9 +6264,35 @@ async fn run_process(
     run_process_with_timeout(engine, args, cancellation, process_timeout(engine)).await
 }
 
+async fn run_process_in_directory(
+    engine: &Path,
+    args: &[OsString],
+    working_directory: &Path,
+    cancellation: &CancellationToken,
+) -> Result<(), ExecutionError> {
+    run_process_with_timeout_in_directory(
+        engine,
+        args,
+        Some(working_directory),
+        cancellation,
+        process_timeout(engine),
+    )
+    .await
+}
+
 async fn run_process_with_timeout(
     engine: &Path,
     args: &[OsString],
+    cancellation: &CancellationToken,
+    timeout: Duration,
+) -> Result<(), ExecutionError> {
+    run_process_with_timeout_in_directory(engine, args, None, cancellation, timeout).await
+}
+
+async fn run_process_with_timeout_in_directory(
+    engine: &Path,
+    args: &[OsString],
+    working_directory: Option<&Path>,
     cancellation: &CancellationToken,
     timeout: Duration,
 ) -> Result<(), ExecutionError> {
@@ -5425,6 +6301,9 @@ async fn run_process_with_timeout(
     }
     let mut command = Command::new(engine);
     configure_external_command(&mut command);
+    if let Some(working_directory) = working_directory {
+        command.current_dir(working_directory);
+    }
     command
         .args(args)
         .stdin(Stdio::null())
@@ -5436,21 +6315,8 @@ async fn run_process_with_timeout(
         .and_then(|value| value.to_str())
         .unwrap_or("engine")
         .to_owned();
-    let future = command.output();
-    tokio::pin!(future);
-    let output = tokio::select! {
-        result = &mut future => result?,
-        _ = cancellation.cancelled() => return Err(ExecutionError::Cancelled),
-        _ = tokio::time::sleep(timeout) => {
-            return Err(ExecutionError::ProcessFailed {
-                program: program.clone(),
-                message: format!(
-                    "délai maximal de traitement dépassé ({} s); le processus a été arrêté",
-                    timeout.as_secs()
-                ),
-            });
-        }
-    };
+    let mut child = ManagedChild::spawn(&mut command)?;
+    let output = wait_for_managed_output(&mut child, &program, cancellation, timeout).await?;
     if output.status.success() {
         return Ok(());
     }
@@ -5537,7 +6403,7 @@ fn normalize_target_format(
         "ebook-convert" => &["html", "md", "docx", "txt", "epub"],
         "archive-create" => &["zip", "7z", "tar"],
         "archive-package" => &[
-            "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4",
+            "smart", "zip", "7z", "tar", "tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz4",
         ],
         _ => &[],
     };
@@ -5740,6 +6606,86 @@ mod tests {
             normalize_target_format("pdf-compress", Some("png")).unwrap(),
             None
         );
+        assert_eq!(
+            normalize_target_format("archive-package", Some("SMART"))
+                .unwrap()
+                .as_deref(),
+            Some("smart")
+        );
+    }
+
+    #[test]
+    fn portable_tar_names_split_without_losing_components() {
+        let prefix = "d".repeat(120);
+        let value = format!("{prefix}/rapport.pdf");
+        let (name, stored_prefix) = split_ustar_name(&value).unwrap();
+        assert_eq!(name, "rapport.pdf");
+        assert_eq!(stored_prefix, prefix);
+        assert!(split_ustar_name(&"x".repeat(101)).is_err());
+    }
+
+    #[test]
+    fn archive_layout_deduplicates_sources_and_preserves_duplicate_basenames() {
+        let root = std::env::temp_dir().join(format!(
+            "fileflow-archive-layout-{}",
+            Uuid::new_v4().simple()
+        ));
+        let first = root.join("crates/first/Cargo.toml");
+        let second = root.join("crates/second/Cargo.toml");
+        std::fs::create_dir_all(first.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(second.parent().unwrap()).unwrap();
+        std::fs::write(&first, b"[package]\nname = 'first'\n").unwrap();
+        std::fs::write(&second, b"[package]\nname = 'second'\n").unwrap();
+        let inputs = vec![
+            ExecutionInput {
+                path: root.clone(),
+                source_root: Some(root.clone()),
+            },
+            ExecutionInput {
+                path: first.clone(),
+                source_root: Some(root.clone()),
+            },
+            ExecutionInput {
+                path: first,
+                source_root: Some(root.clone()),
+            },
+            ExecutionInput {
+                path: second,
+                source_root: Some(root.clone()),
+            },
+        ];
+        let prepared = prepare_archive_inputs(&inputs).unwrap();
+        assert_eq!(prepared.len(), 2);
+        let layout = archive_command_layout(&prepared).unwrap();
+        assert_eq!(layout.working_directory, root.parent().unwrap());
+        let root_name = root.file_name().unwrap().to_string_lossy();
+        assert_eq!(
+            layout.entries,
+            vec![
+                format!("{root_name}/crates/first/Cargo.toml"),
+                format!("{root_name}/crates/second/Cargo.toml"),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ustar_header_contains_a_valid_checksum() {
+        let metadata =
+            std::fs::metadata(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs")).unwrap();
+        let header = ustar_file_header("source/lib.rs", metadata.len(), &metadata).unwrap();
+        let stored = std::str::from_utf8(&header[148..154])
+            .ok()
+            .and_then(|value| u64::from_str_radix(value, 8).ok())
+            .unwrap();
+        let mut checksum_header = header;
+        checksum_header[148..156].fill(b' ');
+        let calculated = checksum_header
+            .iter()
+            .map(|value| u64::from(*value))
+            .sum::<u64>();
+        assert_eq!(stored, calculated);
+        assert_eq!(&header[257..263], b"ustar\0");
     }
 
     #[test]
@@ -6102,6 +7048,31 @@ mod tests {
         assert!(document.contains("KingSpec 512 Go"));
         assert!(!document.contains("while(true)"));
         assert!(!document.contains("<script>"));
+    }
+
+    #[tokio::test]
+    async fn passive_html_preview_is_native_and_never_needs_a_browser() {
+        let root = std::env::temp_dir()
+            .join("fileflow-native-preview")
+            .join(Uuid::new_v4().simple().to_string());
+        tokio::fs::create_dir_all(&root)
+            .await
+            .expect("temporary preview root");
+        let input = root.join("message.html");
+        tokio::fs::write(
+            &input,
+            b"<h1>Contenu FileFlow</h1><script>window.open('https://example.com')</script>",
+        )
+        .await
+        .expect("HTML fixture");
+
+        let preview = native_text_preview(&input, "html")
+            .await
+            .expect("native HTML preview");
+        assert!(preview.contains("Contenu FileFlow"));
+        assert!(!preview.contains("window.open"));
+        assert!(!preview.contains("<script>"));
+        let _ = tokio::fs::remove_dir_all(root).await;
     }
 
     #[test]

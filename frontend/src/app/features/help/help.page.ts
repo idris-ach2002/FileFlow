@@ -3,6 +3,7 @@ import { Router } from '@angular/router';
 import { CapabilityStore } from '../../core/catalog/capability.store';
 import { ActionDescriptor } from '../../core/ipc/tauri.models';
 import { WorkspaceStore } from '../workspace/data-access/workspace.store';
+import { ConversionIntentStore } from '../../core/conversion/conversion-intent.store';
 
 interface HelpGuide {
   id: string;
@@ -90,6 +91,7 @@ export class HelpPage {
   private readonly capabilities = inject(CapabilityStore);
   private readonly workspace = inject(WorkspaceStore);
   private readonly router = inject(Router);
+  private readonly intents = inject(ConversionIntentStore);
   protected readonly query = signal('');
   protected readonly openGuide = signal<string | null>(null);
   protected readonly selectedAction = signal<ActionDescriptor | null>(null);
@@ -118,13 +120,12 @@ export class HelpPage {
 
   protected toggle(id: string): void { this.openGuide.update((current) => current === id ? null : id); }
   protected launch(actionId: string): void {
-    this.workspace.setPendingAction(actionId);
-    if (this.workspace.hasWorkspace()) {
-      this.workspace.openAction(actionId);
-      void this.router.navigate(['/workspace']);
-    } else {
-      void this.router.navigate(['/']);
-    }
+    const action = this.capabilities.action(actionId);
+    if (!action) return;
+    const spec = this.capabilities.uiSpec(actionId);
+    this.intents.start({ actionId, sourceFormats: spec?.sourceFormats ?? [], targetFormat: spec?.defaultTarget ?? action.outputFormat ?? null, inputMode: spec?.inputMode ?? 'files', uiKind: spec?.kind ?? 'generic', parameters: {} });
+    this.workspace.startNewConversion(actionId);
+    void this.router.navigate(['/conversion', actionId]);
   }
 }
 

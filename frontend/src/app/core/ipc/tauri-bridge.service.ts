@@ -10,6 +10,7 @@ import {
   ChangePasswordRequest,
   LoginRequest,
   OnboardingPreferences,
+  PathValidation,
   ProfileUpdate,
   ActionRecommendation,
   ArchiveInspection,
@@ -41,9 +42,13 @@ import {
   WorkspaceIntakeEvent,
   WorkspaceSnapshot,
 } from './tauri.models';
+import { NativeDialogGate } from './native-dialog.gate';
 
 @Injectable({ providedIn: 'root' })
 export class TauriBridgeService {
+  private readonly nativeDialogs = new NativeDialogGate();
+  readonly nativeDialogBusy = this.nativeDialogs.busy;
+
   isDesktop(): boolean {
     return isTauri();
   }
@@ -89,8 +94,17 @@ export class TauriBridgeService {
     return invoke<AccountProfile>('update_profile', { token, request });
   }
 
-  chooseProfileAvatar(token: string): Promise<AccountProfile | null> {
-    return invoke<AccountProfile | null>('choose_profile_avatar', { token });
+  async chooseProfileAvatar(token: string): Promise<AccountProfile | null> {
+    return this.withNativeDialog(async () => {
+      const source = await open({
+        directory: false,
+        multiple: false,
+        title: 'Choisir une photo de profil',
+        filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp'] }],
+      });
+      if (typeof source !== 'string') return null;
+      return invoke<AccountProfile>('set_profile_avatar', { token, source });
+    });
   }
 
   profileAvatar(token: string): Promise<AvatarPayload | null> {
@@ -101,13 +115,45 @@ export class TauriBridgeService {
     return invoke<string>('default_storage_directory');
   }
 
+  validateSystemPath(path: string, access: 'read' | 'write', requireDirectory = true): Promise<PathValidation> {
+    return invoke<PathValidation>('validate_system_path', { path, access, requireDirectory });
+  }
+
   chooseStorageDirectory(): Promise<string | null> {
-    return open({
+    return this.pickDirectory('Choisir le dossier FileFlow', true);
+  }
+
+  async pickFiles(extensions: string[] = []): Promise<string[]> {
+    const normalized = [...new Set(extensions
+      .map((value) => value.trim().replace(/^\./, '').toLowerCase())
+      .filter(Boolean))];
+    const selection = await this.withNativeDialog(() => open({
+      multiple: true,
+      directory: false,
+      title: normalized.length ? 'Choisir des fichiers compatibles' : 'Choisir des fichiers',
+      filters: normalized.length ? [{ name: 'Formats compatibles', extensions: normalized }] : undefined,
+    }));
+    return normalizeDialogSelection(selection);
+  }
+
+  async pickDirectories(title = 'Choisir des dossiers'): Promise<string[]> {
+    const selection = await this.withNativeDialog(() => open({
+      multiple: true,
       directory: true,
+      title,
+      canCreateDirectories: false,
+    }));
+    return normalizeDialogSelection(selection);
+  }
+
+  async pickDirectory(title: string, canCreateDirectories = true): Promise<string | null> {
+    const selection = await this.withNativeDialog(() => open({
       multiple: false,
-      title: 'Choisir le dossier FileFlow',
-      canCreateDirectories: true,
-    });
+      directory: true,
+      title,
+      canCreateDirectories,
+    }));
+    return typeof selection === 'string' ? selection : null;
   }
 
   healthCheck(): Promise<HealthResponse> {
@@ -164,7 +210,7 @@ export class TauriBridgeService {
   }
 
   saveJobOutputCopy(jobId: string, index = 0): Promise<string | null> {
-    return invoke<string | null>('save_job_output_copy', { jobId, index });
+    return this.withNativeDialog(() => invoke<string | null>('save_job_output_copy', { jobId, index }));
   }
 
   history(limit = 100): Promise<HistoryEntry[]> {
@@ -300,4 +346,13 @@ export class TauriBridgeService {
   previewAsset(workspaceId: string, assetId: string): Promise<PreparedFilePreview> {
     return invoke<PreparedFilePreview>('preview_asset', { workspaceId, assetId });
   }
+
+  private async withNativeDialog<T>(operation: () => Promise<T>): Promise<T | null> {
+    return this.nativeDialogs.run(operation);
+  }
+}
+
+function normalizeDialogSelection(selection: string | string[] | null): string[] {
+  if (selection === null) return [];
+  return Array.isArray(selection) ? selection : [selection];
 }

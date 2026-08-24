@@ -21,6 +21,7 @@ import { WorkspaceStore } from './features/workspace/data-access/workspace.store
 import { UpdateService } from './core/update/update.service';
 import { TauriBridgeService } from './core/ipc/tauri-bridge.service';
 import { UiMemoryService } from './core/state/ui-memory.service';
+import { ConversionIntentStore } from './core/conversion/conversion-intent.store';
 import { filter } from 'rxjs';
 
 @Component({
@@ -35,6 +36,7 @@ export class AppComponent {
   private readonly router = inject(Router);
   private readonly bridge = inject(TauriBridgeService);
   private readonly uiMemory = inject(UiMemoryService);
+  private readonly conversionIntent = inject(ConversionIntentStore);
   protected readonly workspaceStore = inject(WorkspaceStore);
   protected readonly auth = inject(AuthStore);
   protected readonly capabilities = inject(CapabilityStore);
@@ -157,14 +159,18 @@ export class AppComponent {
   }
 
   protected choosePaletteAction(action: ActionDescriptor): void {
-    this.workspaceStore.setPendingAction(action.id);
+    const spec = this.capabilities.uiSpec(action.id);
+    this.conversionIntent.start({
+      actionId: action.id,
+      sourceFormats: spec?.sourceFormats ?? [],
+      targetFormat: spec?.defaultTarget ?? action.outputFormat ?? null,
+      inputMode: spec?.inputMode ?? 'files',
+      uiKind: spec?.kind ?? 'generic',
+      parameters: {},
+    });
+    this.workspaceStore.startNewConversion(action.id);
     this.closePalette();
-    if (this.workspaceStore.hasWorkspace()) {
-      this.workspaceStore.openAction(action.id);
-      void this.router.navigate(['/workspace']);
-    } else {
-      void this.router.navigate(['/']);
-    }
+    void this.router.navigate(['/conversion', action.id]);
   }
 
   protected runtimeLabel(): string {
@@ -201,7 +207,7 @@ export class AppComponent {
           this.workspaceStore.setDragActive(false);
           const paths = event.payload.paths;
           if (paths.length > 0) {
-            void this.router.navigate(['/workspace']);
+            void this.router.navigate(['/conversion']);
             void this.workspaceStore.start(paths);
           }
           break;
