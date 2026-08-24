@@ -53,6 +53,15 @@ jobs:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
+          $certificateMissing = [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE)
+          $passwordMissing = [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)
+          if ($certificateMissing -and $passwordMissing) {
+            Write-Host 'No Authenticode certificate configured; producing unsigned Windows installers with signed Tauri updater artifacts.'
+            exit 0
+          }
+          if ($certificateMissing -or $passwordMissing) {
+            throw 'WINDOWS_CERTIFICATE and WINDOWS_CERTIFICATE_PASSWORD must be configured together'
+          }
           New-Item -ItemType Directory -Force -Path certificate | Out-Null
           [IO.File]::WriteAllBytes('certificate/certificate.pfx',[Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
           $password=ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
@@ -77,7 +86,11 @@ jobs:
       - name: Validate release
         shell: pwsh
         run: |
-          node scripts/release/validate-distribution.mjs --target x86_64-pc-windows-msvc --strict
+          $validationArgs = @('--target', 'x86_64-pc-windows-msvc')
+          if (-not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_THUMBPRINT)) {
+            $validationArgs += '--strict'
+          }
+          node scripts/release/validate-distribution.mjs @validationArgs
           node scripts/release/smoke-packaged-app.mjs --target x86_64-pc-windows-msvc
           node scripts/release/collect-artifacts.mjs --target x86_64-pc-windows-msvc
       - uses: actions/upload-artifact@v7

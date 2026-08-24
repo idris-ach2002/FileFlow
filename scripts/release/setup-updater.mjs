@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -37,9 +37,10 @@ if (existsSync(keyPath) !== existsSync(publicKeyPath)) {
 if (!existsSync(keyPath) || !existsSync(publicKeyPath)) {
   mkdirSync(dirname(keyPath), { recursive: true, mode: 0o700 });
   console.log(`\n[updater] Génération de la paire de clés dans ${keyPath}`);
-  run('pnpm', ['exec', 'tauri', 'signer', 'generate', '-w', keyPath], {
+  run('pnpm', ['exec', 'tauri', 'signer', 'generate', '--ci', '--password', password, '-w', keyPath], {
     stdio: 'inherit',
     env: { ...process.env, TAURI_SIGNING_PRIVATE_KEY_PASSWORD: password },
+    displayArgs: ['exec', 'tauri', 'signer', 'generate', '--ci', '--password', '***', '-w', keyPath],
   });
 }
 
@@ -50,6 +51,7 @@ if (!existsSync(keyPath) || !existsSync(publicKeyPath)) {
 const privateKey = readFileSync(keyPath, 'utf8').trim();
 const publicKey = readFileSync(publicKeyPath, 'utf8').trim();
 if (!privateKey || !publicKey) fail('La paire de clés Updater est vide.');
+validatePassword();
 
 console.log(`\n[updater] Configuration sécurisée de ${repository}`);
 setSecret('TAURI_SIGNING_PRIVATE_KEY', privateKey);
@@ -101,6 +103,27 @@ function setSecret(name, value) {
   });
 }
 
+function validatePassword() {
+  const validationRoot = mkdtempSync(join(tmpdir(), 'fileflow-updater-key-'));
+  const probePath = join(validationRoot, 'probe.txt');
+  writeFileSync(probePath, 'FileFlow updater key validation\n');
+  const result = spawnSync('pnpm', [
+    'exec', 'tauri', 'signer', 'sign',
+    '--private-key-path', keyPath,
+    '--password', password,
+    probePath,
+  ], {
+    cwd: root,
+    stdio: 'ignore',
+    env: { ...process.env, TAURI_SIGNING_PRIVATE_KEY_PASSWORD: password },
+  });
+  rmSync(validationRoot, { recursive: true, force: true });
+  if (result.error || result.status !== 0) {
+    fail('La phrase secrète fournie ne déverrouille pas la clé privée existante. Aucun secret GitHub n’a été modifié.');
+  }
+  console.log('[updater] Phrase secrète et clé privée vérifiées.');
+}
+
 function requireCommand(command, args) {
   const result = spawnSync(command, args, { cwd: root, stdio: 'ignore' });
   if (result.status !== 0) fail(`Commande indisponible ou non authentifiée : ${command} ${args.join(' ')}`);
@@ -114,7 +137,7 @@ function run(command, args, options = {}) {
     env: options.env || process.env,
   });
   if (result.error) fail(result.error.message);
-  if (result.status !== 0) fail(`Échec : ${command} ${args.join(' ')}`);
+  if (result.status !== 0) fail(`Échec : ${command} ${(options.displayArgs || args).join(' ')}`);
 }
 
 function fail(message) {

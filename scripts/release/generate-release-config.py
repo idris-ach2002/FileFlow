@@ -49,7 +49,12 @@ def require(name: str) -> str:
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--target", default=None)
-parser.add_argument("--strict", action="store_true", help="require production signing/updater configuration")
+parser.add_argument("--strict", action="store_true", help="require production updater signing configuration")
+parser.add_argument(
+    "--require-platform-signing",
+    action="store_true",
+    help="also require native macOS/Windows code-signing credentials",
+)
 args = parser.parse_args()
 target = args.target or host_target()
 
@@ -72,10 +77,15 @@ if "apple-darwin" in target:
     macos = bundle.setdefault("macOS", {})
     assert isinstance(macos, dict)
     signing_identity = os.environ.get("APPLE_SIGNING_IDENTITY", "").strip()
-    if args.strict:
-        if not signing_identity or signing_identity == "-":
-            raise SystemExit("strict macOS release requires a Developer ID Application identity")
-        require("APPLE_ID"); require("APPLE_PASSWORD"); require("APPLE_TEAM_ID")
+    if args.require_platform_signing and (not signing_identity or signing_identity == "-"):
+        raise SystemExit("platform-signed macOS release requires a Developer ID Application identity")
+    notarization = [
+        os.environ.get("APPLE_ID", "").strip(),
+        os.environ.get("APPLE_PASSWORD", "").strip(),
+        os.environ.get("APPLE_TEAM_ID", "").strip(),
+    ]
+    if any(notarization) and not all(notarization):
+        raise SystemExit("macOS notarization credentials are incomplete")
     macos["signingIdentity"] = signing_identity or "-"
 
 config: dict[str, object] = {"bundle": bundle}
@@ -87,15 +97,15 @@ config["plugins"] = {"updater": ({
 
 thumbprint = os.environ.get("WINDOWS_CERTIFICATE_THUMBPRINT", "").strip()
 if "windows" in target:
-    if args.strict and not thumbprint:
-        raise SystemExit("strict Windows release requires WINDOWS_CERTIFICATE_THUMBPRINT")
+    if args.require_platform_signing and not thumbprint:
+        raise SystemExit("platform-signed Windows release requires WINDOWS_CERTIFICATE_THUMBPRINT")
     if thumbprint:
         windows = bundle.setdefault("windows", {})
         assert isinstance(windows, dict)
         windows["certificateThumbprint"] = thumbprint
         windows["digestAlgorithm"] = "sha256"
         timestamp = os.environ.get("WINDOWS_TIMESTAMP_URL", "").strip()
-        if args.strict and not timestamp:
+        if args.require_platform_signing and not timestamp:
             raise SystemExit("strict Windows release requires WINDOWS_TIMESTAMP_URL")
         if timestamp: windows["timestampUrl"] = timestamp
 

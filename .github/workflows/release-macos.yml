@@ -56,6 +56,14 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
+          if [[ -z "$APPLE_CERTIFICATE" && -z "$APPLE_CERTIFICATE_PASSWORD" ]]; then
+            echo "No Developer ID certificate configured; using ad-hoc macOS signing."
+            exit 0
+          fi
+          if [[ -z "$APPLE_CERTIFICATE" || -z "$APPLE_CERTIFICATE_PASSWORD" ]]; then
+            echo "APPLE_CERTIFICATE and APPLE_CERTIFICATE_PASSWORD must be configured together." >&2
+            exit 2
+          fi
           KEYCHAIN_PASSWORD=$(openssl rand -hex 24)
           python3 - <<'PY'
           import base64, os
@@ -93,8 +101,16 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: pnpm exec tauri build --target '${{ matrix.target }}' --bundles app,dmg --config src-tauri/tauri.release.conf.json
       - name: Validate release
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          node scripts/release/validate-distribution.mjs --target '${{ matrix.target }}' --strict
+          VALIDATION_ARGS=()
+          if [[ -n "$APPLE_ID" && -n "$APPLE_PASSWORD" && -n "$APPLE_TEAM_ID" ]]; then
+            VALIDATION_ARGS+=(--strict)
+          fi
+          node scripts/release/validate-distribution.mjs --target '${{ matrix.target }}' "${VALIDATION_ARGS[@]}"
           node scripts/release/smoke-packaged-app.mjs --target '${{ matrix.target }}'
           node scripts/release/collect-artifacts.mjs --target '${{ matrix.target }}'
       - uses: actions/upload-artifact@v7
