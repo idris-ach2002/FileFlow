@@ -226,8 +226,8 @@ impl WindowsJob {
         use windows_sys::Win32::{
             Foundation::CloseHandle,
             System::JobObjects::{
-                AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
                 SetInformationJobObject,
             },
         };
@@ -3774,13 +3774,8 @@ async fn stream_tar_to_zstd(
     drop(writer);
 
     send_bytes_progress(events, job_id, processed, total_bytes, output, started).await?;
-    let result = wait_for_managed_output(
-        &mut child,
-        "zstd",
-        cancellation,
-        process_timeout(zstd),
-    )
-    .await?;
+    let result =
+        wait_for_managed_output(&mut child, "zstd", cancellation, process_timeout(zstd)).await?;
     if !result.status.success() {
         return Err(ExecutionError::ProcessFailed {
             program: "zstd".into(),
@@ -6198,13 +6193,9 @@ async fn capture_process(
         .unwrap_or("engine")
         .to_owned();
     let mut child = ManagedChild::spawn(&mut command)?;
-    let output = wait_for_managed_output(
-        &mut child,
-        &program,
-        cancellation,
-        process_timeout(engine),
-    )
-    .await?;
+    let output =
+        wait_for_managed_output(&mut child, &program, cancellation, process_timeout(engine))
+            .await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(ExecutionError::ProcessFailed {
@@ -6239,13 +6230,9 @@ async fn run_process_with_env(
         .unwrap_or("engine")
         .to_owned();
     let mut child = ManagedChild::spawn(&mut command)?;
-    let output = wait_for_managed_output(
-        &mut child,
-        &program,
-        cancellation,
-        process_timeout(engine),
-    )
-    .await?;
+    let output =
+        wait_for_managed_output(&mut child, &program, cancellation, process_timeout(engine))
+            .await?;
     if output.status.success() {
         return Ok(());
     }
