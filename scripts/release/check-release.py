@@ -126,6 +126,13 @@ def main() -> None:
         if "tauri build" not in text:
             raise SystemExit(f"{rel} must build the FileFlow application")
 
+    release_macos = (ROOT / ".github/workflows/release-macos.yml").read_text()
+    if "APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}" in release_macos:
+        raise SystemExit(
+            "macOS release must not export an empty APPLE_SIGNING_IDENTITY; "
+            "the generated Tauri config provides the ad-hoc '-' identity"
+        )
+
     atomic_release = require_tokens(".github/workflows/fileflow-release.yml", [
         "tags: ['v*.*.*']", "needs: [linux, macos, windows]", "generate-updater-manifest.mjs",
         "verify-release.mjs", "gh release create",
