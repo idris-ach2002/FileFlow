@@ -3,6 +3,7 @@ import { getVersion } from '@tauri-apps/api/app';
 import { isTauri } from '@tauri-apps/api/core';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { check } from '@tauri-apps/plugin-updater';
+import { classifyUpdateFailure, friendlyUpdateError } from './update-errors';
 
 type UpdateState = 'idle' | 'checking' | 'available' | 'downloading' | 'installing' | 'current' | 'unavailable' | 'error';
 
@@ -59,7 +60,7 @@ export class UpdateService {
       this.state.set('available');
     } catch (error) {
       const rawMessage = error instanceof Error ? error.message : String(error);
-      if (this.isConfigurationError(rawMessage)) {
+      if (classifyUpdateFailure(rawMessage) === 'configuration') {
         // A development build may deliberately have no updater key/endpoint.
         // Present an actionable status instead of leaking the plugin's raw
         // “Updater does not have any endpoints set” exception to the UI.
@@ -71,11 +72,11 @@ export class UpdateService {
         // A transient network or GitHub failure must never interrupt startup or
         // leave a permanent red banner. The settings page can retry manually.
         this.state.set('idle');
-        this.message.set(this.friendlyError(rawMessage));
+        this.message.set(friendlyUpdateError(rawMessage));
         return;
       }
       this.state.set('error');
-      this.message.set(this.friendlyError(rawMessage));
+      this.message.set(friendlyUpdateError(rawMessage));
     }
   }
 
@@ -108,7 +109,7 @@ export class UpdateService {
       await relaunch();
     } catch (error) {
       this.state.set('error');
-      this.message.set(this.friendlyError(error instanceof Error ? error.message : String(error)));
+      this.message.set(friendlyUpdateError(error instanceof Error ? error.message : String(error)));
     }
   }
 
@@ -119,20 +120,4 @@ export class UpdateService {
     }
   }
 
-  private isConfigurationError(message: string): boolean {
-    return /does not have any endpoints|no updater endpoints?|endpoint.*not configured|pubkey|public key.*(?:missing|empty|configured)/i.test(message);
-  }
-
-  private friendlyError(message: string): string {
-    if (/404|not found/i.test(message)) {
-      return 'Aucune publication stable n’est encore disponible sur GitHub Releases.';
-    }
-    if (/network|dns|connect|timed? ?out|offline|fetch|request/i.test(message)) {
-      return 'Impossible de joindre le service de mise à jour. Vérifiez la connexion puis réessayez.';
-    }
-    if (/signature|verify|verification/i.test(message)) {
-      return 'La signature de cette mise à jour n’a pas pu être vérifiée. L’installation a été bloquée.';
-    }
-    return `La vérification a échoué : ${message}`;
-  }
 }

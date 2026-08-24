@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { verifyLiveUpdater } from './verify-live-updater.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const node = process.execPath;
@@ -19,6 +21,7 @@ function put(path, value) {
 
 const temp = mkdtempSync(join(tmpdir(), 'fileflow-release-tooling-'));
 const root = join(temp, 'release');
+let server;
 try {
   const macArm = join(root, 'aarch64-apple-darwin');
   const macIntel = join(root, 'x86_64-apple-darwin');
@@ -58,11 +61,48 @@ try {
   run('scripts/release/verify-release.mjs', ['--root', root, '--latest', latest, '--checksums', checksums]);
   run('scripts/release/verify-updater-transition.mjs', ['--from', '1.0.1', '--to', '1.0.2', '--manifest', latest]);
 
+  let liveManifest;
+  server = createServer((request, response) => {
+    if (request.url?.startsWith('/latest.json')) {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify(liveManifest));
+      return;
+    }
+    if (request.url?.startsWith('/artifacts/')) {
+      response.writeHead(request.headers.range ? 206 : 200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': '1',
+        ...(request.headers.range ? { 'Content-Range': 'bytes 0-0/1' } : {}),
+      });
+      response.end('x');
+      return;
+    }
+    response.writeHead(404);
+    response.end('Not Found');
+  });
+  await new Promise((resolveListen, rejectListen) => {
+    server.once('error', rejectListen);
+    server.listen(0, '127.0.0.1', resolveListen);
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('unable to start updater self-test server');
+  liveManifest = JSON.parse(readFileSync(latest, 'utf8'));
+  for (const [platform, item] of Object.entries(liveManifest.platforms)) {
+    item.url = `http://127.0.0.1:${address.port}/artifacts/${platform}`;
+    item.signature = `synthetic-signature-${platform}`;
+  }
+  await verifyLiveUpdater({
+    endpoint: `http://127.0.0.1:${address.port}/latest.json`,
+    expectedVersion: '1.0.2',
+    requiredPlatforms: Object.keys(liveManifest.platforms),
+  });
+
   const sumLines = readFileSync(checksums, 'utf8').trim().split(/\r?\n/);
   if (sumLines.some((line) => /[\\/]/.test(line.split('  ')[1] || ''))) {
     throw new Error('SHA256SUMS must use flat GitHub Release asset names');
   }
   console.log('[self-test] release tooling + synthetic updater 1.0.1 -> 1.0.2 passed');
 } finally {
+  if (server) await new Promise((resolveClose) => server.close(resolveClose));
   rmSync(temp, { recursive: true, force: true });
 }

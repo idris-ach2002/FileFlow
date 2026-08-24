@@ -80,29 +80,39 @@ jobs:
           IDENTITY=$(security find-identity -v -p codesigning fileflow-build.keychain | awk -F'"' '/Developer ID Application/ {print $2; exit}')
           test -n "$IDENTITY"
           echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+      - name: Configure optional notarization credentials
+        env:
+          INPUT_APPLE_ID: ${{ secrets.APPLE_ID }}
+          INPUT_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          INPUT_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [[ -z "$INPUT_APPLE_ID" && -z "$INPUT_APPLE_PASSWORD" && -z "$INPUT_APPLE_TEAM_ID" ]]; then
+            echo "No Apple notarization credentials configured; notarization disabled."
+            exit 0
+          fi
+          if [[ -z "$INPUT_APPLE_ID" || -z "$INPUT_APPLE_PASSWORD" || -z "$INPUT_APPLE_TEAM_ID" ]]; then
+            echo "APPLE_ID, APPLE_PASSWORD and APPLE_TEAM_ID must be configured together." >&2
+            exit 2
+          fi
+          {
+            echo "APPLE_ID=$INPUT_APPLE_ID"
+            echo "APPLE_PASSWORD=$INPUT_APPLE_PASSWORD"
+            echo "APPLE_TEAM_ID=$INPUT_APPLE_TEAM_ID"
+          } >> "$GITHUB_ENV"
       - name: Generate production config
         env:
           TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           FILEFLOW_UPDATE_ENDPOINT: ${{ vars.FILEFLOW_UPDATE_ENDPOINT }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: python scripts/release/generate-release-config.py --target '${{ matrix.target }}' --strict
       - name: Build signed/notarized release
         env:
+          CI: 'true'
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: pnpm exec tauri build --target '${{ matrix.target }}' --bundles app,dmg --config src-tauri/tauri.release.conf.json
       - name: Validate release
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           VALIDATION_ARGS=()
           if [[ -n "$APPLE_ID" && -n "$APPLE_PASSWORD" && -n "$APPLE_TEAM_ID" ]]; then

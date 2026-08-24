@@ -1,6 +1,6 @@
 {
   "name": "fileflow-workspace",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "private": true,
   "scripts": {
     "frontend:dev": "pnpm --filter @fileflow/frontend start",
@@ -36,7 +36,9 @@
     "release:verify": "node scripts/release/verify-release.mjs",
     "release:updater-manifest": "node scripts/release/generate-updater-manifest.mjs",
     "release:test-updater": "node scripts/release/verify-updater-transition.mjs",
+    "release:verify-live-updater": "node scripts/release/verify-live-updater.mjs",
     "updater:setup": "node scripts/release/setup-updater.mjs",
+    "release:preflight-macos": "bash scripts/release/preflight-macos.sh",
     "release:normalize": "node scripts/release/normalize-artifacts.mjs",
     "release:self-test": "node scripts/release/test-release-tooling.mjs",
     "runtime:doctor": "bash scripts/runtime/doctor.sh",

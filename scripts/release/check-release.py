@@ -51,6 +51,7 @@ def main() -> None:
         "scripts/runtime/doctor.sh", "scripts/runtime/doctor.ps1",
         "scripts/release/generate-release-config.py", "scripts/release/publish-git-payload.py",
         "scripts/release/smoke-packaged-app.mjs", "scripts/release/collect-artifacts.mjs",
+        "scripts/release/preflight-macos.sh", "scripts/release/verify-live-updater.mjs",
         "src-tauri/tauri.windows.conf.json", "src-tauri/tauri.macos.conf.json", "src-tauri/tauri.linux.conf.json",
         ".github/workflows/ci.yml", ".github/workflows/native-linux.yml",
         ".github/workflows/native-macos.yml", ".github/workflows/native-windows.yml",
@@ -127,15 +128,36 @@ def main() -> None:
             raise SystemExit(f"{rel} must build the FileFlow application")
 
     release_macos = (ROOT / ".github/workflows/release-macos.yml").read_text()
+    if "CI: 'true'" not in release_macos:
+        raise SystemExit("macOS release must force Tauri's non-Finder DMG mode with CI=true")
     if "APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}" in release_macos:
         raise SystemExit(
             "macOS release must not export an empty APPLE_SIGNING_IDENTITY; "
             "the generated Tauri config provides the ad-hoc '-' identity"
         )
+    for credential in ["APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID"]:
+        direct_secret_reference = (
+            r"(?m)^[ \t]*"
+            + re.escape(credential)
+            + r":[ \t]*\$\{\{[ \t]*secrets\."
+            + re.escape(credential)
+            + r"[ \t]*\}\}[ \t]*$"
+        )
+        if re.search(direct_secret_reference, release_macos):
+            raise SystemExit(
+                f"macOS release must stage optional {credential} through a non-Tauri INPUT_ variable; "
+                "exporting an empty Tauri credential enables notarization with invalid values"
+            )
+    for token in [
+        "INPUT_APPLE_ID", "INPUT_APPLE_PASSWORD", "INPUT_APPLE_TEAM_ID",
+        "No Apple notarization credentials configured; notarization disabled.",
+    ]:
+        if token not in release_macos:
+            raise SystemExit(f"macOS release missing optional notarization guard: {token}")
 
     atomic_release = require_tokens(".github/workflows/fileflow-release.yml", [
         "tags: ['v*.*.*']", "needs: [linux, macos, windows]", "generate-updater-manifest.mjs",
-        "verify-release.mjs", "gh release create",
+        "verify-release.mjs", "gh release create", "verify-live-updater.mjs",
     ])
     if "workflow_run" in atomic_release or "actions/workflows" in atomic_release:
         raise SystemExit("atomic release must consume reusable build jobs, not query workflow history")

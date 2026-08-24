@@ -65,3 +65,12 @@ jobs:
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && { echo "Release already exists" >&2; exit 2; } || true
           mapfile -d '' ASSETS < <(find dist/release -type f -print0 | sort -z)
           gh release create "$GITHUB_REF_NAME" "${ASSETS[@]}" latest.json SHA256SUMS --verify-tag --title "FileFlow ${GITHUB_REF_NAME#v}" --notes "Release atomique signée pour macOS, Windows et Linux. Les moteurs de conversion restent installés localement par install.sh/install.ps1. Provenance: ${GITHUB_SHA}."
+      - name: Verify public updater endpoint and artifacts
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          node scripts/release/verify-live-updater.mjs \
+            --expected-version "$VERSION" \
+            --require-platforms darwin-aarch64,darwin-x86_64,windows-x86_64,linux-x86_64,linux-aarch64 \
+            --attempts 18 \
+            --delay-ms 5000
