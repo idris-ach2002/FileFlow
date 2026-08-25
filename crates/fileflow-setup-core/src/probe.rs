@@ -128,8 +128,14 @@ pub fn application_candidates(platform: Platform) -> Vec<PathBuf> {
                 .unwrap_or_else(|| PathBuf::from(r"C:\Program Files"));
             vec![
                 local.join("Programs").join("FileFlow").join("FileFlow.exe"),
+                local
+                    .join("Programs")
+                    .join("FileFlow")
+                    .join("fileflow-desktop.exe"),
                 local.join("FileFlow").join("FileFlow.exe"),
+                local.join("FileFlow").join("fileflow-desktop.exe"),
                 program_files.join("FileFlow").join("FileFlow.exe"),
+                program_files.join("FileFlow").join("fileflow-desktop.exe"),
             ]
         }
     }
@@ -189,17 +195,56 @@ fn platform_command_candidates(command: &str) -> Vec<PathBuf> {
 }
 
 fn is_fileflow_running(platform: Platform) -> bool {
-    let (program, args): (&str, &[&str]) = match platform {
-        Platform::Windows => ("tasklist", &["/FI", "IMAGENAME eq FileFlow.exe", "/NH"]),
-        Platform::Macos | Platform::Linux => ("pgrep", &["-f", "fileflow-desktop"]),
-    };
-    Command::new(program)
-        .args(args)
-        .output()
-        .is_ok_and(|output| {
-            output.status.success()
-                && !String::from_utf8_lossy(&output.stdout)
-                    .to_ascii_lowercase()
-                    .contains("no tasks")
-        })
+    match platform {
+        Platform::Windows => Command::new("tasklist.exe")
+            .args(["/FO", "CSV", "/NH"])
+            .output()
+            .is_ok_and(|output| {
+                output.status.success()
+                    && windows_tasklist_contains_fileflow(&String::from_utf8_lossy(&output.stdout))
+            }),
+        Platform::Macos | Platform::Linux => Command::new("pgrep")
+            .args(["-f", "fileflow-desktop"])
+            .status()
+            .is_ok_and(|status| status.success()),
+    }
+}
+
+fn windows_tasklist_contains_fileflow(output: &str) -> bool {
+    output.lines().any(|line| {
+        let line = line.trim().trim_start_matches('\u{feff}').trim();
+        let image_name = if let Some(rest) = line.strip_prefix('"') {
+            rest.split('"').next().unwrap_or_default()
+        } else {
+            line.split(',').next().unwrap_or_default().trim_matches('"')
+        };
+        matches!(
+            image_name.to_ascii_lowercase().as_str(),
+            "fileflow.exe" | "fileflow-desktop.exe"
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::windows_tasklist_contains_fileflow;
+
+    #[test]
+    fn windows_process_detection_is_locale_independent_and_ignores_setup() {
+        assert!(!windows_tasklist_contains_fileflow(
+            "INFO: Aucune tâche en cours ne correspond aux critères spécifiés."
+        ));
+        assert!(!windows_tasklist_contains_fileflow(
+            "\"fileflow-setup.exe\",\"3500\",\"Console\",\"1\",\"42,000 K\""
+        ));
+        assert!(!windows_tasklist_contains_fileflow(
+            "\"FileFlowSetupCLI_x86_64-pc-windows-msvc.exe\",\"3501\",\"Console\",\"1\",\"3,000 K\""
+        ));
+        assert!(windows_tasklist_contains_fileflow(
+            "\"FileFlow.exe\",\"3510\",\"Console\",\"1\",\"120,000 K\""
+        ));
+        assert!(windows_tasklist_contains_fileflow(
+            "\"fileflow-desktop.exe\",\"3511\",\"Console\",\"1\",\"120,000 K\""
+        ));
+    }
 }

@@ -524,7 +524,7 @@ impl SystemSetupAdapter {
             }
             return Err(error.to_string());
         }
-        if let Err(error) = install_linux_integration(&destination).await {
+        if let Err(error) = install_linux_integration(&destination, &self.resource_dir).await {
             let _ = remove_path_if_exists(&destination).await;
             if backup.exists() {
                 let _ = fs::rename(&backup, &destination).await;
@@ -1114,14 +1114,19 @@ impl SystemSetupAdapter {
     }
 
     async fn stop_application(&self) -> Result<(), String> {
-        let (program, arguments): (&str, &[&str]) = match self.initial.platform {
-            Platform::Macos | Platform::Linux => ("pkill", &["-f", "fileflow-desktop"]),
-            Platform::Windows => ("taskkill.exe", &["/IM", "FileFlow.exe", "/T", "/F"]),
-        };
-        let mut command = Command::new(program);
-        command.args(arguments);
-        hide_process(&mut command);
-        let _ = command.status().await;
+        if self.initial.platform == Platform::Windows {
+            for image_name in ["FileFlow.exe", "fileflow-desktop.exe"] {
+                let mut command = Command::new("taskkill.exe");
+                command.args(["/IM", image_name, "/T", "/F"]);
+                hide_process(&mut command);
+                let _ = command.status().await;
+            }
+        } else {
+            let mut command = Command::new("pkill");
+            command.args(["-f", "fileflow-desktop"]);
+            hide_process(&mut command);
+            let _ = command.status().await;
+        }
         tokio::time::sleep(Duration::from_millis(500)).await;
         Ok(())
     }
@@ -1475,13 +1480,27 @@ impl SystemSetupAdapter {
         }
         if self.initial.platform == Platform::Linux {
             let home = home_dir();
+            let local_share = home.join(".local").join("share");
+            let applications = local_share.join("applications");
+            let hicolor = local_share.join("icons").join("hicolor");
             for path in [
                 home.join(".local/bin/fileflow"),
-                home.join(".local/share/applications/fileflow.desktop"),
+                applications.join("fileflow.desktop"),
+                hicolor.join("512x512/apps/fileflow.png"),
             ] {
                 if let Err(error) = remove_path_if_exists(&path).await {
                     leftovers.push(format!("{}: {error}", path.display()));
                 }
+            }
+            if command_exists("update-desktop-database") {
+                let _ = run_checked("update-desktop-database", &[applications.as_os_str()]).await;
+            }
+            if command_exists("gtk-update-icon-cache") {
+                let _ = run_checked(
+                    "gtk-update-icon-cache",
+                    &[OsStr::new("-f"), OsStr::new("-t"), hicolor.as_os_str()],
+                )
+                .await;
             }
         }
         if packages_preserved.is_empty()
@@ -1963,16 +1982,26 @@ async fn schedule_maintenance_removal(path: &Path) -> Result<(), String> {
     }
 }
 
-async fn install_linux_integration(app: &Path) -> Result<(), String> {
+async fn install_linux_integration(app: &Path, resource_dir: &Path) -> Result<(), String> {
     let home = home_dir();
+    let local_share = home.join(".local").join("share");
     let bin = home.join(".local").join("bin");
-    let applications = home.join(".local").join("share").join("applications");
+    let applications = local_share.join("applications");
+    let icons = local_share
+        .join("icons")
+        .join("hicolor")
+        .join("512x512")
+        .join("apps");
     fs::create_dir_all(&bin)
         .await
         .map_err(|error| error.to_string())?;
     fs::create_dir_all(&applications)
         .await
         .map_err(|error| error.to_string())?;
+    fs::create_dir_all(&icons)
+        .await
+        .map_err(|error| error.to_string())?;
+
     let wrapper = bin.join("fileflow");
     fs::write(
         &wrapper,
@@ -1984,15 +2013,40 @@ async fn install_linux_integration(app: &Path) -> Result<(), String> {
     .await
     .map_err(|error| error.to_string())?;
     run_checked("chmod", &[OsStr::new("+x"), wrapper.as_os_str()]).await?;
+
+    let icon_source = find_resource(resource_dir, "fileflow-desktop-icon.png")
+        .or_else(|| find_resource(resource_dir, "icon.png"))
+        .ok_or_else(|| "icône FileFlow absente des ressources du Setup".to_string())?;
+    let icon_destination = icons.join("fileflow.png");
+    fs::copy(&icon_source, &icon_destination)
+        .await
+        .map_err(|error| format!("copie de l’icône FileFlow impossible: {error}"))?;
+
+    let desktop_path = applications.join("fileflow.desktop");
     fs::write(
-        applications.join("fileflow.desktop"),
+        &desktop_path,
         format!(
-            "[Desktop Entry]\nType=Application\nName=FileFlow\nExec={}\nTerminal=false\nCategories=Utility;FileTools;\n",
+            "[Desktop Entry]\nVersion=1.0\nType=Application\nName=FileFlow\nComment=Conversion, compression et organisation locale de fichiers\nExec=\"{}\" %U\nIcon=fileflow\nTerminal=false\nCategories=Utility;Office;FileTools;\nStartupNotify=true\nStartupWMClass=FileFlow\nKeywords=PDF;Image;Video;Archive;OCR;Conversion;\n",
             wrapper.display()
         ),
     )
     .await
     .map_err(|error| error.to_string())?;
+    run_checked("chmod", &[OsStr::new("+x"), desktop_path.as_os_str()]).await?;
+
+    // Les caches ne sont pas requis par la spécification freedesktop, mais les
+    // rafraîchir lorsqu'ils existent rend l'icône et le lanceur visibles tout de suite.
+    if command_exists("update-desktop-database") {
+        let _ = run_checked("update-desktop-database", &[applications.as_os_str()]).await;
+    }
+    if command_exists("gtk-update-icon-cache") {
+        let hicolor = local_share.join("icons").join("hicolor");
+        let _ = run_checked(
+            "gtk-update-icon-cache",
+            &[OsStr::new("-f"), OsStr::new("-t"), hicolor.as_os_str()],
+        )
+        .await;
+    }
     Ok(())
 }
 
@@ -2573,7 +2627,47 @@ fn hide_process(command: &mut Command) {
 }
 
 #[cfg(not(windows))]
-fn hide_process(_command: &mut Command) {}
+fn hide_process(command: &mut Command) {
+    sanitize_appimage_environment(command);
+}
+
+#[cfg(not(windows))]
+fn sanitize_appimage_environment(command: &mut Command) {
+    // FileFlow Setup peut lui-même être lancé depuis une AppImage. Dans ce cas,
+    // le runtime AppImage enrichit LD_LIBRARY_PATH/GIO avec ses bibliothèques.
+    // Un binaire système enfant (curl, apt, dnf, pgrep...) ne doit jamais les
+    // réutiliser : cela provoque des incompatibilités ABI comme libcurl/nghttp2.
+    if std::env::var_os("APPIMAGE").is_none() && std::env::var_os("APPDIR").is_none() {
+        return;
+    }
+
+    let original_ld = std::env::var_os("APPIMAGE_ORIGINAL_LD_LIBRARY_PATH")
+        .or_else(|| std::env::var_os("LD_LIBRARY_PATH_ORIG"));
+    if let Some(value) = original_ld.filter(|value| !value.is_empty()) {
+        command.env("LD_LIBRARY_PATH", value);
+    } else {
+        command.env_remove("LD_LIBRARY_PATH");
+    }
+
+    for variable in [
+        "LD_PRELOAD",
+        "GIO_EXTRA_MODULES",
+        "GI_TYPELIB_PATH",
+        "GTK_PATH",
+        "GDK_PIXBUF_MODULE_FILE",
+        "GST_PLUGIN_PATH",
+        "GST_PLUGIN_SYSTEM_PATH",
+        "QT_PLUGIN_PATH",
+        "QML2_IMPORT_PATH",
+        "PYTHONHOME",
+        "PYTHONPATH",
+    ] {
+        command.env_remove(variable);
+    }
+    for variable in ["APPDIR", "APPIMAGE", "ARGV0"] {
+        command.env_remove(variable);
+    }
+}
 
 #[cfg(test)]
 mod tests {

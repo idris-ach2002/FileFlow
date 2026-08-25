@@ -118,8 +118,10 @@ function validManifest(manifest, repository) {
   const releasePrefix = `https://github.com/${repository}/releases/download/v${manifest.version}/`;
   return required.every((platform) => {
     const downloads = manifest.platforms[platform];
+    const variants = Object.values(downloads?.setupVariants || {});
     return validArtifact(downloads?.application, releasePrefix)
       && validArtifact(downloads?.setup, releasePrefix)
+      && variants.every((artifact) => validArtifact(artifact, releasePrefix))
       && (!downloads?.cli || validArtifact(downloads.cli, releasePrefix));
   });
 }

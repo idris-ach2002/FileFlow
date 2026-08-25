@@ -31,8 +31,12 @@ export function validateDownloadManifest(manifest, { expectedVersion, requiredPl
     if (!manifest.platforms?.[platform]) throw new Error(`downloads.json missing ${platform}`);
   }
   for (const [platform, downloads] of Object.entries(manifest.platforms || {})) {
-    for (const type of ['application', 'setup']) {
-      const artifact = downloads?.[type];
+    const artifacts = [
+      ['application', downloads?.application],
+      ['setup', downloads?.setup],
+      ...Object.entries(downloads?.setupVariants || {}).map(([type, artifact]) => [`setupVariants.${type}`, artifact]),
+    ];
+    for (const [type, artifact] of artifacts) {
       if (!artifact) throw new Error(`${platform} has no ${type} artifact`);
       const url = new URL(String(artifact.url));
       if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname))) {
@@ -72,7 +76,10 @@ export async function verifyLiveDownloads({ endpoint, expectedVersion, requiredP
   for (const [platform, downloads] of Object.entries(manifest.platforms)) {
     await artifactReachable(downloads.application, timeoutMs);
     await artifactReachable(downloads.setup, timeoutMs);
-    console.log(`[downloads-live] ${platform}: application + setup reachable`);
+    for (const artifact of Object.values(downloads.setupVariants || {})) {
+      await artifactReachable(artifact, timeoutMs);
+    }
+    console.log(`[downloads-live] ${platform}: application + setup variants reachable`);
   }
   console.log(`[downloads-live] PASS ${manifest.version}: portal manifest and artifacts reachable`);
   return manifest;

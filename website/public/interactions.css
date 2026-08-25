@@ -1,1 +1,40 @@
 [hidden]{display:none!important}.carousel-viewport.dragging{cursor:grabbing;scroll-behavior:auto}.carousel-viewport{cursor:grab}.platform-card.locked::after{content:'';position:absolute;inset:0;pointer-events:none;background:linear-gradient(110deg,transparent 20%,rgba(125,145,175,.14) 50%,transparent 80%);transform:translateX(-120%)}.platform-card.locked:hover::after{animation:lockedSweep .9s ease}.verify-drop.dragging{border-color:#2563eb;background:#eef5ff}@keyframes lockedSweep{to{transform:translateX(120%)}}@media(prefers-reduced-motion:reduce){.platform-card.locked:hover::after{animation:none}}
+
+/* Distribution/package choice stays inside the compact download panel. */
+.package-choice {
+  display: grid;
+  gap: .7rem;
+  padding: .85rem;
+  border: 1px solid var(--border, rgba(74, 102, 148, .18));
+  border-radius: 16px;
+  background: rgba(248, 250, 255, .72);
+}
+.package-choice[hidden] { display: none; }
+.package-choice__heading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+.package-choice__heading small { color: var(--muted, #667085); text-align: right; }
+.package-choice__buttons { display: flex; gap: .55rem; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+.package-choice__buttons::-webkit-scrollbar { display: none; }
+.package-option {
+  flex: 1 0 auto;
+  min-width: 145px;
+  border: 1px solid var(--border, #dbe3f0);
+  border-radius: 13px;
+  padding: .65rem .75rem;
+  background: #fff;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.package-option strong,.package-option small { display: block; }
+.package-option small { margin-top: .15rem; color: var(--muted, #667085); }
+.package-option.active { border-color: #315efb; box-shadow: 0 0 0 2px rgba(49,94,251,.12); }
+.install-command { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: .55rem; }
+.install-command code { overflow-x: auto; white-space: nowrap; padding: .62rem .7rem; border-radius: 10px; background: #081426; color: #e9f1ff; font-size: .78rem; }
+.install-command button { border: 0; border-radius: 10px; padding: .62rem .8rem; cursor: pointer; font-weight: 700; }
+@media (max-width: 680px) {
+  .package-choice__heading { align-items: flex-start; flex-direction: column; gap: .2rem; }
+  .package-choice__heading small { text-align: left; }
+  .package-option { min-width: 132px; }
+  .install-command { grid-template-columns: 1fr; }
+  .install-command button { justify-self: start; }
+}

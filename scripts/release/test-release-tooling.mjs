@@ -114,6 +114,7 @@ try {
   put(join(windows, 'FileFlow_1.0.2_x64-setup.exe'), 'nsis');
   put(join(windows, 'FileFlow_1.0.2_x64-setup.exe.sig'), 'nsis-signature');
   put(join(windows, 'FileFlowSetup_1.0.2_x64-setup.exe'), 'setup-nsis');
+  put(join(windows, 'FileFlowSetup_1.0.2_x64_en-US.msi'), 'setup-msi');
   put(join(windows, 'FileFlowSetupCLI_x86_64-pc-windows-msvc.exe'), 'setup-cli-windows');
 
   for (const [dir, arch] of [[linuxX64, 'amd64'], [linuxArm, 'arm64']]) {
@@ -122,6 +123,8 @@ try {
     put(join(dir, 'FileFlow.AppImage'), `appimage-${arch}`);
     put(join(dir, 'FileFlow.AppImage.sig'), `appimage-signature-${arch}`);
     put(join(dir, `FileFlowSetup_${arch}.AppImage`), `setup-appimage-${arch}`);
+    put(join(dir, `FileFlowSetup_1.0.2_${arch}.deb`), `setup-deb-${arch}`);
+    put(join(dir, `FileFlowSetup-1.0.2-1.${arch === 'amd64' ? 'x86_64' : 'aarch64'}.rpm`), `setup-rpm-${arch}`);
     put(join(dir, `FileFlowSetupCLI_${arch}.bin`), `setup-cli-${arch}`);
   }
 
@@ -197,6 +200,15 @@ try {
   if (!address || typeof address === 'string') throw new Error('unable to start updater self-test server');
   liveManifest = JSON.parse(readFileSync(latest, 'utf8'));
   let liveDownloads = JSON.parse(readFileSync(downloads, 'utf8'));
+  if (!liveDownloads.platforms['windows-x86_64']?.setupVariants?.msi) {
+    throw new Error('Windows downloads must expose MSI as a Setup variant');
+  }
+  for (const key of ['linux-x86_64', 'linux-aarch64']) {
+    const variants = liveDownloads.platforms[key]?.setupVariants || {};
+    for (const type of ['appimage', 'deb', 'rpm']) {
+      if (!variants[type]) throw new Error(`${key} must expose ${type} as a Setup variant`);
+    }
+  }
   for (const [platform, item] of Object.entries(liveManifest.platforms)) {
     item.url = `http://127.0.0.1:${address.port}/artifacts/${platform}`;
     item.signature = `synthetic-signature-${platform}`;
@@ -209,6 +221,9 @@ try {
   for (const item of Object.values(liveDownloads.platforms)) {
     item.application.url = `http://127.0.0.1:${address.port}/artifacts/application`;
     item.setup.url = `http://127.0.0.1:${address.port}/artifacts/setup`;
+    for (const [type, artifact] of Object.entries(item.setupVariants || {})) {
+      artifact.url = `http://127.0.0.1:${address.port}/artifacts/setup-${type}`;
+    }
   }
   await verifyLiveDownloads({
     endpoint: `http://127.0.0.1:${address.port}/downloads.json`,

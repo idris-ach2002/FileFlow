@@ -28,6 +28,7 @@ for (const marker of [
   'device-summary', 'mac-architecture-choice', 'platform-override',
   'demo-viewport', 'demo-track', 'feature-viewport', 'feature-track',
   'guide-viewport', 'guide-track', 'mobile-download-cta',
+  'package-choice', 'package-choice-buttons', 'install-command', 'copy-install-command',
 ]) {
   if (!html.includes(marker)) throw new Error(`download portal is missing #${marker}`);
 }
@@ -52,6 +53,9 @@ if (!script.includes("scroll-snap") && !readFileSync(resolve(root, 'public/style
   throw new Error('product and installation demos must move horizontally');
 }
 if (!script.includes('TAR.ZST') || !script.includes('Zstandard')) throw new Error('archive feature carousel must surface Zstandard/TAR.ZST');
+for (const marker of ['setupVariantsFor', 'linuxPackagePreference', 'Ubuntu / Debian', 'Fedora / RHEL', 'linuxInstallCommand', 'manifest.preview ? definitions']) {
+  assert.ok(script.includes(marker), `portal must expose Linux package guidance: ${marker}`);
+}
 assert.doesNotMatch(html, /iLovePDF|Smallpdf|CloudConvert|TinyPNG|FreeConvert/i, 'portal must not compare FileFlow with named competitor sites');
 assert.ok(!/<script(?![^>]*\bsrc=)[^>]*>/iu.test(html), 'CSP forbids inline scripts');
 assert.ok(!/\son[a-z]+\s*=/iu.test(html), 'CSP forbids inline event handlers');
@@ -122,18 +126,31 @@ const manifest = {
   version,
   publishedAt: '2026-08-24T12:00:00.000Z',
   repository,
-  platforms: Object.fromEntries(platforms.map((platform) => [platform, {
-    application: artifact(`FileFlow-${platform}`),
-    setup: artifact(`FileFlow-Setup-${platform}`),
-  }])),
+  platforms: Object.fromEntries(platforms.map((platform) => {
+    const setup = artifact(`FileFlow-Setup-${platform}.AppImage`, 'appimage');
+    const setupVariants = platform.startsWith('linux-') ? {
+      appimage: setup,
+      deb: artifact(`FileFlow-Setup-${platform}.deb`, 'deb'),
+      rpm: artifact(`FileFlow-Setup-${platform}.rpm`, 'rpm'),
+    } : platform === 'windows-x86_64' ? {
+      exe: artifact('FileFlowSetup-windows.exe', 'exe'),
+      msi: artifact('FileFlowSetup-windows.msi', 'msi'),
+    } : { dmg: setup };
+    return [platform, {
+      application: artifact(`FileFlow-${platform}.bin`, 'binary'),
+      setup: platform === 'windows-x86_64' ? setupVariants.exe : setup,
+      setupVariants,
+    }];
+  })),
 };
 
-function artifact(name) {
+function artifact(name, packageType = 'binary') {
   return {
     name,
     url: `https://github.com/${repository}/releases/download/v${version}/${name}`,
     sha256: 'a'.repeat(64),
     size: 42,
+    packageType,
   };
 }
 
@@ -167,7 +184,7 @@ globalThis.fetch = async () => Response.json(manifest);
 response = await onRequestGet(context());
 assert.equal(response.status, 200);
 assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
-assert.deepEqual((await response.json()).platforms['darwin-aarch64'].setup.name, 'FileFlow-Setup-darwin-aarch64');
+assert.deepEqual((await response.json()).platforms['linux-x86_64'].setupVariants.deb.packageType, 'deb');
 
 globalThis.fetch = async () => Response.json({ ...manifest, platforms: { 'darwin-aarch64': manifest.platforms['darwin-aarch64'] } });
 response = await onRequestGet(context());

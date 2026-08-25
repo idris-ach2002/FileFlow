@@ -107,6 +107,14 @@
             <button type="button" data-mac-platform="darwin-aarch64"><b>Apple Silicon</b><small>M1, M2, M3, M4, M5…</small></button>
             <button type="button" data-mac-platform="darwin-x86_64"><b>Intel</b><small>Mac avec processeur Intel</small></button>
           </div>
+          <div class="package-choice" id="package-choice" hidden>
+            <div class="package-choice__heading"><strong id="package-choice-title">Format d’installation</strong><small id="package-choice-help"></small></div>
+            <div class="package-choice__buttons" id="package-choice-buttons"></div>
+            <div class="install-command" id="install-command" hidden>
+              <code id="install-command-value"></code>
+              <button type="button" id="copy-install-command">Copier</button>
+            </div>
+          </div>
           <div class="download-actions">
             <button class="secondary" id="copy-command" type="button">Copier la commande terminal</button>
             <button class="platform-override" id="platform-override" type="button" aria-pressed="false" hidden>Télécharger pour un autre appareil</button>

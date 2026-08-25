@@ -229,12 +229,133 @@ let demoCarousel;
 let featureCarousel;
 let guideCarousel;
 let currentGuide = 'macos';
+let linuxPackagePreference = 'deb';
+let windowsPackagePreference = 'exe';
 
 function bytes(value) {
   if (!value) return 'taille inconnue';
   if (value > 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} Go`;
   return `${(value / 1024 ** 2).toFixed(1)} Mo`;
 }
+function setupVariantsFor(platform) {
+  const downloads = manifest?.platforms?.[platform];
+  if (!downloads) return {};
+  const variants = { ...(downloads.setupVariants || {}) };
+  const fallback = downloads.setup;
+  if (fallback?.packageType && !variants[fallback.packageType]) variants[fallback.packageType] = fallback;
+  return variants;
+}
+
+function selectedSetupType(platform) {
+  if (platform?.startsWith('linux-')) return linuxPackagePreference;
+  if (platform === 'windows-x86_64') return windowsPackagePreference;
+  return manifest?.platforms?.[platform]?.setup?.packageType || null;
+}
+
+function selectedSetupArtifact(platform) {
+  if (!platform) return null;
+  const downloads = manifest?.platforms?.[platform];
+  if (!downloads) return null;
+  const preferred = selectedSetupType(platform);
+  return setupVariantsFor(platform)[preferred] || downloads.setup || null;
+}
+
+function linuxInstallCommand(artifact, type) {
+  if (!artifact?.name) return '';
+  const file = artifact.name.replace(/[\\"`$]/g, '\\$&');
+  const downloads = 'DIR="$(xdg-user-dir DOWNLOAD 2>/dev/null || printf \'%s\' "$HOME/Downloads")"';
+  if (type === 'deb') return `${downloads}; sudo apt install "$DIR/${file}"`;
+  if (type === 'rpm') return `${downloads}; if command -v dnf >/dev/null; then sudo dnf install "$DIR/${file}"; else sudo rpm -Uvh "$DIR/${file}"; fi`;
+  return `${downloads}; chmod +x "$DIR/${file}" && "$DIR/${file}"`;
+}
+
+function resolvedGuide(key) {
+  if (key !== 'linux') return GUIDES[key];
+  const commonEnd = [
+    ['Lancer FileFlow Setup','Le Setup affiche diagnostic, application, moteurs locaux et post-contrôles dans la même interface.','/assets/guides/linux/03.svg','Les appels système sont isolés des bibliothèques de l’AppImage pour éviter les conflits de dépendances.'],
+    ['FileFlow est prêt dans le menu','Après contrôle, FileFlow est enregistré avec son lanceur et son icône dans le menu Applications / Dash.','/assets/guides/linux/04.svg','Aucune création manuelle de fichier .desktop ne doit être nécessaire.'],
+  ];
+  if (linuxPackagePreference === 'deb') {
+    return { title: 'Linux', label: 'Ubuntu / Debian · .deb recommandé', steps: [
+      ['Télécharger le paquet DEB','Pour Ubuntu, Debian, Linux Mint et distributions dérivées, choisissez le paquet .deb correspondant à x64 ou ARM64.','/assets/guides/linux/01.svg','Le site ne prétend pas détecter votre distribution : vous la choisissez explicitement.'],
+      ['Copier la commande d’installation','Le site prépare la commande apt avec le vrai nom du fichier téléchargé et le dossier Téléchargements de votre session.','/assets/guides/linux/02.svg','Copiez la commande affichée dans la section Télécharger puis validez votre mot de passe sudo.'],
+      ...commonEnd,
+    ] };
+  }
+  if (linuxPackagePreference === 'rpm') {
+    return { title: 'Linux', label: 'Fedora / RHEL · .rpm', steps: [
+      ['Télécharger le paquet RPM','Pour Fedora, RHEL et distributions compatibles RPM, choisissez le paquet .rpm de votre architecture.','/assets/guides/linux/01.svg','Le paquet reste lié à la release et à son SHA-256.'],
+      ['Installer avec la commande proposée','Copiez la commande dnf préparée par le site. Un repli vers rpm est prévu si dnf n’est pas disponible.','/assets/guides/linux/02.svg','Le fichier reste dans votre dossier de téléchargements.'],
+      ...commonEnd,
+    ] };
+  }
+  return { title: 'Linux', label: 'Autre distribution · AppImage', steps: [
+    ['Télécharger l’AppImage','Utilisez l’AppImage lorsque votre distribution ne repose ni sur DEB ni sur RPM.','/assets/guides/linux/01.svg','x64 et ARM64 sont proposés séparément.'],
+    ['Rendre exécutable et lancer','Copiez la commande préparée : elle ajoute le droit d’exécution puis ouvre FileFlow Setup.','/assets/guides/linux/02.svg','Le Setup nettoie désormais l’environnement AppImage avant d’appeler les outils du système.'],
+    ...commonEnd,
+  ] };
+}
+
+function renderPackageChoice() {
+  const root = document.querySelector('#package-choice');
+  const buttons = document.querySelector('#package-choice-buttons');
+  const commandBox = document.querySelector('#install-command');
+  const commandValue = document.querySelector('#install-command-value');
+  const genericCommand = document.querySelector('#copy-command');
+  const platform = deviceProfile.platform;
+  if (!root || !buttons || !commandBox || !commandValue || !genericCommand) return;
+
+  const isLinux = platform?.startsWith('linux-');
+  const isWindows = platform === 'windows-x86_64';
+  root.hidden = !(isLinux || isWindows);
+  genericCommand.hidden = isLinux;
+  if (root.hidden || !manifest) return;
+
+  const variants = setupVariantsFor(platform);
+  const definitions = isLinux
+    ? [
+        ['deb', 'Ubuntu / Debian', '.deb · recommandé'],
+        ['rpm', 'Fedora / RHEL', '.rpm'],
+        ['appimage', 'Autre Linux', '.AppImage'],
+      ]
+    : [
+        ['exe', 'Installateur Windows', '.exe · recommandé'],
+        ['msi', 'Package MSI', '.msi · administration'],
+      ];
+
+  document.querySelector('#package-choice-title').textContent = isLinux ? 'Quelle distribution utilisez-vous ?' : 'Format Windows';
+  document.querySelector('#package-choice-help').textContent = isLinux ? 'Linux et architecture sont détectés ; la distribution reste votre choix.' : 'Le .exe convient à la plupart des utilisateurs.';
+  buttons.replaceChildren();
+
+  const available = manifest.preview ? definitions : definitions.filter(([type]) => variants[type]);
+  const current = isLinux ? linuxPackagePreference : windowsPackagePreference;
+  if (!variants[current] && available[0]) {
+    if (isLinux) linuxPackagePreference = available[0][0];
+    else windowsPackagePreference = available[0][0];
+  }
+
+  for (const [type, title, detail] of available) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `package-option ${selectedSetupType(platform) === type ? 'active' : ''}`;
+    button.innerHTML = `<strong>${title}</strong><small>${detail}</small>`;
+    button.addEventListener('click', () => {
+      if (isLinux) linuxPackagePreference = type;
+      else windowsPackagePreference = type;
+      if (isLinux) currentGuide = 'linux';
+      updateRecommendedDownload();
+      renderPlatforms();
+      if (isLinux) { renderGuideTabs(); renderGuide(); }
+    });
+    buttons.append(button);
+  }
+
+  const artifact = selectedSetupArtifact(platform);
+  const command = isLinux ? linuxInstallCommand(artifact, selectedSetupType(platform)) : '';
+  commandBox.hidden = !command;
+  commandValue.textContent = command;
+}
+
 function architectureLabel(value) { return value === 'arm64' ? 'ARM64' : value === 'x64' ? 'x86_64' : 'architecture inconnue'; }
 function toast(message) {
   const node = document.querySelector('#toast');
@@ -381,7 +502,7 @@ function renderGuideTabs() {
 }
 
 function renderGuide() {
-  const guide = GUIDES[currentGuide];
+  const guide = resolvedGuide(currentGuide);
   const track = document.querySelector('#guide-track');
   track.replaceChildren();
   guide.steps.forEach(([title, copy, image, note], index) => {
@@ -447,14 +568,15 @@ function updateRecommendedDownload() {
   const platform = deviceProfile.platform;
   const primary = document.querySelector('#download-primary');
   const labels = platform ? PLATFORM_LABELS[platform] : null;
-  const setup = platform ? manifest?.platforms?.[platform]?.setup : null;
+  const setup = platform ? selectedSetupArtifact(platform) : null;
   document.querySelector('#hero-platform-icon').textContent = platform ? iconForPlatform(platform) : 'F';
   document.querySelector('#hero-platform-os').textContent = labels?.[0] || 'FileFlow Setup';
   document.querySelector('#hero-platform-name').textContent = labels ? `${labels[1]} (${labels[2]})` : deviceProfile.operatingSystem === 'macOS' ? 'Apple Silicon ou Intel' : 'Choisissez votre plateforme';
   document.querySelector('#hero-platform-badge').textContent = platform ? 'Recommandé pour cet appareil' : deviceProfile.operatingSystem === 'macOS' ? 'Sélection manuelle' : 'Toutes les versions disponibles';
   if (setup?.url) {
     primary.href = setup.url; primary.removeAttribute('aria-disabled'); primary.dataset.sha256 = setup.sha256;
-    document.querySelector('#download-primary-label').textContent = 'Télécharger FileFlow Setup';
+    const packageLabel = setup.packageType ? setup.packageType.toUpperCase() : 'SETUP';
+    document.querySelector('#download-primary-label').textContent = `Télécharger FileFlow Setup · ${packageLabel}`;
     document.querySelector('#download-detail').textContent = `${labels.join(' · ')} · ${bytes(setup.size)}`;
     document.querySelector('#hero-support-note').textContent = `Release ${manifest.version} · SHA-256 publié`;
   } else {
@@ -463,6 +585,7 @@ function updateRecommendedDownload() {
     document.querySelector('#download-detail').textContent = manifest?.preview ? 'Aperçu local' : 'Sélectionnez votre appareil ci-contre';
     document.querySelector('#hero-support-note').textContent = 'macOS · Windows · Linux';
   }
+  renderPackageChoice();
 }
 
 function manualMacSelection(platform) {
@@ -499,12 +622,13 @@ function renderPlatforms() {
     const mark = document.createElement('div'); mark.className = 'platform-card__mark'; mark.textContent = iconForPlatform(key);
     const title = document.createElement('h3'); title.textContent = `${labels[0]} · ${labels[1]}`;
     const desc = document.createElement('p'); desc.textContent = locked ? lockReason(key) : `${labels[2]} · Setup guidé`;
+    const setup = selectedSetupArtifact(key) || download?.setup;
     const link = document.createElement('a');
-    if (download?.setup?.url && !locked) { link.href = download.setup.url; link.textContent = access === 'recommended' ? 'Télécharger' : 'Setup'; }
+    if (setup?.url && !locked) { link.href = setup.url; link.textContent = access === 'recommended' ? `Télécharger ${String(setup.packageType || '').toUpperCase()}` : 'Setup'; }
     else { link.setAttribute('aria-disabled','true'); link.textContent = locked ? 'Verrouillé' : 'Indisponible'; }
-    const copy = document.createElement('button'); copy.type = 'button'; copy.textContent = 'SHA-256'; copy.disabled = locked || !download?.setup?.sha256;
-    if (!copy.disabled) copy.addEventListener('click', () => copyText(download.setup.sha256, 'SHA-256 copié'));
-    const details = document.createElement('small'); details.textContent = !locked && download?.setup ? `${bytes(download.setup.size)} · ${download.setup.sha256.slice(0,12)}…` : locked ? lockReason(key) : 'Aucun artefact disponible';
+    const copy = document.createElement('button'); copy.type = 'button'; copy.textContent = 'SHA-256'; copy.disabled = locked || !setup?.sha256;
+    if (!copy.disabled) copy.addEventListener('click', () => copyText(setup.sha256, 'SHA-256 copié'));
+    const details = document.createElement('small'); details.textContent = !locked && setup ? `${bytes(setup.size)} · ${setup.sha256.slice(0,12)}…` : locked ? lockReason(key) : 'Aucun artefact disponible';
     card.append(mark,title,desc,link,copy,details); grid.append(card);
   }
 }
@@ -522,7 +646,7 @@ async function verifyFile(file) {
   try {
     const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
     const hash = [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2,'0')).join('');
-    const artifacts = Object.values(manifest.platforms).flatMap((item) => [item.application,item.setup,item.cli].filter(Boolean));
+    const artifacts = Object.values(manifest.platforms).flatMap((item) => [item.application,item.setup,item.cli,...Object.values(item.setupVariants || {})].filter(Boolean));
     const match = artifacts.find((item) => item.sha256.toLowerCase() === hash);
     drop.classList.add(match ? 'success' : 'error');
     result.textContent = match ? `✓ Authentique — ${match.name}` : `✕ Aucun artefact de la release ${manifest.version} ne correspond`;
@@ -543,6 +667,10 @@ document.querySelector('#copy-command').addEventListener('click', () => {
   const portal = globalThis.location?.origin || 'https://fileflow.idris-achabou.fit';
   const command = deviceProfile.platform === 'windows-x86_64' ? `irm ${portal}/install.ps1 | iex` : `curl -fsSL ${portal}/install.sh | sh`;
   copyText(command,'Commande terminal copiée');
+});
+document.querySelector('#copy-install-command').addEventListener('click', () => {
+  const value = document.querySelector('#install-command-value').textContent;
+  if (value) copyText(value, 'Commande Linux copiée');
 });
 document.querySelector('#guide-step-cancel').addEventListener('click', () => { guideCarousel.goTo(0); toast('Guide réinitialisé'); });
 const fileInput = document.querySelector('#verify-file'); const dropZone = document.querySelector('.verify-drop');

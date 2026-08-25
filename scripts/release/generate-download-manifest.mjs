@@ -20,9 +20,9 @@ if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new Error(`inv
 const targets = new Map([
   ['aarch64-apple-darwin', { key: 'darwin-aarch64', type: 'dmg' }],
   ['x86_64-apple-darwin', { key: 'darwin-x86_64', type: 'dmg' }],
-  ['x86_64-pc-windows-msvc', { key: 'windows-x86_64', type: 'exe' }],
-  ['x86_64-unknown-linux-gnu', { key: 'linux-x86_64', type: 'appimage' }],
-  ['aarch64-unknown-linux-gnu', { key: 'linux-aarch64', type: 'appimage' }],
+  ['x86_64-pc-windows-msvc', { key: 'windows-x86_64', type: 'exe', setupVariants: ['exe', 'msi'] }],
+  ['x86_64-unknown-linux-gnu', { key: 'linux-x86_64', type: 'appimage', setupVariants: ['appimage', 'deb', 'rpm'] }],
+  ['aarch64-unknown-linux-gnu', { key: 'linux-aarch64', type: 'appimage', setupVariants: ['appimage', 'deb', 'rpm'] }],
 ]);
 
 function filesBelow(directory) {
@@ -33,15 +33,22 @@ function filesBelow(directory) {
   });
 }
 
+function matchesType(name, type) {
+  if (type === 'dmg') return /\.dmg$/i.test(name);
+  if (type === 'exe') return /\.exe$/i.test(name) && !/\.exe\.sig$/i.test(name);
+  if (type === 'msi') return /\.msi$/i.test(name) && !/\.msi\.sig$/i.test(name);
+  if (type === 'deb') return /\.deb$/i.test(name);
+  if (type === 'rpm') return /\.rpm$/i.test(name);
+  return /\.appimage$/i.test(name) && !/\.appimage\.sig$/i.test(name);
+}
+
 function pick(files, type, setup) {
   const candidates = files.filter((path) => {
     const name = basename(path);
     if (/fileflow[ _.-]?setup[ _.-]?cli/i.test(name)) return false;
     const isSetup = /fileflow[ _.-]?setup/i.test(name);
     if (isSetup !== setup) return false;
-    if (type === 'dmg') return /\.dmg$/i.test(name);
-    if (type === 'exe') return /\.exe$/i.test(name) && !/\.exe\.sig$/i.test(name);
-    return /\.appimage$/i.test(name) && !/\.appimage\.sig$/i.test(name);
+    return matchesType(name, type);
   });
   if (candidates.length !== 1) {
     throw new Error(`expected exactly one ${setup ? 'setup' : 'application'} ${type}, found ${candidates.map((path) => basename(path)).join(', ') || 'none'}`);
@@ -68,10 +75,17 @@ for (const [target, descriptor] of targets) {
   const files = filesBelow(join(root, target));
   const applicationPath = pick(files, descriptor.type, false);
   const setupPath = pick(files, descriptor.type, true);
+  const setupVariants = Object.fromEntries(
+    [...new Set(descriptor.setupVariants || [descriptor.type])].map((type) => [
+      type,
+      artifact(pick(files, type, true), type),
+    ]),
+  );
   const cliPath = files.find((path) => /fileflow[ _.-]?setup[ _.-]?cli/i.test(basename(path)) && !/\.(sig|sha256)$/i.test(path));
   platforms[descriptor.key] = {
     application: artifact(applicationPath, descriptor.type),
     setup: artifact(setupPath, descriptor.type),
+    setupVariants,
     ...(cliPath ? { cli: artifact(cliPath, 'binary') } : {}),
   };
 }

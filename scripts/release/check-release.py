@@ -117,6 +117,9 @@ def main() -> None:
         "winget", "choco", "scoop", "pipx", "trying next source",
     ])
     require_tokens("scripts/release/publish-git-payload.py", ['"RUNTIME_MODE": "system"'])
+    require_tokens("scripts/release/generate-download-manifest.mjs", [
+        "setupVariants", "['exe', 'msi']", "['appimage', 'deb', 'rpm']",
+    ])
     engine_rs = require_tokens("crates/fileflow-engine/src/lib.rs", [
         "FILEFLOW_ENGINE_PATH", "/opt/homebrew/bin", "Microsoft/WinGet/Links", ".local/bin",
     ])
