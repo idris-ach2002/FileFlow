@@ -6,6 +6,65 @@ use fileflow_scheduler::SchedulerSnapshot;
 use serde::Serialize;
 use tauri::State;
 
+#[tauri::command]
+pub fn launch_fileflow_setup(mode: String) -> Result<String, String> {
+    if !matches!(mode.as_str(), "install" | "repair" | "uninstall" | "doctor") {
+        return Err("Mode de maintenance invalide.".into());
+    }
+    let home = std::env::var_os(if cfg!(target_os = "windows") {
+        "USERPROFILE"
+    } else {
+        "HOME"
+    })
+    .map(std::path::PathBuf::from)
+    .ok_or_else(|| "Dossier utilisateur introuvable.".to_string())?;
+    let maintenance = if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/FileFlow/maintenance/FileFlowSetup.app")
+    } else if cfg!(target_os = "windows") {
+        std::env::var_os("LOCALAPPDATA")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| home.join("AppData/Local"))
+            .join("FileFlow/maintenance/FileFlowSetup.exe")
+    } else {
+        std::env::var_os("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| home.join(".local/share"))
+            .join("fileflow/maintenance/FileFlowSetup.AppImage")
+    };
+    if !maintenance.exists() {
+        return Err(
+            "Le centre de maintenance FileFlow Setup n’est pas installé. Téléchargez-le depuis le portail FileFlow."
+                .into(),
+        );
+    }
+    let mut command = if cfg!(target_os = "macos") {
+        let mut value = std::process::Command::new("open");
+        value
+            .arg("-n")
+            .arg(&maintenance)
+            .args(["--args", "--mode"])
+            .arg(&mode);
+        value
+    } else {
+        let mut value = std::process::Command::new(&maintenance);
+        value.args(["--mode", &mode]);
+        value
+    };
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    command
+        .spawn()
+        .map_err(|error| format!("Impossible d’ouvrir FileFlow Setup : {error}"))?;
+    Ok(maintenance.to_string_lossy().into_owned())
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HealthResponse {
@@ -33,18 +92,18 @@ pub async fn health_check(state: State<'_, AppState>) -> Result<HealthResponse, 
     Ok(runtime_health(&state))
 }
 
-/// CI-only packaged-runtime handshake. The command is a no-op for normal users.
-/// A packaged smoke test sets FILEFLOW_SMOKE_HEALTH_FILE, launches the real app,
-/// and waits for Angular to invoke this command after authentication bootstrap.
-/// That proves the native runtime, WebView, frontend bundle and Tauri IPC are all
-/// alive instead of merely checking that a process stayed resident.
+/// Packaged-runtime handshake used by release CI and FileFlow Setup post-checks.
+/// The command is a no-op during a normal launch. A controlled smoke process sets
+/// FILEFLOW_SMOKE_HEALTH_FILE and waits for Angular to invoke this command after
+/// authentication bootstrap, proving that the native runtime, WebView, frontend
+/// bundle and Tauri IPC are alive without revealing the application window.
 #[tauri::command]
-pub fn smoke_frontend_ready(state: State<'_, AppState>) -> Result<(), String> {
+pub fn smoke_frontend_ready(state: State<'_, AppState>) -> Result<bool, String> {
     if std::env::var("FILEFLOW_SMOKE_TEST").as_deref() != Ok("1") {
-        return Ok(());
+        return Ok(false);
     }
     let Some(path) = std::env::var_os("FILEFLOW_SMOKE_HEALTH_FILE") else {
-        return Ok(());
+        return Ok(false);
     };
     let path = std::path::PathBuf::from(path);
     if path.file_name().and_then(|name| name.to_str()) != Some("health.json") {
@@ -77,7 +136,8 @@ pub fn smoke_frontend_ready(state: State<'_, AppState>) -> Result<(), String> {
     if path.exists() {
         std::fs::remove_file(&path).map_err(|error| error.to_string())?;
     }
-    std::fs::rename(&temporary, &path).map_err(|error| error.to_string())
+    std::fs::rename(&temporary, &path).map_err(|error| error.to_string())?;
+    Ok(true)
 }
 
 #[tauri::command]

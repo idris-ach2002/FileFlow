@@ -262,6 +262,7 @@ pub fn run() {
             commands::system::plan_conversion,
             commands::system::scheduler_status,
             commands::system::set_performance_mode,
+            commands::system::launch_fileflow_setup,
             commands::paths::validate_system_path,
             commands::workspace::create_workspace,
             commands::workspace::get_workspace,

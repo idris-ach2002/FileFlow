@@ -7,13 +7,16 @@ set -u
 
 QUIET=0
 NO_UPDATE=0
+REPORT_PATH="${FILEFLOW_SETUP_ENGINE_REPORT:-}"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --quiet) QUIET=1; shift ;;
     --no-update) NO_UPDATE=1; shift ;;
+    --engines) FILEFLOW_SETUP_ENGINES="${2:-}"; export FILEFLOW_SETUP_ENGINES; shift 2 ;;
+    --report) REPORT_PATH="${2:-}"; shift 2 ;;
     -h|--help)
       cat <<'HELP'
-Usage: scripts/runtime/install-dependencies.sh [--quiet] [--no-update]
+Usage: scripts/runtime/install-dependencies.sh [--quiet] [--no-update] [--engines id,id]
 
 Installs FileFlow conversion engines using the native package manager first,
 then safe fallbacks (Homebrew/pipx/Flatpak when already available). Failures are
@@ -25,6 +28,11 @@ HELP
   esac
 done
 
+if [ -n "$REPORT_PATH" ]; then
+  mkdir -p "$(dirname "$REPORT_PATH")"
+  : > "$REPORT_PATH"
+fi
+
 OS="$(uname -s 2>/dev/null || printf unknown)"
 ARCH="$(uname -m 2>/dev/null || printf unknown)"
 USER_BIN="${HOME}/.local/bin"
@@ -35,6 +43,7 @@ missing=0
 warnings=0
 BREW_SETUP_ATTEMPTED=0
 FLATPAK_SETUP_ATTEMPTED=0
+SUDO_KEEPALIVE_PID=""
 
 say() { [ "$QUIET" -eq 1 ] || printf '%s\n' "$*"; }
 warn() { warnings=$((warnings + 1)); printf '[WARN] %s\n' "$*" >&2; }
@@ -47,11 +56,69 @@ has_any() {
   return 1
 }
 
+engine_id() {
+  case "$1" in
+    FFmpeg) printf ffmpeg ;; libvips) printf vips ;; ImageMagick) printf imagemagick ;;
+    qpdf) printf qpdf ;; img2pdf) printf img2pdf ;; Poppler) printf poppler ;;
+    Ghostscript) printf ghostscript ;; Tesseract) printf tesseract ;; OCRmyPDF) printf ocrmypdf ;;
+    LibreOffice) printf libreoffice ;; Pandoc) printf pandoc ;; 'Navigateur PDF') printf browser ;;
+    ExifTool) printf exiftool ;; 7-Zip) printf sevenzip ;; Zstandard) printf zstd ;; LZ4) printf lz4 ;;
+    *) return 1 ;;
+  esac
+}
+
+engine_selected() {
+  [ -z "${FILEFLOW_SETUP_ENGINES:-}" ] && return 0
+  local id
+  id="$(engine_id "$1")" || return 1
+  case ",${FILEFLOW_SETUP_ENGINES}," in *",${id},"*) return 0 ;; *) return 1 ;; esac
+}
+
+record_owned_package() {
+  [ -n "$REPORT_PATH" ] || return 0
+  local component="$1" manager="$2" package="$3" kind="$4"
+  case "$component$manager$package$kind" in *[$'\t\r\n']*) return 1 ;; esac
+  printf '%s\t%s\t%s\t%s\n' "$component" "$manager" "$package" "$kind" >> "$REPORT_PATH"
+}
+
+cleanup_privilege_session() {
+  if [ -n "$SUDO_KEEPALIVE_PID" ]; then
+    kill "$SUDO_KEEPALIVE_PID" >/dev/null 2>&1 || true
+    wait "$SUDO_KEEPALIVE_PID" >/dev/null 2>&1 || true
+    SUDO_KEEPALIVE_PID=""
+  fi
+}
+trap cleanup_privilege_session EXIT
+
+prepare_privilege_session() {
+  [ "$(id -u)" -eq 0 ] && return 0
+  case "${PKG_MANAGER:-none}" in apt|dnf|zypper|pacman) ;; *) return 0 ;; esac
+  has sudo || return 0
+
+  if sudo -n -v >/dev/null 2>&1; then
+    :
+  elif [ -t 0 ]; then
+    say '[AUTH] Autorisation administrateur requise une seule fois pour cette session.'
+    sudo -v || { warn 'Autorisation administrateur refusée; les paquets système seront ignorés.'; return 1; }
+  else
+    warn 'Autorisation sudo non interactive indisponible; lancez Setup avec pkexec ou depuis un terminal.'
+    return 1
+  fi
+
+  (
+    while sleep 45; do
+      sudo -n -v >/dev/null 2>&1 || exit 0
+    done
+  ) &
+  SUDO_KEEPALIVE_PID=$!
+  say '[AUTH] Session administrateur validée; aucun nouveau mot de passe ne sera demandé pendant cette opération.'
+}
+
 run_root() {
   if [ "$(id -u)" -eq 0 ]; then
     "$@"
   elif has sudo; then
-    sudo "$@"
+    sudo -n "$@"
   else
     return 127
   fi
@@ -198,6 +265,10 @@ attempt() {
 
 ensure_engine() {
   local label="$1" probe="$2"; shift 2
+  if ! engine_selected "$label"; then
+    printf '[SKIP] %-14s not selected by FileFlow Setup\n' "$label"
+    return 0
+  fi
   if probe_spec "$probe"; then
     printf '[OK]   %-14s already available\n' "$label"
     ok=$((ok + 1))
@@ -214,6 +285,14 @@ ensure_engine() {
       refresh_brew_path
       if probe_spec "$probe"; then
         printf '[OK]   %-14s installed via %s\n' "$label" "$kind"
+        local manager="$kind" owned_package="$package" id
+        id="$(engine_id "$label")" || return 1
+        [ "$kind" = native ] && manager="${PKG_MANAGER:-none}"
+        if [ "$kind" = flatpak-lo ]; then
+          manager=flatpak
+          owned_package=org.libreoffice.LibreOffice
+        fi
+        record_owned_package "$id" "$manager" "$owned_package" engine
         ok=$((ok + 1))
         return 0
       fi
@@ -226,6 +305,28 @@ ensure_engine() {
   return 0
 }
 
+native_package_installed() {
+  local package="$1"
+  case "${PKG_MANAGER:-none}" in
+    apt) dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'install ok installed' ;;
+    dnf|zypper) rpm -q "$package" >/dev/null 2>&1 ;;
+    pacman) pacman -Q "$package" >/dev/null 2>&1 ;;
+    brew) brew list --formula "$package" >/dev/null 2>&1 ;;
+    *) return 1 ;;
+  esac
+}
+
+install_runtime_package() {
+  local package="$1"
+  native_package_installed "$package" && return 0
+  if native_install "$package" >/dev/null 2>&1; then
+    record_owned_package "runtime:${package}" "${PKG_MANAGER:-none}" "$package" integration
+    return 0
+  fi
+  warn "runtime package $package unavailable; continuing."
+  return 0
+}
+
 install_linux_app_runtime() {
   [ "$OS" = Linux ] || return 0
   say "[SETUP] Installing Tauri/WebKit runtime libraries when available."
@@ -233,22 +334,22 @@ install_linux_app_runtime() {
   case "${PKG_MANAGER:-none}" in
     apt)
       for package in libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 librsvg2-2 xdg-utils; do
-        native_install "$package" >/dev/null 2>&1 || warn "runtime package $package unavailable; continuing."
+        install_runtime_package "$package"
       done
       ;;
     dnf)
       for package in webkit2gtk4.1 gtk3 libappindicator-gtk3 librsvg2 xdg-utils; do
-        native_install "$package" >/dev/null 2>&1 || warn "runtime package $package unavailable; continuing."
+        install_runtime_package "$package"
       done
       ;;
     pacman)
       for package in webkit2gtk-4.1 gtk3 libappindicator-gtk3 librsvg xdg-utils; do
-        native_install "$package" >/dev/null 2>&1 || warn "runtime package $package unavailable; continuing."
+        install_runtime_package "$package"
       done
       ;;
     zypper)
       for package in libwebkit2gtk-4_1-0 gtk3 libayatana-appindicator3-1 librsvg-2-2 xdg-utils; do
-        native_install "$package" >/dev/null 2>&1 || warn "runtime package $package unavailable; continuing."
+        install_runtime_package "$package"
       done
       ;;
     brew|none) : ;;
@@ -276,8 +377,11 @@ case "$OS" in
 esac
 
 say "FileFlow runtime dependency setup — $OS / $ARCH (${PKG_MANAGER})"
+prepare_privilege_session || true
 prepare_native_manager
-install_linux_app_runtime
+if [ "${FILEFLOW_SETUP_INSTALL_APP_RUNTIME:-1}" = 1 ]; then
+  install_linux_app_runtime
+fi
 
 # Each engine is installed independently. Package-name alternatives are kept in
 # order so a missing package cannot abort the remaining engine installation.
@@ -299,8 +403,10 @@ case "$PKG_MANAGER" in
     ensure_engine Zstandard zstd native:zstd brew:zstd
     ensure_engine LZ4 lz4 native:lz4 brew:lz4
     # Language data is additive; never blocks the installation.
-    native_install tesseract-ocr-eng >/dev/null 2>&1 || true
-    native_install tesseract-ocr-fra >/dev/null 2>&1 || true
+    if engine_selected Tesseract; then
+      install_runtime_package tesseract-ocr-eng
+      install_runtime_package tesseract-ocr-fra
+    fi
     ;;
   dnf)
     ensure_engine FFmpeg ffmpeg native:ffmpeg-free native:ffmpeg brew:ffmpeg

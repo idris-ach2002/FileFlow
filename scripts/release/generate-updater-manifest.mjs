@@ -12,7 +12,7 @@ const mappings={
 function files(dir){return existsSync(dir)?readdirSync(dir).map((n)=>join(dir,n)):[];}
 const platforms={};
 for(const [target,key] of Object.entries(mappings)){
- const dir=join(root,target); const list=files(dir); let artifact;
+ const dir=join(root,target); const list=files(dir).filter((path)=>!/fileflow[ _.-]?setup/i.test(basename(path))); let artifact;
  if(key.startsWith('darwin-')) artifact=list.find((p)=>p.endsWith('.app.tar.gz'));
  else if(key.startsWith('windows-')) artifact=list.find((p)=>/-setup\.exe$/i.test(p))||list.find((p)=>p.toLowerCase().endsWith('.msi'));
  else artifact=list.find((p)=>p.toLowerCase().endsWith('.appimage'));

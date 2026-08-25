@@ -2,6 +2,8 @@
 resolver = "2"
 members = [
     "src-tauri",
+    "setup-tauri",
+    "crates/fileflow-setup-core",
     "crates/fileflow-domain",
     "crates/fileflow-analysis",
     "crates/fileflow-engine",
@@ -34,7 +36,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.0.6"
+version = "1.0.7"
 edition = "2024"
 publish = false
 

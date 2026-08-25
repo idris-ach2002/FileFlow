@@ -160,8 +160,8 @@ export class TauriBridgeService {
     return invoke<HealthResponse>('health_check');
   }
 
-  smokeFrontendReady(): Promise<void> {
-    return invoke<void>('smoke_frontend_ready');
+  smokeFrontendReady(): Promise<boolean> {
+    return invoke<boolean>('smoke_frontend_ready');
   }
 
   probeEngines(): Promise<EngineProbe[]> {
@@ -182,6 +182,10 @@ export class TauriBridgeService {
 
   setPerformanceMode(mode: 'eco' | 'balanced' | 'fast'): Promise<SchedulerSnapshot> {
     return invoke<SchedulerSnapshot>('set_performance_mode', { mode });
+  }
+
+  launchFileFlowSetup(mode: 'install' | 'repair' | 'uninstall' | 'doctor'): Promise<string> {
+    return invoke<string>('launch_fileflow_setup', { mode });
   }
 
   executableActions(): Promise<string[]> {

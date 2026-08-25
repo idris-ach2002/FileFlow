@@ -34,7 +34,9 @@ def main() -> None:
     versions = {
         "package.json": load_json("package.json")["version"],
         "frontend/package.json": load_json("frontend/package.json")["version"],
+        "website/package.json": load_json("website/package.json")["version"],
         "src-tauri/tauri.conf.json": load_json("src-tauri/tauri.conf.json")["version"],
+        "setup-tauri/tauri.conf.json": load_json("setup-tauri/tauri.conf.json")["version"],
         "src-tauri/Cargo.toml": re.search(r'(?m)^version = "([^"]+)"$', cargo_text).group(1),
         "Cargo.toml [workspace.package]": re.search(r'(?m)^version\s*=\s*"([^"]+)"$', workspace_section).group(1),
         "Cargo.lock": re.search(r'name = "fileflow-desktop"\nversion = "([^"]+)"', lock_text).group(1),
@@ -50,13 +52,22 @@ def main() -> None:
         "scripts/runtime/install-dependencies.sh", "scripts/runtime/install-dependencies.ps1",
         "scripts/runtime/doctor.sh", "scripts/runtime/doctor.ps1",
         "scripts/release/generate-release-config.py", "scripts/release/publish-git-payload.py",
-        "scripts/release/smoke-packaged-app.mjs", "scripts/release/collect-artifacts.mjs",
+        "scripts/release/smoke-packaged-app.mjs", "scripts/release/smoke-packaged-setup.mjs",
+        "scripts/release/collect-artifacts.mjs",
         "scripts/release/preflight-macos.sh", "scripts/release/verify-live-updater.mjs",
+        "scripts/release/generate-download-manifest.mjs", "scripts/release/verify-live-downloads.mjs",
+        "scripts/release/package-setup-cli.mjs",
+        "scripts/release/artifact-layout.mjs",
+        "scripts/release/assert-version-consistency.mjs", "scripts/release/assert-version-newer.mjs",
+        "setup-tauri/Cargo.toml", "setup-tauri/tauri.conf.json", "setup-ui/index.html",
+        "scripts/setup/run-tauri.mjs",
+        "website/wrangler.toml", "website/public/index.html",
         "src-tauri/tauri.windows.conf.json", "src-tauri/tauri.macos.conf.json", "src-tauri/tauri.linux.conf.json",
         ".github/workflows/ci.yml", ".github/workflows/native-linux.yml",
         ".github/workflows/native-macos.yml", ".github/workflows/native-windows.yml",
         ".github/workflows/release-linux.yml", ".github/workflows/release-macos.yml",
         ".github/workflows/release-windows.yml", ".github/workflows/fileflow-release.yml",
+        ".github/workflows/release-promote.yml", ".github/workflows/site-cloudflare.yml",
     ]
     for rel in required:
         if not (ROOT / rel).is_file():
@@ -126,6 +137,16 @@ def main() -> None:
                 raise SystemExit(f"{rel} still contains legacy engine-factory token: {token}")
         if "tauri build" not in text:
             raise SystemExit(f"{rel} must build the FileFlow application")
+        if rel.startswith(".github/workflows/release-"):
+            for token in [
+                "scripts/setup/run-tauri.mjs", "fileflow-setup-cli", "package-setup-cli.mjs",
+                "smoke-packaged-setup.mjs",
+            ]:
+                if token not in text:
+                    raise SystemExit(f"{rel} must publish FileFlow Setup and CLI: missing {token}")
+            for token in ["target/fileflow-setup", "--include-setup"]:
+                if token not in text:
+                    raise SystemExit(f"{rel} must isolate and collect Setup artifacts: missing {token}")
 
     release_macos = (ROOT / ".github/workflows/release-macos.yml").read_text()
     if "CI: 'true'" not in release_macos:
@@ -156,11 +177,44 @@ def main() -> None:
             raise SystemExit(f"macOS release missing optional notarization guard: {token}")
 
     atomic_release = require_tokens(".github/workflows/fileflow-release.yml", [
-        "tags: ['v*.*.*']", "needs: [linux, macos, windows]", "generate-updater-manifest.mjs",
-        "verify-release.mjs", "gh release create", "verify-live-updater.mjs",
+        "tags: ['v*.*.*']", "workflow_dispatch:", "release_sha:",
+        "needs: [linux, macos, windows]", "generate-updater-manifest.mjs",
+        "generate-download-manifest.mjs", "downloads.json", "verify-release.mjs", "gh release create",
+        "verify-live-updater.mjs", "verify-live-downloads.mjs",
     ])
     if "workflow_run" in atomic_release or "actions/workflows" in atomic_release:
         raise SystemExit("atomic release must consume reusable build jobs, not query workflow history")
+
+    require_tokens(".github/workflows/release-promote.yml", [
+        "workflow_run:", "FileFlow Common Quality", "conclusion == 'success'",
+        "assert-version-consistency.mjs", "assert-version-newer.mjs",
+        "gh workflow run fileflow-release.yml", "actions: write",
+        "TAG_SHA=$(git rev-list -n 1", "reprise automatique de la publication",
+    ])
+
+    require_tokens(".github/workflows/site-cloudflare.yml", [
+        "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "cloudflare/wrangler-action@v4",
+        "workingDirectory: website", "pages deploy dist",
+    ])
+    setup_capability = load_json("setup-tauri/capabilities/default.json")
+    if setup_capability.get("windows") != ["setup"]:
+        raise SystemExit("FileFlow Setup capability must target only the setup window")
+    if "core:window:allow-close" not in setup_capability.get("permissions", []):
+        raise SystemExit("FileFlow Setup must be allowed to close its own window")
+    require_tokens("scripts/setup/run-tauri.mjs", [
+        "FILEFLOW_SETUP_LOCAL_APPLICATION", "findLocalApplication", "--source",
+        "FILEFLOW_SETUP_TARGET_DIR", "CARGO_TARGET_DIR", "target/fileflow-setup",
+    ])
+    require_tokens("website/public/release-client.js", [
+        "content-type", "page HTML", "AbortError",
+    ])
+    require_tokens("website/public/platform.js", [
+        "detectOperatingSystem", "withTimeout", "hintTimeoutMs = 400",
+    ])
+    require_tokens("scripts/verify.mjs", [
+        "scripts/setup/test-ui.cjs", "scripts/setup/test-local-source.mjs",
+        "website/scripts/test.mjs",
+    ])
 
     if "ENGINE_PACK_" in unix_installer or "ENGINE_PACK_" in windows_installer:
         raise SystemExit("installer manifests must no longer depend on engine pack metadata")

@@ -1,4 +1,4 @@
-# FileFlow — installation permanente
+# FileFlow — Setup, maintenance et installation permanente
 
 FileFlow utilise désormais un modèle simple : **l'application est construite par GitHub Actions, les moteurs de conversion sont installés une seule fois sur la machine**.
 
@@ -8,7 +8,22 @@ Le dépôt cloné ne sert qu'à lancer l'installateur. Après succès, il peut �
 - les moteurs (`ffmpeg`, LibreOffice, qpdf, Tesseract, etc.) restent installés par le gestionnaire de paquets de l'OS ;
 - l'icône / le widget tray FileFlow reste disponible avec l'application.
 
-## Installation utilisateur
+## Installation utilisateur recommandée
+
+Téléchargez **FileFlow Setup** depuis `https://fileflow-downloads.pages.dev`, puis ouvrez le DMG, EXE ou AppImage proposé. Le profil Standard :
+
+1. diagnostique la machine sans la modifier ;
+2. télécharge FileFlow depuis la dernière release atomique ;
+3. contrôle HTTPS, taille, SHA-256 et signature native lorsqu’elle existe ;
+4. active l’application de façon transactionnelle ;
+5. installe uniquement les moteurs manquants ;
+6. lance FileFlow hors écran et vérifie réellement le handshake Angular → Tauri ;
+7. exécute le doctor et écrit un reçu de propriété ;
+8. conserve un centre de maintenance pour réparer ou désinstaller.
+
+Le CLI `fileflow-setup-cli` expose `install`, `repair`, `doctor`, `uninstall`, `--dry-run` et `--json`.
+
+## Installateurs historiques de secours
 
 ### macOS / Linux
 

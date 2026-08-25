@@ -1,6 +1,6 @@
 {
   "name": "fileflow-workspace",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "private": true,
   "scripts": {
     "frontend:dev": "pnpm --filter @fileflow/frontend start",
@@ -31,6 +31,7 @@
     "ci:platform-info": "node scripts/ci/platform-info.mjs",
     "ci:stress": "node scripts/ci/run-stress.mjs",
     "release:smoke-app": "node scripts/release/smoke-packaged-app.mjs",
+    "release:smoke-setup": "node scripts/release/smoke-packaged-setup.mjs",
     "release:collect": "node scripts/release/collect-artifacts.mjs",
     "release:checksums": "node scripts/release/generate-checksums.mjs",
     "release:verify": "node scripts/release/verify-release.mjs",
@@ -42,7 +43,18 @@
     "release:normalize": "node scripts/release/normalize-artifacts.mjs",
     "release:self-test": "node scripts/release/test-release-tooling.mjs",
     "runtime:doctor": "bash scripts/runtime/doctor.sh",
-    "runtime:install": "bash scripts/runtime/install-dependencies.sh"
+    "runtime:install": "bash scripts/runtime/install-dependencies.sh",
+    "setup:dev": "node scripts/setup/run-tauri.mjs dev",
+    "setup:dev:local": "node scripts/setup/run-tauri.mjs --source local dev",
+    "setup:dev:release": "node scripts/setup/run-tauri.mjs --source release dev",
+    "setup:build": "node scripts/setup/run-tauri.mjs build",
+    "setup:cli": "cargo run -p fileflow-setup --bin fileflow-setup-cli --",
+    "setup:test": "cargo test -p fileflow-setup-core -p fileflow-setup && node scripts/setup/test-ui.cjs && node scripts/setup/test-local-source.mjs && node scripts/setup/test-engine-ownership.mjs && node scripts/setup/test-macos-bundled-cli.mjs && node scripts/setup/test-runtime-support.mjs",
+    "site:build": "node website/scripts/build.mjs",
+    "site:dev": "pnpm --filter @fileflow/download-portal dev",
+    "site:test": "node website/scripts/test.mjs",
+    "release:downloads-manifest": "node scripts/release/generate-download-manifest.mjs",
+    "release:verify-live-downloads": "node scripts/release/verify-live-downloads.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.4"

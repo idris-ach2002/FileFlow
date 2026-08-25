@@ -1,0 +1,1 @@
+{"setup-capability":{"identifier":"setup-capability","description":"FileFlow Setup main window","local":true,"windows":["setup"],"permissions":["core:default","core:window:allow-close"]}}

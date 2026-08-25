@@ -1,5 +1,17 @@
 [CmdletBinding()]
-param([switch]$Quiet)
+param([switch]$Quiet, [string]$Engines = '', [string]$ReportPath = '')
+
+if (-not [string]::IsNullOrWhiteSpace($Engines)) {
+  $env:FILEFLOW_SETUP_ENGINES = $Engines
+}
+if ([string]::IsNullOrWhiteSpace($ReportPath)) {
+  $ReportPath = $env:FILEFLOW_SETUP_ENGINE_REPORT
+}
+if (-not [string]::IsNullOrWhiteSpace($ReportPath)) {
+  $reportDirectory = Split-Path -Parent $ReportPath
+  if ($reportDirectory) { New-Item -ItemType Directory -Path $reportDirectory -Force | Out-Null }
+  Set-Content -LiteralPath $ReportPath -Value '' -NoNewline -Encoding utf8
+}
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
@@ -9,6 +21,24 @@ $script:Warnings = 0
 
 function Say([string]$Message) { if (-not $Quiet) { Write-Host $Message } }
 function Warn([string]$Message) { $script:Warnings++; Write-Warning $Message }
+
+function Write-OwnedPackage(
+  [string]$Component,
+  [string]$Manager,
+  [string]$Package,
+  [string]$Kind = 'engine'
+) {
+  if ([string]::IsNullOrWhiteSpace($ReportPath)) { return }
+  foreach ($value in @($Component, $Manager, $Package, $Kind)) {
+    if ($value -match "[`t`r`n]") { throw 'Invalid package receipt field.' }
+  }
+  Add-Content -LiteralPath $ReportPath -Value "$Component`t$Manager`t$Package`t$Kind" -Encoding utf8
+}
+
+function Test-EngineSelected([string]$Id) {
+  if ([string]::IsNullOrWhiteSpace($env:FILEFLOW_SETUP_ENGINES)) { return $true }
+  return @($env:FILEFLOW_SETUP_ENGINES -split ',' | ForEach-Object { $_.Trim().ToLowerInvariant() }) -contains $Id.ToLowerInvariant()
+}
 
 function Refresh-Path {
   $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
@@ -113,6 +143,40 @@ function Find-Browser {
   return $null
 }
 
+function Find-GitBash {
+  $command = Find-Any @('bash.exe')
+  if ($command -and $command -notlike '*\Windows\System32\*') { return $command }
+  foreach ($path in @(
+    "$env:ProgramFiles\Git\bin\bash.exe",
+    "${env:ProgramFiles(x86)}\Git\bin\bash.exe",
+    "$env:LOCALAPPDATA\Programs\Git\bin\bash.exe",
+    "$env:USERPROFILE\scoop\apps\git\current\bin\bash.exe"
+  )) {
+    if ($path -and (Test-Path $path)) { return $path }
+  }
+  return $null
+}
+
+function Ensure-GitBashSupport {
+  if ($env:FILEFLOW_SETUP_INSTALL_SUPPORT_TOOLS -ne '1') { return }
+  if (Find-GitBash) {
+    Write-Host '[OK]   Git Bash       support terminal disponible'
+    return
+  }
+  foreach ($candidate in @('winget:Git.Git','choco:git','scoop:git')) {
+    $worked = Try-Candidate $candidate
+    Refresh-Path
+    if ($worked -and (Find-GitBash)) {
+      $parts = $candidate.Split(':', 2)
+      Write-Host ('[OK]   Git Bash       installé via {0}' -f $parts[0])
+      Write-OwnedPackage -Component 'support:git-bash' -Manager $parts[0] -Package $parts[1] -Kind 'integration'
+      return
+    }
+    Warn "Git Bash: $candidate unavailable or installation failed; trying next source."
+  }
+  Write-Warning '[MISS] Git Bash       support terminal indisponible; FileFlow continuera avec PowerShell natif.'
+}
+
 function Is-Available([string]$Probe) {
   if ($Probe -eq '@office') { return [bool](Find-LibreOffice) }
   if ($Probe -eq '@browser') { return [bool](Find-Browser) }
@@ -188,7 +252,11 @@ function Try-Candidate([string]$Candidate) {
   }
 }
 
-function Ensure-Engine([string]$Label, [string]$Probe, [string[]]$Candidates) {
+function Ensure-Engine([string]$Id, [string]$Label, [string]$Probe, [string[]]$Candidates) {
+  if (-not (Test-EngineSelected $Id)) {
+    Write-Host ('[SKIP] {0,-14} not selected by FileFlow Setup' -f $Label)
+    return
+  }
   if (Is-Available $Probe) {
     Write-Host ('[OK]   {0,-14} already available' -f $Label)
     $script:Available++
@@ -199,6 +267,8 @@ function Ensure-Engine([string]$Label, [string]$Probe, [string[]]$Candidates) {
     Refresh-Path
     if ($worked -and (Is-Available $Probe)) {
       Write-Host ('[OK]   {0,-14} installed via {1}' -f $Label, $candidate.Split(':', 2)[0])
+      $parts = $candidate.Split(':', 2)
+      Write-OwnedPackage -Component $Id -Manager $parts[0] -Package $parts[1]
       $script:Available++
       return
     }
@@ -210,23 +280,24 @@ function Ensure-Engine([string]$Label, [string]$Probe, [string[]]$Candidates) {
 
 Write-Host "FileFlow runtime dependency setup - Windows / $([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)"
 Refresh-Path
+Ensure-GitBashSupport
 
-Ensure-Engine 'FFmpeg'       'ffmpeg.exe|ffmpeg'             @('winget:Gyan.FFmpeg','choco:ffmpeg','scoop:ffmpeg')
-Ensure-Engine 'libvips'      'vips.exe|vips'                 @('winget:libvips.libvips','choco:vips','scoop:vips')
-Ensure-Engine 'ImageMagick'  'magick.exe|magick'             @('winget:ImageMagick.ImageMagick','choco:imagemagick','scoop:imagemagick')
-Ensure-Engine 'qpdf'         'qpdf.exe|qpdf'                 @('winget:QPDF.QPDF','choco:qpdf','scoop:qpdf')
-Ensure-Engine 'img2pdf'      'img2pdf.exe|img2pdf'           @('pipx:img2pdf','scoop:img2pdf')
-Ensure-Engine 'Poppler'      'pdftoppm.exe|pdftoppm'         @('winget:oschwartz10612.Poppler','choco:poppler','scoop:poppler')
-Ensure-Engine 'Ghostscript'  'gswin64c.exe|gswin32c.exe|gs'  @('winget:ArtifexSoftware.GhostScript','choco:ghostscript','scoop:ghostscript')
-Ensure-Engine 'Tesseract'    'tesseract.exe|tesseract'       @('winget:tesseract-ocr.tesseract','choco:tesseract','scoop:tesseract')
-Ensure-Engine 'OCRmyPDF'     'ocrmypdf.exe|ocrmypdf'         @('pipx:ocrmypdf')
-Ensure-Engine 'LibreOffice'  '@office'                       @('winget:TheDocumentFoundation.LibreOffice','choco:libreoffice-fresh','scoop:libreoffice')
-Ensure-Engine 'Pandoc'       'pandoc.exe|pandoc'             @('winget:JohnMacFarlane.Pandoc','choco:pandoc','scoop:pandoc')
-Ensure-Engine 'Navigateur PDF' '@browser'                    @('winget:Microsoft.Edge','winget:Google.Chrome')
-Ensure-Engine 'ExifTool'     'exiftool.exe|exiftool'         @('winget:OliverBetz.ExifTool','choco:exiftool','scoop:exiftool')
-Ensure-Engine '7-Zip'        '7zz.exe|7z.exe|7z'             @('winget:7zip.7zip','choco:7zip','scoop:7zip')
-Ensure-Engine 'Zstandard'    'zstd.exe|zstd'                 @('winget:Facebook.Zstandard','choco:zstandard','scoop:zstd')
-Ensure-Engine 'LZ4'          'lz4.exe|lz4'                   @('winget:LZ4.LZ4','choco:lz4','scoop:lz4')
+Ensure-Engine 'ffmpeg' 'FFmpeg'       'ffmpeg.exe|ffmpeg'             @('winget:Gyan.FFmpeg','choco:ffmpeg','scoop:ffmpeg')
+Ensure-Engine 'vips' 'libvips'      'vips.exe|vips'                 @('winget:libvips.libvips','choco:vips','scoop:vips')
+Ensure-Engine 'imagemagick' 'ImageMagick'  'magick.exe|magick'             @('winget:ImageMagick.ImageMagick','choco:imagemagick','scoop:imagemagick')
+Ensure-Engine 'qpdf' 'qpdf'         'qpdf.exe|qpdf'                 @('winget:QPDF.QPDF','choco:qpdf','scoop:qpdf')
+Ensure-Engine 'img2pdf' 'img2pdf'      'img2pdf.exe|img2pdf'           @('pipx:img2pdf','scoop:img2pdf')
+Ensure-Engine 'poppler' 'Poppler'      'pdftoppm.exe|pdftoppm'         @('winget:oschwartz10612.Poppler','choco:poppler','scoop:poppler')
+Ensure-Engine 'ghostscript' 'Ghostscript'  'gswin64c.exe|gswin32c.exe|gs'  @('winget:ArtifexSoftware.GhostScript','choco:ghostscript','scoop:ghostscript')
+Ensure-Engine 'tesseract' 'Tesseract'    'tesseract.exe|tesseract'       @('winget:tesseract-ocr.tesseract','choco:tesseract','scoop:tesseract')
+Ensure-Engine 'ocrmypdf' 'OCRmyPDF'     'ocrmypdf.exe|ocrmypdf'         @('pipx:ocrmypdf')
+Ensure-Engine 'libreoffice' 'LibreOffice'  '@office'                       @('winget:TheDocumentFoundation.LibreOffice','choco:libreoffice-fresh','scoop:libreoffice')
+Ensure-Engine 'pandoc' 'Pandoc'       'pandoc.exe|pandoc'             @('winget:JohnMacFarlane.Pandoc','choco:pandoc','scoop:pandoc')
+Ensure-Engine 'browser' 'Navigateur PDF' '@browser'                    @('winget:Microsoft.Edge','winget:Google.Chrome')
+Ensure-Engine 'exiftool' 'ExifTool'     'exiftool.exe|exiftool'         @('winget:OliverBetz.ExifTool','choco:exiftool','scoop:exiftool')
+Ensure-Engine 'sevenzip' '7-Zip'        '7zz.exe|7z.exe|7z'             @('winget:7zip.7zip','choco:7zip','scoop:7zip')
+Ensure-Engine 'zstd' 'Zstandard'    'zstd.exe|zstd'                 @('winget:Facebook.Zstandard','choco:zstandard','scoop:zstd')
+Ensure-Engine 'lz4' 'LZ4'          'lz4.exe|lz4'                   @('winget:LZ4.LZ4','choco:lz4','scoop:lz4')
 
 Write-Host ""
 Write-Host "Runtime dependencies: $script:Available available, $script:Missing missing, $script:Warnings fallback warnings."

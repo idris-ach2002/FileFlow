@@ -91,15 +91,18 @@ export class AppComponent {
       const profileId = this.auth.profile()?.id;
       if (profileId) await this.initializeAuthenticatedContext(profileId);
     } finally {
+      let smokeTest = false;
       if (isTauri()) {
-        // No-op outside CI smoke runs. In packaged tests this is the end-to-end
-        // proof that Angular loaded and successfully reached the Rust backend.
-        await this.bridge.smokeFrontendReady().catch(() => undefined);
+        // In packaged tests this is the end-to-end proof that Angular loaded
+        // and reached Rust. The test process stays invisible to the user.
+        smokeTest = await this.bridge.smokeFrontendReady().catch(() => false);
       }
-      await this.revealDesktopWindow();
-      // Update checks are deliberately non-blocking: startup/authentication must
-      // remain instant even when GitHub or the update endpoint is unavailable.
-      setTimeout(() => void this.updater.check(true), 2500);
+      if (!smokeTest) {
+        await this.revealDesktopWindow();
+        // Update checks are deliberately non-blocking: startup/authentication must
+        // remain instant even when GitHub or the update endpoint is unavailable.
+        setTimeout(() => void this.updater.check(true), 2500);
+      }
     }
   }
 

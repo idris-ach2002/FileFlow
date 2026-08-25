@@ -1,5 +1,6 @@
 packages:
   - frontend
+  - website
 
 allowBuilds:
   '@parcel/watcher@2.6.0': true

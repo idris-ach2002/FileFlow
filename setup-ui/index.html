@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <title>FileFlow Setup</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="engine-selection.js" defer></script>
+    <script src="setup.js" defer></script>
+  </head>
+  <body>
+    <main class="setup-shell">
+      <header class="setup-header">
+        <div class="brand-lockup">
+          <div class="brand-orb" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </div>
+          <div>
+            <strong>FileFlow</strong>
+            <small>Setup &amp; Maintenance</small>
+          </div>
+        </div>
+        <div class="machine-pill" id="machine-pill">Analyse de votre appareil…</div>
+      </header>
+
+      <section class="hero" id="welcome-view">
+        <div class="hero-copy">
+          <p class="eyebrow">INSTALLATION GUIDÉE</p>
+          <h1>Prêt pour vos fichiers.<br><span>Sans détour.</span></h1>
+          <p class="hero-lead" id="hero-lead">
+            FileFlow vérifie votre appareil, installe uniquement ce qui manque et contrôle le résultat avant de se déclarer prêt.
+          </p>
+          <div class="hero-actions">
+            <button class="primary-action" id="primary-action" type="button" disabled>
+              <span id="primary-label">Préparation…</span>
+              <span aria-hidden="true">→</span>
+            </button>
+            <button class="quiet-action" id="customize-action" type="button" disabled>Personnaliser</button>
+          </div>
+          <div class="trust-row" aria-label="Garanties d’installation">
+            <span>✓ Paquet contrôlé</span>
+            <span>✓ Retour arrière</span>
+            <span>✓ Fichiers personnels protégés</span>
+          </div>
+        </div>
+
+        <div class="system-visual" aria-hidden="true">
+          <div class="orbit orbit-one"><i></i></div>
+          <div class="orbit orbit-two"><i></i></div>
+          <div class="core-logo">FF</div>
+          <div class="engine-node node-one">PDF</div>
+          <div class="engine-node node-two">IMG</div>
+          <div class="engine-node node-three">VID</div>
+          <div class="engine-node node-four">ZIP</div>
+        </div>
+      </section>
+
+      <section class="custom-view hidden" id="custom-view" aria-labelledby="custom-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">PLAN PERSONNALISÉ</p>
+            <h2 id="custom-title">Choisissez, FileFlow s’occupe du reste.</h2>
+          </div>
+          <button class="quiet-action" id="custom-back" type="button">Retour</button>
+        </div>
+        <div class="choice-grid" id="install-choices">
+          <button class="choice-card selected" type="button" data-profile="standard" aria-pressed="true">
+            <span class="choice-icon">✦</span>
+            <strong>Installation standard</strong>
+            <small>Application et moteurs manquants. Recommandé.</small>
+          </button>
+          <button class="choice-card" type="button" data-profile="application-only" aria-pressed="false">
+            <span class="choice-icon">◫</span>
+            <strong>Application uniquement</strong>
+            <small>Conserve entièrement votre environnement actuel.</small>
+          </button>
+          <button class="choice-card" type="button" data-profile="custom" aria-pressed="false">
+            <span class="choice-icon">⌁</span>
+            <strong>Application personnalisée</strong>
+            <small>Installe l’application avec seulement les moteurs sélectionnés.</small>
+          </button>
+          <button class="choice-card" type="button" data-profile="engines-only" aria-pressed="false">
+            <span class="choice-icon">⚙</span>
+            <strong>Moteurs uniquement</strong>
+            <small>Installe ou vérifie les moteurs sans télécharger ni modifier FileFlow.</small>
+          </button>
+        </div>
+        <div class="engine-picker hidden" id="engine-picker">
+          <div class="engine-picker-head">
+            <div><strong>Moteurs et capacités</strong><small id="engine-selection-summary">0 sélectionné</small></div>
+            <button type="button" class="text-action" id="toggle-all-engines">Tout sélectionner</button>
+          </div>
+          <div class="engine-grid" id="engine-grid"></div>
+        </div>
+        <div class="uninstall-options hidden" id="uninstall-options">
+          <label><input type="checkbox" id="remove-engines" checked> Retirer les moteurs et bibliothèques ajoutés par FileFlow <small>(recommandé, les dépendances préexistantes sont conservées)</small></label>
+          <label class="expert-option"><input type="checkbox" id="remove-preexisting-engines"> Mode expert : choisir aussi des moteurs préexistants à retirer <small>(peut affecter d’autres applications)</small></label>
+          <label><input type="checkbox" id="remove-cache" checked> Supprimer le cache</label>
+          <label><input type="checkbox" id="remove-settings"> Supprimer les réglages</label>
+          <label><input type="checkbox" id="remove-history"> Supprimer l’historique</label>
+          <p>Les fichiers produits restent toujours protégés.</p>
+        </div>
+        <div class="custom-footer">
+          <button class="primary-action" id="review-action" type="button">Examiner le plan <span aria-hidden="true">→</span></button>
+        </div>
+      </section>
+
+      <section class="plan-view hidden" id="plan-view" aria-labelledby="plan-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">AVANT DE COMMENCER</p>
+            <h2 id="plan-title">Voici exactement ce qui va se passer.</h2>
+          </div>
+          <button class="quiet-action" id="plan-back" type="button">Modifier</button>
+        </div>
+        <div class="plan-layout">
+          <ol class="plan-list" id="plan-list"></ol>
+          <aside class="plan-summary">
+            <span class="summary-mark">✓</span>
+            <strong id="plan-summary-title">Plan sécurisé</strong>
+            <p id="plan-summary-copy">Aucune modification ne commence avant votre confirmation.</p>
+            <ul id="plan-warnings"></ul>
+          </aside>
+        </div>
+        <div class="plan-footer">
+          <label class="dry-run-label"><input type="checkbox" id="dry-run"> Simuler sans modifier</label>
+          <button class="primary-action" id="start-action" type="button">Confirmer et commencer</button>
+        </div>
+      </section>
+
+      <section class="progress-view hidden" id="progress-view" aria-labelledby="progress-title">
+        <div class="progress-heading">
+          <div>
+            <p class="eyebrow" id="progress-eyebrow">INSTALLATION EN COURS</p>
+            <h2 id="progress-title">Préparation de FileFlow</h2>
+            <p id="progress-message">Initialisation du moteur transactionnel…</p>
+          </div>
+          <div class="progress-number" id="progress-number">0%</div>
+        </div>
+        <div class="global-progress" aria-hidden="true"><span id="global-progress-bar"></span></div>
+
+        <div class="execution-layout">
+          <ol class="step-list" id="step-list"></ol>
+          <div class="live-panel">
+            <div class="live-animation" id="live-animation" aria-hidden="true">
+              <div class="flow-file file-a"></div>
+              <div class="flow-file file-b"></div>
+              <div class="flow-file file-c"></div>
+              <div class="flow-target">FF</div>
+            </div>
+            <div class="live-metrics">
+              <span id="metric-primary">En attente</span>
+              <span id="metric-secondary">Les mesures apparaîtront ici</span>
+            </div>
+            <div class="resource-status hidden" id="resource-status" aria-live="polite"></div>
+          </div>
+        </div>
+
+        <div class="terminal-panel">
+          <div class="terminal-toolbar">
+            <div class="terminal-lights" aria-hidden="true"><i></i><i></i><i></i></div>
+            <strong>Activité vérifiée</strong>
+            <button type="button" class="text-action" id="terminal-toggle" aria-expanded="true">Masquer</button>
+          </div>
+          <div class="terminal-output" id="terminal-output" role="log" aria-live="polite"></div>
+        </div>
+        <div class="progress-footer">
+          <span id="safe-cancel-copy">Vous pouvez annuler aux étapes sûres.</span>
+          <button class="danger-action" id="cancel-action" type="button">Annuler proprement</button>
+        </div>
+      </section>
+
+      <section class="finish-view hidden" id="finish-view" aria-labelledby="finish-title">
+        <div class="finish-mark" id="finish-mark" aria-hidden="true">✓</div>
+        <p class="eyebrow" id="finish-eyebrow">INSTALLATION VÉRIFIÉE</p>
+        <h2 id="finish-title">FileFlow est prêt.</h2>
+        <p id="finish-copy">L’application et ses moteurs ont passé les contrôles après installation.</p>
+        <div class="finish-stats" id="finish-stats"></div>
+        <div class="hero-actions">
+          <button class="primary-action" id="open-fileflow" type="button">Ouvrir FileFlow</button>
+          <button class="quiet-action" id="close-setup" type="button">Fermer</button>
+        </div>
+      </section>
+    </main>
+    <div class="toast hidden" id="toast" role="alert"></div>
+  </body>
+</html>

@@ -1,0 +1,69 @@
+name: FileFlow Automatic Promotion
+
+on:
+  workflow_run:
+    workflows: [FileFlow Common Quality]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: fileflow-automatic-promotion
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Promote a new validated version
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/setup-node@v6
+        with: { node-version: '22.22.3' }
+      - name: Decide whether this commit introduces a release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VALIDATED_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$VALIDATED_SHA"
+          VERSION=$(node -p "require('./package.json').version")
+          node scripts/release/assert-version-consistency.mjs "$VERSION"
+          TAG="v${VERSION}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "FileFlow ${VERSION} est déjà publié ; aucune promotion."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}"
+            TAG_SHA=$(git rev-list -n 1 "$TAG")
+            test "$TAG_SHA" = "$VALIDATED_SHA" || {
+              echo "$TAG existe déjà sur $TAG_SHA au lieu du commit validé $VALIDATED_SHA" >&2
+              exit 2
+            }
+            echo "$TAG existe sans GitHub Release : reprise automatique de la publication."
+          fi
+          LATEST=$(gh release list --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName // ""')
+          node scripts/release/assert-version-newer.mjs "$VERSION" "${LATEST#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+      - name: Dispatch the atomic five-platform release
+        if: steps.release.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VALIDATED_SHA: ${{ github.event.workflow_run.head_sha }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          gh workflow run fileflow-release.yml \
+            --ref main \
+            -f release_sha="$VALIDATED_SHA" \
+            -f version="$VERSION"
+          echo "FileFlow ${VERSION} envoyé au workflow atomique depuis ${VALIDATED_SHA}."

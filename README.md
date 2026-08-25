@@ -21,7 +21,7 @@ Le logiciel privilégie l’exécution locale, la traçabilité, les sorties dé
 
 L’utilisateur sélectionne des fichiers, FileFlow détecte leurs formats, détermine les actions compatibles, planifie les moteurs nécessaires, contrôle la concurrence, exécute les conversions puis finalise les résultats selon une politique de destination et de conflit.
 
-Version du workspace documentée : **1.0.1**.
+Version du workspace documentée : **1.0.6**.
 
 ## Ce que FileFlow sait faire
 
@@ -54,25 +54,27 @@ Les pages HTML sont imprimées dans un navigateur Chromium isolé : JavaScript e
 | [Difficultés](doc/08-difficulties.md) | Incidents et solutions |
 | [Exécution](doc/09-execution.md) | Local + GitHub Actions |
 | [Installation](doc/10-installation.md) | Installateur général |
+| [Setup et portail Cloudflare](docs/SETUP.md) | Installation, maintenance, désinstallation et publication web |
 
-## Installation rapide
+## Installation rapide avec FileFlow Setup
 
-Télécharger `install-fileflow-one-general.sh` depuis la racine du dépôt.
+Le [portail de téléchargement FileFlow](https://fileflow-downloads.pages.dev) détecte la plateforme et propose le Setup graphique adapté. Il affiche le diagnostic, le plan, la progression réelle et les post-contrôles ; une opération interrompue est restaurée.
+
+Depuis un terminal macOS/Linux :
 
 macOS / Linux :
 
 ```bash
-chmod +x install-fileflow-one-general.sh
-./install-fileflow-one-general.sh
+curl -fsSL https://fileflow-downloads.pages.dev/install.sh | sh
 ```
 
-Windows : ouvrir **Git Bash**, puis :
+Windows PowerShell :
 
 ```bash
-bash install-fileflow-one-general.sh
+irm https://fileflow-downloads.pages.dev/install.ps1 | iex
 ```
 
-Le script détecte la plateforme, sélectionne le payload natif vert correspondant, appelle l’installateur officiel de FileFlow et vérifie l’installation.
+Le fichier `install-fileflow-one-general.sh` reste téléchargeable pour les utilisateurs qui préfèrent inspecter le script avant de l’exécuter. `install.sh` et `install.ps1` sont conservés comme installateurs historiques de secours et outils développeur.
 
 Voir [Installation générale](doc/10-installation.md).
 

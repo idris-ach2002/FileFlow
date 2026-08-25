@@ -89,12 +89,15 @@ console.log(`Node:  ${process.version}`);
 console.log(`pnpm:  ${outputPnpm(['--version'])}`);
 console.log(`Rust:  ${output(rustc, ['--version'])}`);
 
-runPnpm('1/6 Angular production build', ['run', 'frontend:build']);
-runPnpm('2/6 Angular tests', ['run', 'frontend:test']);
-run('3/6 Rust formatting', cargo, ['fmt', '--all', '--', '--check']);
-run('4/6 Rust workspace check', cargo, ['check', '--workspace', '--locked']);
-run('5/6 Rust tests', cargo, ['test', '--workspace', '--locked']);
-run('6/6 Clippy (warnings are errors)', cargo, [
+runPnpm('1/9 Angular production build', ['run', 'frontend:build']);
+runPnpm('2/9 Angular tests', ['run', 'frontend:test']);
+run('3/9 Setup UI selection tests', process.execPath, ['scripts/setup/test-ui.cjs']);
+run('4/9 Setup local artifact resolver', process.execPath, ['scripts/setup/test-local-source.mjs']);
+run('5/9 Cloudflare download portal tests', process.execPath, ['website/scripts/test.mjs']);
+run('6/9 Rust formatting', cargo, ['fmt', '--all', '--', '--check']);
+run('7/9 Rust workspace check', cargo, ['check', '--workspace', '--locked']);
+run('8/9 Rust tests', cargo, ['test', '--workspace', '--locked']);
+run('9/9 Clippy (warnings are errors)', cargo, [
   'clippy', '--workspace', '--all-targets', '--all-features', '--locked', '--', '-D', 'warnings',
 ]);
 

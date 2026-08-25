@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "FileFlowSetup",
+  "version": "1.0.7",
+  "identifier": "com.fileflow.setup",
+  "build": {
+    "frontendDist": "../setup-ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "setup",
+        "title": "FileFlow Setup",
+        "width": 1180,
+        "height": 780,
+        "minWidth": 760,
+        "minHeight": 620,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "category": "Utility",
+    "shortDescription": "Installer, réparer ou désinstaller FileFlow",
+    "longDescription": "FileFlow Setup fournit une installation guidée, transactionnelle et vérifiée de FileFlow et de ses moteurs locaux.",
+    "publisher": "FileFlow",
+    "createUpdaterArtifacts": false,
+    "icon": [
+      "../src-tauri/icons/32x32.png",
+      "../src-tauri/icons/128x128.png",
+      "../src-tauri/icons/icon.png",
+      "../src-tauri/icons/128x128@2x.png",
+      "../src-tauri/icons/icon.icns",
+      "../src-tauri/icons/icon.ico"
+    ],
+    "resources": [
+      "../scripts/runtime/doctor.sh",
+      "../scripts/runtime/doctor.ps1",
+      "../scripts/runtime/install-dependencies.sh",
+      "../scripts/runtime/install-dependencies.ps1"
+    ]
+  }
+}

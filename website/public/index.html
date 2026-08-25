@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Téléchargez et installez FileFlow avec un Setup guidé, vérifié et réversible.">
+  <meta name="theme-color" content="#07111f">
+  <title>FileFlow — téléchargement et installation</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/interactions.css">
+  <script src="/app.js" type="module"></script>
+</head>
+<body>
+  <header class="nav"><a class="brand" href="#top" aria-label="FileFlow accueil"><span class="brand-mark">F</span><span>FileFlow</span></a><nav><a href="#features">Setup</a><a href="#guide">Installer</a><a href="#all-downloads">Téléchargements</a></nav><span class="release-state" id="release-state"><i></i>Vérification de la release</span></header>
+  <main id="top">
+    <section class="hero">
+      <div class="hero-copy"><p class="eyebrow">VOS FICHIERS. SIMPLEMENT.</p><h1>Installez FileFlow.<br><em>Gardez le contrôle.</em></h1><p class="lead">Un installateur visuel vérifie votre système, télécharge la bonne version, installe les moteurs utiles et contrôle chaque étape. En cas de problème, il restaure l’état précédent.</p>
+        <div class="primary-actions" id="download"><a class="primary" id="download-primary" href="#all-downloads" aria-disabled="true"><span>Télécharger FileFlow Setup</span><small id="download-detail">Détection de votre appareil…</small></a><button class="secondary" id="copy-command" type="button">Copier la commande terminal</button></div>
+        <p class="trust"><span>✓ SHA‑256 vérifié</span><span>✓ Release atomique</span><span>✓ Désinstallation propre</span></p>
+      </div>
+      <div class="setup-preview" aria-label="Aperçu de FileFlow Setup"><div class="preview-bar"><span></span><span></span><span></span><b>FileFlow Setup</b></div><div class="preview-body"><aside><strong>Installation</strong><i class="done">✓ Diagnostic</i><i class="done">✓ Source vérifiée</i><i class="active">◌ Application</i><i>○ Moteurs locaux</i><i>○ Post-contrôles</i></aside><article><div class="orb"><span></span></div><p>Installation en cours</p><h3>Activation de FileFlow</h3><div class="meter"><span></span></div><div class="terminal"><code>signature valide</code><code>bundle contrôlé</code><code class="bright">activation atomique…</code></div></article></div></div>
+    </section>
+
+    <section class="feature-section" id="features"><p class="eyebrow">UN SETUP QUI EXPLIQUE</p><h2>Pas une boîte noire.</h2><div class="feature-grid"><article><b>01</b><h3>Diagnostic réel</h3><p>Architecture, espace, permissions, application existante et 16 moteurs locaux sont détectés avant toute modification.</p></article><article><b>02</b><h3>Transaction réversible</h3><p>Journal, sauvegarde, quarantaine et rollback empêchent une installation partiellement cassée.</p></article><article><b>03</b><h3>Progression honnête</h3><p>Octets téléchargés, étape active, sortie des moteurs et post-contrôles sont visibles en temps réel.</p></article><article><b>04</b><h3>Maintenance complète</h3><p>Réparer, diagnostiquer ou désinstaller depuis FileFlow, le Setup externe ou le CLI.</p></article></div></section>
+
+    <section class="guide" id="guide"><div><p class="eyebrow">TROIS ÉTAPES</p><h2 id="installation-guide">Deux clics.<br>Une installation vérifiée.</h2><p>Le profil standard convient à la majorité des utilisateurs. Le mode personnalisé permet de choisir chaque moteur et d’inspecter le plan avant exécution.</p></div><ol><li><span>1</span><div><strong>Téléchargez Setup</strong><p>Le portail sélectionne automatiquement le bon système et la bonne architecture.</p></div></li><li><span>2</span><div><strong>Ouvrez le fichier</strong><p>macOS : DMG. Windows : EXE. Linux : AppImage. Les signatures sont contrôlées.</p></div></li><li><span>3</span><div><strong>Choisissez « Standard »</strong><p>Setup installe FileFlow, complète les moteurs manquants puis exécute les contrôles.</p></div></li></ol></section>
+
+    <section class="downloads" id="all-downloads"><div class="section-title"><div><p class="eyebrow">TOUTES LES PLATEFORMES</p><h2>Choisissez votre appareil.</h2></div><p id="manifest-version">Chargement de la dernière release stable…</p></div><div class="platform-grid" id="platform-grid" aria-live="polite"></div></section>
+
+    <section class="verify"><div><p class="eyebrow">VÉRIFICATION LOCALE</p><h2>Vérifiez ce que vous avez téléchargé.</h2><p>Le fichier reste sur votre appareil. Le navigateur calcule son SHA‑256 et le compare au manifeste publié atomiquement avec la release.</p></div><label class="verify-drop" for="verify-file"><input id="verify-file" type="file"><strong>Déposer ou choisir un installateur</strong><span id="verify-result">Aucun fichier sélectionné</span></label></section>
+  </main>
+  <footer><a class="brand" href="#top"><span class="brand-mark">F</span><span>FileFlow</span></a><p>Conversion et organisation locales. Vos fichiers ne quittent pas votre appareil.</p><a href="https://github.com/idris-ach2002/FileFlow">Code source</a></footer>
+  <div class="toast" id="toast" role="status"></div>
+</body>
+</html>

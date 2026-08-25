@@ -2,6 +2,13 @@ name: FileFlow Release Windows
 
 on:
   workflow_call:
+    inputs:
+      release_ref:
+        required: true
+        type: string
+      release_version:
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -19,7 +26,9 @@ jobs:
       RUST_BACKTRACE: '1'
     steps:
       - uses: actions/checkout@v7
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.release_ref }}
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
@@ -39,11 +48,17 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Validate tag and source
         shell: pwsh
+        env:
+          FILEFLOW_RELEASE_REF: ${{ inputs.release_ref }}
+          FILEFLOW_RELEASE_VERSION: ${{ inputs.release_version }}
         run: |
           $version = node -p "require('./src-tauri/tauri.conf.json').version"
-          if ($env:GITHUB_REF_NAME -ne "v$version") { throw 'release tag/version mismatch' }
+          $expected = $env:FILEFLOW_RELEASE_VERSION.TrimStart('v')
+          if ($env:FILEFLOW_RELEASE_REF -notmatch '^[0-9a-f]{40}$') { throw 'invalid release SHA' }
+          if ($expected -ne $version) { throw 'release input/version mismatch' }
+          if ((git rev-parse HEAD) -ne $env:FILEFLOW_RELEASE_REF) { throw 'release source mismatch' }
           git fetch origin main:refs/remotes/origin/main
-          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+          git merge-base --is-ancestor HEAD origin/main
           if ($LASTEXITCODE -ne 0) { throw 'release tag must point to main' }
           pnpm run release:check
           ./scripts/ci/windows-preflight.ps1
@@ -83,16 +98,26 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm exec tauri build --target x86_64-pc-windows-msvc --bundles nsis,msi --config src-tauri/tauri.release.conf.json
+      - name: Build FileFlow Setup and CLI
+        shell: pwsh
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target/fileflow-setup
+          FILEFLOW_SETUP_TARGET_DIR: ${{ github.workspace }}/target/fileflow-setup
+        run: |
+          node scripts/setup/run-tauri.mjs build --target x86_64-pc-windows-msvc --bundles nsis --config tauri.release.conf.json
+          cargo build --release -p fileflow-setup --bin fileflow-setup-cli --target x86_64-pc-windows-msvc
+          node scripts/release/package-setup-cli.mjs --target x86_64-pc-windows-msvc
       - name: Validate release
         shell: pwsh
         run: |
-          $validationArgs = @('--target', 'x86_64-pc-windows-msvc')
+          $validationArgs = @('--target', 'x86_64-pc-windows-msvc', '--require-setup')
           if (-not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_THUMBPRINT)) {
             $validationArgs += '--strict'
           }
           node scripts/release/validate-distribution.mjs @validationArgs
           node scripts/release/smoke-packaged-app.mjs --target x86_64-pc-windows-msvc
-          node scripts/release/collect-artifacts.mjs --target x86_64-pc-windows-msvc
+          node scripts/release/smoke-packaged-setup.mjs --target x86_64-pc-windows-msvc
+          node scripts/release/collect-artifacts.mjs --target x86_64-pc-windows-msvc --include-setup
       - uses: actions/upload-artifact@v7
         with:
           name: native-x86_64-pc-windows-msvc

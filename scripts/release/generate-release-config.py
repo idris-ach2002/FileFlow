@@ -10,7 +10,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 TAURI = ROOT / "src-tauri"
+SETUP_TAURI = ROOT / "setup-tauri"
 out = TAURI / "tauri.release.conf.json"
+setup_out = SETUP_TAURI / "tauri.release.conf.json"
 
 
 def deep_merge(base: dict, overlay: dict) -> dict:
@@ -110,6 +112,23 @@ if "windows" in target:
         if timestamp: windows["timestampUrl"] = timestamp
 
 out.write_text(json.dumps(config, indent=2) + "\n")
+
+setup_base = json.loads((SETUP_TAURI / "tauri.conf.json").read_text())
+setup_bundle = deep_merge(setup_base.get("bundle", {}), platform.get("bundle", {}))
+setup_bundle["createUpdaterArtifacts"] = False
+if "apple-darwin" in target:
+    setup_macos = setup_bundle.setdefault("macOS", {})
+    assert isinstance(setup_macos, dict)
+    setup_macos["signingIdentity"] = bundle.get("macOS", {}).get("signingIdentity", "-")
+if "windows" in target and thumbprint:
+    setup_windows = setup_bundle.setdefault("windows", {})
+    assert isinstance(setup_windows, dict)
+    setup_windows["certificateThumbprint"] = thumbprint
+    setup_windows["digestAlgorithm"] = "sha256"
+    timestamp = os.environ.get("WINDOWS_TIMESTAMP_URL", "").strip()
+    if timestamp:
+        setup_windows["timestampUrl"] = timestamp
+setup_out.write_text(json.dumps({"bundle": setup_bundle}, indent=2) + "\n")
 print(f"target: {target}")
 print(f"mode: {'strict-production' if args.strict else 'development/package-smoke'}")
 print(f"updater artifacts: {'enabled' if updater_enabled else 'disabled'}")
@@ -118,3 +137,4 @@ if "apple-darwin" in target:
     print(f"macOS signing: {identity}")
 print(f"windows signing: {'configured' if thumbprint and 'windows' in target else 'not configured'}")
 print(out)
+print(setup_out)

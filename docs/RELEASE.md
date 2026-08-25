@@ -2,7 +2,7 @@
 
 ## Principe
 
-La CI construit uniquement l'application FileFlow. Elle **ne construit, ne relocalise et ne certifie plus les moteurs tiers**.
+La CI construit l’application FileFlow, FileFlow Setup et son CLI. Elle **ne construit, ne relocalise et ne certifie plus les moteurs tiers**.
 
 Les moteurs sont installés une seule fois sur la machine utilisateur par `install.sh` / `install.ps1` et sont découverts à l'exécution.
 
@@ -12,11 +12,11 @@ Cette séparation élimine de la CI les chaînes fragiles Conda/micromamba, les 
 
 | OS | Architecture | Runner | Livrables |
 | --- | --- | --- | --- |
-| macOS 11+ | Apple Silicon | `macos-15` | APP + DMG |
-| macOS 11+ | Intel | `macos-15-intel` | APP + DMG |
-| Windows | x86_64 | `windows-2025` | NSIS EXE + MSI |
-| Linux | x86_64 | `ubuntu-22.04` | AppImage + DEB + RPM |
-| Linux | ARM64 | `ubuntu-22.04-arm` | AppImage + DEB + RPM |
+| macOS 11+ | Apple Silicon | `macos-15` | FileFlow APP/DMG + Setup APP/DMG + CLI |
+| macOS 11+ | Intel | `macos-15-intel` | FileFlow APP/DMG + Setup APP/DMG + CLI |
+| Windows | x86_64 | `windows-2025` | FileFlow NSIS/MSI + Setup EXE + CLI |
+| Linux | x86_64 | `ubuntu-22.04` | FileFlow + Setup AppImage/DEB/RPM + CLI |
+| Linux | ARM64 | `ubuntu-22.04-arm` | FileFlow + Setup AppImage/DEB/RPM + CLI |
 
 ## Workflows courants
 
@@ -66,7 +66,9 @@ Le paquet est fragmenté uniquement pour son transport Git. Aucun moteur n'est i
 
 ## Releases signées
 
-Un tag unique `vX.Y.Z` déclenche `release.yml`. Celui-ci appelle les trois workflows de build réutilisables et ne publie la release qu’après la réussite des cinq cibles natives. Le manifeste `latest.json`, ses cinq signatures et `SHA256SUMS` sont vérifiés ensemble avant publication ; un build partiel n’est donc jamais proposé par l’updater.
+Un tag unique `vX.Y.Z` déclenche `fileflow-release.yml`. Celui-ci appelle les trois workflows de build réutilisables et ne publie la release qu’après la réussite des cinq cibles natives. `latest.json` alimente l’Updater intégré ; `downloads.json` alimente FileFlow Setup et le portail Cloudflare. Les deux manifestes, les signatures et `SHA256SUMS` sont contrôlés avant publication.
+
+Le portail est déployé par `site-cloudflare.yml` après validation de `website/`. Il nécessite les secrets GitHub `CLOUDFLARE_API_TOKEN` et `CLOUDFLARE_ACCOUNT_ID`.
 
 ### Updater
 
@@ -140,7 +142,7 @@ Un moteur absent n'empêche pas l'application de démarrer : la capability corre
 - payload `RUNTIME_MODE=system` ;
 - `git diff --check`.
 
-## Test du bundle
+## Tests des bundles
 
 `scripts/release/smoke-packaged-app.mjs` lance le vrai artefact :
 
@@ -149,3 +151,5 @@ Un moteur absent n'empêche pas l'application de démarrer : la capability corre
 - installation NSIS temporaire sur Windows.
 
 Le test valide le handshake frontend Angular -> backend Tauri. Il ne nécessite aucun moteur de conversion, conformément à l'architecture runtime système.
+
+`scripts/release/smoke-packaged-setup.mjs` lance séparément le vrai FileFlow Setup, le maintient hors écran, attend son handshake UI -> Tauri et vérifie le diagnostic de plateforme. Les groupes de processus des deux tests sont arrêtés avant que la publication puisse continuer.

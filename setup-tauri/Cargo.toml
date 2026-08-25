@@ -1,0 +1,36 @@
+[package]
+name = "fileflow-setup"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+default-run = "fileflow-setup"
+
+[[bin]]
+name = "fileflow-setup"
+path = "src/main.rs"
+
+[[bin]]
+name = "fileflow-setup-cli"
+path = "src/bin/fileflow-setup-cli.rs"
+
+[lib]
+name = "fileflow_setup_lib"
+path = "src/lib.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+fileflow-setup-core = { path = "../crates/fileflow-setup-core" }
+serde.workspace = true
+serde_json.workspace = true
+rusqlite.workspace = true
+sha2.workspace = true
+tauri = { version = "2.11.5", features = [] }
+tokio.workspace = true
+uuid.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_System_Threading"] }

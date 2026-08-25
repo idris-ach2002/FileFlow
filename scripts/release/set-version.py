@@ -10,7 +10,7 @@ if len(sys.argv) != 2 or not re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?", 
     raise SystemExit("usage: set-version.py X.Y.Z")
 
 version = sys.argv[1]
-for rel in ["package.json", "frontend/package.json", "src-tauri/tauri.conf.json"]:
+for rel in ["package.json", "frontend/package.json", "website/package.json", "src-tauri/tauri.conf.json", "setup-tauri/tauri.conf.json"]:
     path = ROOT / rel
     data = json.loads(path.read_text())
     data["version"] = version
@@ -50,7 +50,7 @@ if count != 1:
 cargo.write_text(text)
 
 workspace_package_names = set()
-for manifest in [ROOT / "src-tauri/Cargo.toml", *sorted((ROOT / "crates").glob("**/Cargo.toml"))]:
+for manifest in [ROOT / "src-tauri/Cargo.toml", ROOT / "setup-tauri/Cargo.toml", *sorted((ROOT / "crates").glob("**/Cargo.toml"))]:
     manifest_text = manifest.read_text()
     match = re.search(r'(?m)^name\s*=\s*"([^"]+)"$', manifest_text)
     if match:

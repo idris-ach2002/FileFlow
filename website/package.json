@@ -1,0 +1,11 @@
+{
+  "name": "@fileflow/download-portal",
+  "version": "1.0.7",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "pnpm dlx wrangler@4 pages dev",
+    "test": "node scripts/test.mjs"
+  }
+}
