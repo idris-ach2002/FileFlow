@@ -192,10 +192,16 @@ def main() -> None:
         "TAG_SHA=$(git rev-list -n 1", "reprise automatique de la publication",
     ])
 
-    require_tokens(".github/workflows/site-cloudflare.yml", [
-        "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "cloudflare/wrangler-action@v4",
-        "workingDirectory: website", "pages deploy dist",
+    site_workflow = require_tokens(".github/workflows/site-cloudflare.yml", [
+        "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID",
+        "working-directory: website", "npx --yes wrangler@4.125.0",
+        "pages deploy dist", "Cloudflare Pages deployment skipped",
     ])
+    if "cloudflare/wrangler-action" in site_workflow:
+        raise SystemExit(
+            "Cloudflare deployment must use the pinned standalone Wrangler command; "
+            "wrangler-action mutates the pnpm workspace during CI"
+        )
     setup_capability = load_json("setup-tauri/capabilities/default.json")
     if setup_capability.get("windows") != ["setup"]:
         raise SystemExit("FileFlow Setup capability must target only the setup window")
