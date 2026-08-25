@@ -1,4 +1,1 @@
-.verify-drop.dragging {
-  border-color: #1675e8;
-  background: #eef6ff;
-}
+[hidden]{display:none!important}.carousel-viewport.dragging{cursor:grabbing;scroll-behavior:auto}.carousel-viewport{cursor:grab}.platform-card.locked::after{content:'';position:absolute;inset:0;pointer-events:none;background:linear-gradient(110deg,transparent 20%,rgba(125,145,175,.14) 50%,transparent 80%);transform:translateX(-120%)}.platform-card.locked:hover::after{animation:lockedSweep .9s ease}.verify-drop.dragging{border-color:#2563eb;background:#eef5ff}@keyframes lockedSweep{to{transform:translateX(120%)}}@media(prefers-reduced-motion:reduce){.platform-card.locked:hover::after{animation:none}}

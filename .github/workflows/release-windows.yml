@@ -104,7 +104,7 @@ jobs:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target/fileflow-setup
           FILEFLOW_SETUP_TARGET_DIR: ${{ github.workspace }}/target/fileflow-setup
         run: |
-          node scripts/setup/run-tauri.mjs build --target x86_64-pc-windows-msvc --bundles nsis --config tauri.release.conf.json
+          node scripts/setup/run-tauri.mjs build --target x86_64-pc-windows-msvc --bundles nsis,msi --config tauri.release.conf.json
           cargo build --release -p fileflow-setup --bin fileflow-setup-cli --target x86_64-pc-windows-msvc
           node scripts/release/package-setup-cli.mjs --target x86_64-pc-windows-msvc
       - name: Validate release

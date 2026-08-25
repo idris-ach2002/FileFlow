@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="980" viewBox="0 0 1600 980">
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f8fbff"/><stop offset="1" stop-color="#edf3ff"/></linearGradient>
+  <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0f766e"/><stop offset="1" stop-color="#5b5cf6"/></linearGradient>
+  <filter id="shadow"><feDropShadow dx="0" dy="20" stdDeviation="28" flood-color="#2c4670" flood-opacity=".14"/></filter>
+  <filter id="soft"><feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#31537b" flood-opacity=".10"/></filter>
+</defs>
+<rect width="1600" height="980" rx="42" fill="url(#bg)"/>
+<rect x="42" y="42" width="1516" height="896" rx="34" fill="#fff" stroke="#d7e4f5" filter="url(#shadow)"/>
+<rect x="84" y="84" width="190" height="70" rx="20" fill="url(#accent)"/>
+<circle cx="122" cy="119" r="22" fill="#fff" fill-opacity=".96"/>
+<text x="122" y="127" text-anchor="middle" font-size="24" font-weight="900" fill="#0f766e" font-family="Inter,Segoe UI,Arial">1</text>
+<text x="156" y="128" font-size="26" font-weight="850" fill="#fff" font-family="Inter,Segoe UI,Arial">Étape</text>
+<text x="84" y="236" font-size="62" font-weight="900" fill="#0f172a" font-family="Inter,Segoe UI,Arial">Choisir votre Linux</text>
+<text x="84" y="292" font-size="28" font-weight="750" fill="#0f766e" font-family="Inter,Segoe UI,Arial">Linux · x64 ou ARM64</text>
+<rect x="80" y="330" width="1440" height="500" rx="30" fill="#f8faff" stroke="#dce6f5"/>
+
+<g transform="translate(120,386)">
+  <text x="0" y="0" font-size="24" font-weight="850" fill="#0f172a" font-family="Inter,Segoe UI,Arial">Linux détecté</text>
+  <text x="0" y="42" font-size="22" fill="#5c6f88" font-family="Inter,Segoe UI,Arial">Choisissez l’architecture recommandée</text>
+  <rect x="0" y="82" width="252" height="220" rx="24" fill="#fff" stroke="#0f766e" stroke-width="2" filter="url(#soft)"/>
+  <rect x="20" y="102" width="92" height="28" rx="14" fill="#e7f8f4"/><text x="66" y="122" text-anchor="middle" font-size="13" font-weight="850" fill="#0f766e" font-family="Inter,Segoe UI,Arial">RECOMMANDÉ</text>
+  <text x="28" y="176" font-size="28" font-weight="900" fill="#0f172a" font-family="Inter,Segoe UI,Arial">Linux x64</text>
+  <text x="28" y="210" font-size="18" fill="#64748b" font-family="Inter,Segoe UI,Arial">AppImage</text>
+  <rect x="28" y="246" width="196" height="44" rx="13" fill="#0f766e"/><text x="126" y="274" text-anchor="middle" font-size="16" font-weight="850" fill="#fff" font-family="Inter,Segoe UI,Arial">Télécharger</text>
+  <rect x="270" y="82" width="252" height="220" rx="24" fill="#fff" stroke="#d6e1f0"/>
+  <text x="298" y="176" font-size="28" font-weight="900" fill="#0f172a" font-family="Inter,Segoe UI,Arial">Linux ARM64</text>
+  <text x="298" y="210" font-size="18" fill="#64748b" font-family="Inter,Segoe UI,Arial">AppImage</text>
+  <rect x="298" y="246" width="196" height="44" rx="13" fill="#eef2f7"/><text x="396" y="274" text-anchor="middle" font-size="16" font-weight="750" fill="#52647a" font-family="Inter,Segoe UI,Arial">Disponible</text>
+</g>
+<g transform="translate(820,390)">
+  <rect width="580" height="310" rx="28" fill="#101826" filter="url(#soft)"/>
+  <circle cx="44" cy="44" r="9" fill="#ff6b5f"/><circle cx="72" cy="44" r="9" fill="#f5c451"/><circle cx="100" cy="44" r="9" fill="#4ac96b"/>
+  <text x="38" y="104" font-size="19" fill="#d9e6f4" font-family="ui-monospace,monospace">~/Téléchargements</text>
+  <text x="38" y="154" font-size="20" fill="#8ee6d0" font-family="ui-monospace,monospace">FileFlowSetup_1.0.8_x86_64.AppImage</text>
+  <text x="38" y="206" font-size="17" fill="#8aa0b7" font-family="ui-monospace,monospace">Setup graphique • pas besoin de terminal</text>
+  <rect x="38" y="238" width="252" height="46" rx="13" fill="#0f766e"/><text x="164" y="268" text-anchor="middle" font-size="17" font-weight="850" fill="#fff" font-family="Inter,Segoe UI,Arial">Ouvrir le Setup</text>
+</g>
+<rect x="84" y="856" width="1432" height="1" fill="#e1e8f3"/>
+<circle cx="110" cy="900" r="20" fill="#0f766e" fill-opacity=".10"/><path d="M101 900l6 6 13-15" fill="none" stroke="#0f766e" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="146" y="909" font-size="23" fill="#45566e" font-family="Inter,Segoe UI,Arial">Le portail recommande automatiquement x64 ou ARM64.</text>
+<g transform="translate(1230,875)"><rect width="92" height="34" rx="17" fill="#dfe8f7"/><rect x="102" width="92" height="34" rx="17" fill="#dfe8f7"/><rect x="204" width="92" height="34" rx="17" fill="#0f766e"/></g>
+</svg>

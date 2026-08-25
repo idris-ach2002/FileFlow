@@ -3,33 +3,157 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="Téléchargez et installez FileFlow avec un Setup guidé, vérifié et réversible.">
-  <meta name="theme-color" content="#07111f">
-  <title>FileFlow — téléchargement et installation</title>
+  <meta name="description" content="FileFlow convertit, compresse, organise et traite vos fichiers localement sur macOS, Windows et Linux.">
+  <meta name="theme-color" content="#f4f7ff">
+  <title>FileFlow — vos fichiers, simplement</title>
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/interactions.css">
   <script src="/app.js" type="module"></script>
 </head>
 <body>
-  <header class="nav"><a class="brand" href="#top" aria-label="FileFlow accueil"><span class="brand-mark">F</span><span>FileFlow</span></a><nav><a href="#features">Setup</a><a href="#guide">Installer</a><a href="#all-downloads">Téléchargements</a></nav><span class="release-state" id="release-state"><i></i>Vérification de la release</span></header>
+  <header class="nav">
+    <a class="brand" href="#top" aria-label="FileFlow accueil"><span class="brand-mark">F</span><span>FileFlow</span></a>
+    <nav aria-label="Navigation principale">
+      <a href="#demo">Démo</a>
+      <a href="#features">Fonctionnalités</a>
+      <a href="#download">Télécharger</a>
+      <a href="#install">Installer</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <span class="release-state" id="release-state"><i></i>Vérification de la release</span>
+    <a class="nav-cta" href="#download">Télécharger</a>
+  </header>
+
   <main id="top">
     <section class="hero">
-      <div class="hero-copy"><p class="eyebrow">VOS FICHIERS. SIMPLEMENT.</p><h1>Installez FileFlow.<br><em>Gardez le contrôle.</em></h1><p class="lead">Un installateur visuel vérifie votre système, télécharge la bonne version, installe les moteurs utiles et contrôle chaque étape. En cas de problème, il restaure l’état précédent.</p>
-        <div class="primary-actions" id="download"><a class="primary" id="download-primary" href="#all-downloads" aria-disabled="true"><span>Télécharger FileFlow Setup</span><small id="download-detail">Détection de votre appareil…</small></a><button class="secondary" id="copy-command" type="button">Copier la commande terminal</button></div>
-        <p class="trust"><span>✓ SHA‑256 vérifié</span><span>✓ Release atomique</span><span>✓ Désinstallation propre</span></p>
+      <div class="hero-copy">
+        <p class="eyebrow">CONVERSION & ORGANISATION LOCALES</p>
+        <h1>Vos fichiers.<br><em>Un seul espace de travail.</em></h1>
+        <p class="lead">PDF, images, documents, audio, vidéo et archives. FileFlow regroupe les opérations utiles dans une application locale, sans upload imposé.</p>
+        <div class="hero-actions">
+          <a class="primary" href="#download">Télécharger FileFlow</a>
+          <a class="secondary" href="#demo">Voir la démo</a>
+        </div>
+        <div class="proof-strip" aria-label="Points forts FileFlow">
+          <span><b>Local</b><small>vos fichiers restent chez vous</small></span>
+          <span><b>90 actions</b><small>du simple au précis</small></span>
+          <span><b>16 moteurs</b><small>prêts à travailler</small></span>
+          <span><b>Lots</b><small>fichiers et dossiers</small></span>
+        </div>
       </div>
-      <div class="setup-preview" aria-label="Aperçu de FileFlow Setup"><div class="preview-bar"><span></span><span></span><span></span><b>FileFlow Setup</b></div><div class="preview-body"><aside><strong>Installation</strong><i class="done">✓ Diagnostic</i><i class="done">✓ Source vérifiée</i><i class="active">◌ Application</i><i>○ Moteurs locaux</i><i>○ Post-contrôles</i></aside><article><div class="orb"><span></span></div><p>Installation en cours</p><h3>Activation de FileFlow</h3><div class="meter"><span></span></div><div class="terminal"><code>signature valide</code><code>bundle contrôlé</code><code class="bright">activation atomique…</code></div></article></div></div>
+      <figure class="hero-product panel">
+        <img src="/assets/app/home.webp" alt="Écran d’accueil de FileFlow avec zone de dépôt de fichiers et catégories rapides">
+        <figcaption>Déposez vos fichiers. FileFlow vous propose ce que vous pouvez en faire.</figcaption>
+      </figure>
     </section>
 
-    <section class="feature-section" id="features"><p class="eyebrow">UN SETUP QUI EXPLIQUE</p><h2>Pas une boîte noire.</h2><div class="feature-grid"><article><b>01</b><h3>Diagnostic réel</h3><p>Architecture, espace, permissions, application existante et 16 moteurs locaux sont détectés avant toute modification.</p></article><article><b>02</b><h3>Transaction réversible</h3><p>Journal, sauvegarde, quarantaine et rollback empêchent une installation partiellement cassée.</p></article><article><b>03</b><h3>Progression honnête</h3><p>Octets téléchargés, étape active, sortie des moteurs et post-contrôles sont visibles en temps réel.</p></article><article><b>04</b><h3>Maintenance complète</h3><p>Réparer, diagnostiquer ou désinstaller depuis FileFlow, le Setup externe ou le CLI.</p></article></div></section>
+    <section class="compact-section" id="demo">
+      <header class="section-heading">
+        <div><p class="eyebrow">DÉCOUVRIR FILEFLOW</p><h2>Une démo. Huit vues.</h2></div>
+        <p>Faites défiler horizontalement : chaque vue montre une partie réelle du logiciel.</p>
+      </header>
+      <div class="carousel panel" data-carousel="demo">
+        <div class="carousel-viewport" id="demo-viewport" tabindex="0" aria-label="Démo FileFlow">
+          <div class="carousel-track" id="demo-track"></div>
+        </div>
+        <div class="carousel-footer">
+          <div class="carousel-progress"><strong id="demo-counter">01 / 08</strong><div class="carousel-dots" id="demo-dots"></div></div>
+          <div class="carousel-controls"><button type="button" id="demo-prev" aria-label="Vue précédente">←</button><button type="button" id="demo-next" aria-label="Vue suivante">→</button></div>
+        </div>
+      </div>
+    </section>
 
-    <section class="guide" id="guide"><div><p class="eyebrow">TROIS ÉTAPES</p><h2 id="installation-guide">Deux clics.<br>Une installation vérifiée.</h2><p>Le profil standard convient à la majorité des utilisateurs. Le mode personnalisé permet de choisir chaque moteur et d’inspecter le plan avant exécution.</p></div><ol><li><span>1</span><div><strong>Téléchargez Setup</strong><p>Le portail sélectionne automatiquement le bon système et la bonne architecture.</p></div></li><li><span>2</span><div><strong>Ouvrez le fichier</strong><p>macOS : DMG. Windows : EXE. Linux : AppImage. Les signatures sont contrôlées.</p></div></li><li><span>3</span><div><strong>Choisissez « Standard »</strong><p>Setup installe FileFlow, complète les moteurs manquants puis exécute les contrôles.</p></div></li></ol></section>
+    <section class="compact-section" id="features">
+      <header class="section-heading">
+        <div><p class="eyebrow">FONCTIONNALITÉS</p><h2>Par besoin, pas par jargon.</h2></div>
+        <p>Choisissez une catégorie. Le contenu change horizontalement sans rallonger la page.</p>
+      </header>
+      <div class="feature-tabs" id="feature-tabs" role="tablist" aria-label="Catégories de fonctionnalités"></div>
+      <div class="carousel feature-carousel panel" data-carousel="features">
+        <div class="carousel-viewport" id="feature-viewport" tabindex="0" aria-label="Fonctionnalités FileFlow">
+          <div class="carousel-track" id="feature-track"></div>
+        </div>
+        <div class="carousel-footer compact-footer">
+          <div class="carousel-progress"><strong id="feature-counter">01 / 08</strong></div>
+          <div class="carousel-controls"><button type="button" id="feature-prev" aria-label="Catégorie précédente">←</button><button type="button" id="feature-next" aria-label="Catégorie suivante">→</button></div>
+        </div>
+      </div>
+      <div class="engine-strip panel">
+        <div><strong>16 moteurs locaux</strong><span>FFmpeg · ImageMagick · Ghostscript · Tesseract · Zstandard · 7-Zip · LibreOffice · Pandoc · Poppler…</span></div>
+        <button type="button" id="engine-toggle" aria-expanded="false">Voir les 16</button>
+        <div class="engine-list" id="engine-list" hidden></div>
+      </div>
+    </section>
 
-    <section class="downloads" id="all-downloads"><div class="section-title"><div><p class="eyebrow">TOUTES LES PLATEFORMES</p><h2>Choisissez votre appareil.</h2></div><p id="manifest-version">Chargement de la dernière release stable…</p></div><div class="platform-grid" id="platform-grid" aria-live="polite"></div></section>
+    <section class="compact-section download-section" id="download">
+      <header class="section-heading">
+        <div><p class="eyebrow">TÉLÉCHARGER</p><h2>La bonne version pour votre appareil.</h2></div>
+        <p id="manifest-version">Chargement de la dernière release stable…</p>
+      </header>
 
-    <section class="verify"><div><p class="eyebrow">VÉRIFICATION LOCALE</p><h2>Vérifiez ce que vous avez téléchargé.</h2><p>Le fichier reste sur votre appareil. Le navigateur calcule son SHA‑256 et le compare au manifeste publié atomiquement avec la release.</p></div><label class="verify-drop" for="verify-file"><input id="verify-file" type="file"><strong>Déposer ou choisir un installateur</strong><span id="verify-result">Aucun fichier sélectionné</span></label></section>
+      <div class="download-layout">
+        <article class="recommended-download panel">
+          <div class="device-summary" id="device-summary" data-state="partial" role="status" aria-live="polite">
+            <span class="device-indicator" aria-hidden="true"></span>
+            <div><strong id="device-title">Détection de votre appareil…</strong><small id="device-subtitle">Analyse du système et de l’architecture.</small></div>
+          </div>
+          <div class="recommended-identity">
+            <div class="platform-mark" id="hero-platform-icon" aria-hidden="true">F</div>
+            <div><p id="hero-platform-os">FileFlow Setup</p><h3 id="hero-platform-name">Choisissez votre plateforme</h3><span id="hero-platform-badge">Recommandation en attente</span></div>
+          </div>
+          <a class="primary download-primary" id="download-primary" href="#platform-grid" aria-disabled="true"><span id="download-primary-label">Télécharger FileFlow Setup</span><small id="download-detail">Détection de votre appareil…</small></a>
+          <small class="supported-note" id="hero-support-note">Windows, macOS et Linux sont disponibles.</small>
+          <div class="architecture-choice" id="mac-architecture-choice" hidden>
+            <button type="button" data-mac-platform="darwin-aarch64"><b>Apple Silicon</b><small>M1, M2, M3, M4, M5…</small></button>
+            <button type="button" data-mac-platform="darwin-x86_64"><b>Intel</b><small>Mac avec processeur Intel</small></button>
+          </div>
+          <div class="download-actions">
+            <button class="secondary" id="copy-command" type="button">Copier la commande terminal</button>
+            <button class="platform-override" id="platform-override" type="button" aria-pressed="false" hidden>Télécharger pour un autre appareil</button>
+          </div>
+        </article>
+
+        <div class="platforms-wrap">
+          <div class="platform-grid" id="platform-grid" aria-live="polite"></div>
+          <details class="download-tools panel">
+            <summary>Vérifier un téléchargement (SHA-256)</summary>
+            <label class="verify-drop" for="verify-file"><input id="verify-file" type="file"><strong>Déposer ou choisir un installateur</strong><span id="verify-result">Aucun fichier sélectionné</span></label>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <section class="compact-section" id="install">
+      <header class="section-heading">
+        <div><p class="eyebrow">INSTALLATION GUIDÉE</p><h2 id="installation-guide">Quatre étapes. Pas plus.</h2></div>
+        <p>macOS, Windows et Linux utilisent le même guide horizontal, adapté à chaque système.</p>
+      </header>
+      <div class="guide-tabs" id="guide-platform-tabs" role="tablist" aria-label="Plateforme du guide"></div>
+      <div class="carousel install-carousel panel" data-carousel="install">
+        <div class="carousel-viewport" id="guide-viewport" tabindex="0" aria-label="Guide d’installation FileFlow">
+          <div class="carousel-track" id="guide-track"></div>
+        </div>
+        <div class="carousel-footer">
+          <div class="carousel-progress"><strong id="guide-step-counter">Étape 1 / 4</strong><div class="carousel-dots" id="guide-dots"></div></div>
+          <div class="wizard-controls"><button class="secondary" id="guide-step-cancel" type="button">Annuler</button><button class="secondary" id="guide-step-prev" type="button">Précédent</button><button class="primary inline" id="guide-step-next" type="button">Suivant</button></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="compact-section faq-section" id="faq">
+      <header class="section-heading"><div><p class="eyebrow">FAQ</p><h2>Les quatre questions utiles.</h2></div></header>
+      <div class="faq-grid">
+        <details class="panel"><summary>Mes fichiers sont-ils envoyés sur Internet ?</summary><p>Non pour les traitements locaux de FileFlow : vos fichiers sont traités sur votre machine.</p></details>
+        <details class="panel"><summary>Pourquoi macOS peut-il afficher un avertissement ?</summary><p>FileFlow est distribué gratuitement hors du Mac App Store et n’est pas notarifié par Apple. Le guide macOS montre la première ouverture.</p></details>
+        <details class="panel"><summary>Quels systèmes sont compatibles ?</summary><p>macOS Apple Silicon et Intel, Windows x64, Linux x64 et Linux ARM64.</p></details>
+        <details class="panel"><summary>Comment réparer ou désinstaller FileFlow ?</summary><p>Relancez FileFlow Setup : il propose diagnostic, réparation et désinstallation propre.</p></details>
+      </div>
+    </section>
   </main>
+
   <footer><a class="brand" href="#top"><span class="brand-mark">F</span><span>FileFlow</span></a><p>Conversion et organisation locales. Vos fichiers ne quittent pas votre appareil.</p><a href="https://github.com/idris-ach2002/FileFlow">Code source</a></footer>
+
+  <a class="mobile-download-cta" id="mobile-download-cta" href="#download">Télécharger FileFlow</a>
   <div class="toast" id="toast" role="status"></div>
 </body>
 </html>

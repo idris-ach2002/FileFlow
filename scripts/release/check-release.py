@@ -148,6 +148,18 @@ def main() -> None:
                 if token not in text:
                     raise SystemExit(f"{rel} must isolate and collect Setup artifacts: missing {token}")
 
+    for rel in [
+        ".github/workflows/native-linux.yml",
+        ".github/workflows/native-windows.yml",
+    ]:
+        text = (ROOT / rel).read_text()
+        for token in [
+            "scripts/setup/run-tauri.mjs", "fileflow-setup-cli", "package-setup-cli.mjs",
+            "smoke-packaged-setup.mjs", "target/fileflow-setup", "--include-setup",
+        ]:
+            if token not in text:
+                raise SystemExit(f"{rel} must continuously validate FileFlow Setup: missing {token}")
+
     release_macos = (ROOT / ".github/workflows/release-macos.yml").read_text()
     if "CI: 'true'" not in release_macos:
         raise SystemExit("macOS release must force Tauri's non-Finder DMG mode with CI=true")

@@ -3,7 +3,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { onRequestGet } from '../functions/api/downloads.js';
-import { detectOperatingSystem, detectPlatform } from '../public/platform.js';
+import {
+  classifyGraphicsRenderer,
+  detectDeviceProfile,
+  detectOperatingSystem,
+  detectPlatform,
+  platformAccessState,
+} from '../public/platform.js';
 import { fetchReleaseManifest } from '../public/release-client.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -17,18 +23,71 @@ for (const name of required) {
 }
 
 const html = readFileSync(resolve(root, 'public/index.html'), 'utf8');
-for (const marker of ['download-primary', 'platform-grid', 'verify-file', 'installation-guide']) {
+for (const marker of [
+  'download-primary', 'platform-grid', 'verify-file', 'installation-guide',
+  'device-summary', 'mac-architecture-choice', 'platform-override',
+  'demo-viewport', 'demo-track', 'feature-viewport', 'feature-track',
+  'guide-viewport', 'guide-track', 'mobile-download-cta',
+]) {
   if (!html.includes(marker)) throw new Error(`download portal is missing #${marker}`);
+}
+for (const asset of [
+  'assets/app/home.webp', 'assets/app/conversion.webp', 'assets/app/advanced-overview.webp',
+  'assets/app/advanced-images.webp', 'assets/app/formats.webp', 'assets/app/advanced-media.webp',
+  'assets/app/advanced-archives.webp', 'assets/app/history.webp', 'assets/app/updates.webp',
+  'assets/app/engines.webp',
+  'assets/guides/windows/01.svg', 'assets/guides/windows/02.svg',
+  'assets/guides/windows/03.svg', 'assets/guides/windows/04.svg',
+  'assets/guides/linux/01.svg', 'assets/guides/linux/02.svg',
+  'assets/guides/linux/03.svg', 'assets/guides/linux/04.svg',
+]) {
+  if (!existsSync(resolve(root, 'public', asset))) throw new Error(`missing website/public/${asset}`);
 }
 const script = readFileSync(resolve(root, 'public/app.js'), 'utf8');
 if (!script.includes('fetchReleaseManifest()')) throw new Error('portal must use the guarded release client');
 if (!script.includes('crypto.subtle.digest')) throw new Error('portal must verify SHA-256 locally');
+if (!script.includes('platformAccessState')) throw new Error('portal must lock incompatible platforms conservatively');
+if (!script.includes('showAllPlatforms')) throw new Error('portal must allow an explicit cross-device override');
+if (!script.includes("scroll-snap") && !readFileSync(resolve(root, 'public/styles.css'), 'utf8').includes('scroll-snap-type:x mandatory')) {
+  throw new Error('product and installation demos must move horizontally');
+}
+if (!script.includes('TAR.ZST') || !script.includes('Zstandard')) throw new Error('archive feature carousel must surface Zstandard/TAR.ZST');
+assert.doesNotMatch(html, /iLovePDF|Smallpdf|CloudConvert|TinyPNG|FreeConvert/i, 'portal must not compare FileFlow with named competitor sites');
 assert.ok(!/<script(?![^>]*\bsrc=)[^>]*>/iu.test(html), 'CSP forbids inline scripts');
 assert.ok(!/\son[a-z]+\s*=/iu.test(html), 'CSP forbids inline event handlers');
 const headersPolicy = readFileSync(resolve(root, 'public/_headers'), 'utf8');
 assert.match(headersPolicy, /script-src-elem 'self'/);
 assert.match(headersPolicy, /script-src-attr 'none'/);
 assert.equal(detectOperatingSystem({ userAgent: 'Mozilla/5.0 (Macintosh)', platform: 'MacIntel' }), 'macOS');
+
+assert.deepEqual(
+  classifyGraphicsRenderer('ANGLE (Apple, Apple M2 Pro, Metal)'),
+  { architecture: 'arm64', processor: 'Apple Silicon' },
+  'GPU renderer names prove Apple Silicon architecture, not the exact SoC generation',
+);
+assert.deepEqual(
+  classifyGraphicsRenderer('ANGLE (Apple, Apple M1, Metal)'),
+  { architecture: 'arm64', processor: 'Apple Silicon' },
+  'privacy-reduced Apple M1 renderers must never be presented as an exact M1 CPU',
+);
+assert.deepEqual(
+  classifyGraphicsRenderer('Intel Iris Plus Graphics 655'),
+  { architecture: 'x64', processor: null },
+);
+const appleSiliconProfile = await detectDeviceProfile({
+  userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/605.1.15',
+  platform: 'MacIntel',
+}, { graphicsRenderer: 'ANGLE (Apple, Apple M2 Pro, Metal)' });
+assert.equal(appleSiliconProfile.platform, 'darwin-aarch64');
+assert.equal(appleSiliconProfile.processor, 'Apple Silicon');
+assert.equal(platformAccessState('darwin-aarch64', appleSiliconProfile), 'recommended');
+assert.equal(platformAccessState('darwin-x86_64', appleSiliconProfile), 'locked');
+assert.equal(platformAccessState('windows-x86_64', appleSiliconProfile), 'locked');
+assert.equal(platformAccessState('windows-x86_64', appleSiliconProfile, true), 'available');
+const maskedMacProfile = { operatingSystem: 'macOS', architecture: null, platform: null };
+assert.equal(platformAccessState('darwin-aarch64', maskedMacProfile), 'compatible');
+assert.equal(platformAccessState('darwin-x86_64', maskedMacProfile), 'compatible');
+assert.equal(platformAccessState('linux-x86_64', maskedMacProfile), 'locked');
 
 assert.equal(await detectPlatform({
   userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/605.1.15',

@@ -91,12 +91,22 @@ jobs:
       - name: Build FileFlow app only
         shell: pwsh
         run: pnpm exec tauri build --target x86_64-pc-windows-msvc --bundles nsis,msi --config src-tauri/tauri.release.conf.json
+      - name: Build FileFlow Setup and CLI
+        shell: pwsh
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target/fileflow-setup
+          FILEFLOW_SETUP_TARGET_DIR: ${{ github.workspace }}/target/fileflow-setup
+        run: |
+          node scripts/setup/run-tauri.mjs build --target x86_64-pc-windows-msvc --bundles nsis,msi --config tauri.release.conf.json
+          cargo build --release -p fileflow-setup --bin fileflow-setup-cli --target x86_64-pc-windows-msvc
+          node scripts/release/package-setup-cli.mjs --target x86_64-pc-windows-msvc
       - name: Package smoke
         shell: pwsh
         run: |
-          node scripts/release/validate-distribution.mjs --target x86_64-pc-windows-msvc
+          node scripts/release/validate-distribution.mjs --target x86_64-pc-windows-msvc --require-setup
           node scripts/release/smoke-packaged-app.mjs --target x86_64-pc-windows-msvc
-          node scripts/release/collect-artifacts.mjs --target x86_64-pc-windows-msvc
+          node scripts/release/smoke-packaged-setup.mjs --target x86_64-pc-windows-msvc
+          node scripts/release/collect-artifacts.mjs --target x86_64-pc-windows-msvc --include-setup
       - uses: actions/upload-artifact@v7
         with:
           name: fileflow-windows-x86_64-pc-windows-msvc-${{ github.event.pull_request.head.sha || github.sha }}
