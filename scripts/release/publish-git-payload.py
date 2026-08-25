@@ -45,19 +45,24 @@ def run(
     )
 
 
-def choose(root: Path, suffix: str) -> Path:
+def choose_application_package(root: Path, suffix: str) -> Path:
     matches = sorted(
         path
         for path in root.rglob("*")
         if path.is_file()
         and path.name.lower().endswith(suffix.lower())
     )
-    if len(matches) != 1:
+    application_matches = [
+        path
+        for path in matches
+        if path.name.lower().startswith("fileflow_")
+    ]
+    if len(application_matches) != 1:
         raise SystemExit(
-            f"expected exactly one {suffix} below {root}, "
-            f"found {matches}"
+            f"expected exactly one FileFlow application {suffix} below {root}, "
+            f"found applications={application_matches}; all matches={matches}"
         )
-    return matches[0]
+    return application_matches[0]
 
 
 def sha256(path: Path) -> str:
@@ -80,6 +85,11 @@ def main() -> None:
         choices=["candidate", "production"],
         default="candidate",
     )
+    parser.add_argument(
+        "--select-only",
+        action="store_true",
+        help="print the selected FileFlow application package and exit",
+    )
     args = parser.parse_args()
 
     if args.target not in TARGETS:
@@ -89,7 +99,10 @@ def main() -> None:
 
     platform, arch, branch, suffix = TARGETS[args.target]
     root = Path(args.root).resolve()
-    package = choose(root, suffix)
+    package = choose_application_package(root, suffix)
+    if args.select_only:
+        print(package)
+        return
 
     repo = Path(
         run(

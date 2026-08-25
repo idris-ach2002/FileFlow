@@ -129,6 +129,20 @@ try {
   const checksums = join(temp, 'SHA256SUMS');
   const downloads = join(temp, 'downloads.json');
   run('scripts/release/normalize-artifacts.mjs', ['--root', root]);
+  for (const [target, directory] of [
+    ['aarch64-apple-darwin', macArm],
+    ['x86_64-apple-darwin', macIntel],
+    ['x86_64-pc-windows-msvc', windows],
+    ['x86_64-unknown-linux-gnu', linuxX64],
+    ['aarch64-unknown-linux-gnu', linuxArm],
+  ]) {
+    run('scripts/release/run-python.mjs', [
+      'scripts/release/publish-git-payload.py',
+      '--target', target,
+      '--root', directory,
+      '--select-only',
+    ]);
+  }
   run('scripts/release/generate-updater-manifest.mjs', [
     '--root', root,
     '--version', '1.0.2',
