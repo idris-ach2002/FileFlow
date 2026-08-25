@@ -58,6 +58,11 @@ assert.ok(!/\son[a-z]+\s*=/iu.test(html), 'CSP forbids inline event handlers');
 const headersPolicy = readFileSync(resolve(root, 'public/_headers'), 'utf8');
 assert.match(headersPolicy, /script-src-elem 'self'/);
 assert.match(headersPolicy, /script-src-attr 'none'/);
+assert.match(headersPolicy, /\/\n\s+Cache-Control: no-cache, must-revalidate/, 'HTML must always revalidate so it can advertise the newest asset fingerprint');
+const buildScript = readFileSync(resolve(root, 'scripts/build.mjs'), 'utf8');
+for (const marker of ['sourceFingerprint', 'versionAssets', 'cache fingerprint', "./platform.js?v=", "./release-client.js?v="]) {
+  assert.ok(buildScript.includes(marker), `site build must cache-bust ${marker}`);
+}
 assert.equal(detectOperatingSystem({ userAgent: 'Mozilla/5.0 (Macintosh)', platform: 'MacIntel' }), 'macOS');
 
 assert.deepEqual(
