@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -9,6 +9,8 @@ import { verifyLiveUpdater } from './verify-live-updater.mjs';
 import { verifyLiveDownloads } from './verify-live-downloads.mjs';
 import {
   applicationBundleRoot,
+  isDistributableArtifactName,
+  selectWindowsSetupExecutable,
   setupBundleRoot,
   setupTargetRoot,
 } from './artifact-layout.mjs';
@@ -25,6 +27,27 @@ if (setupTargetRoot(repo, { FILEFLOW_SETUP_TARGET_DIR: customSetupRoot }) !== cu
   throw new Error('FILEFLOW_SETUP_TARGET_DIR must control the isolated Setup target root');
 }
 
+if (isDistributableArtifactName('control.tar.gz') || isDistributableArtifactName('data.tar.gz')) {
+  throw new Error('Debian package internals must never be collected as release assets');
+}
+for (const asset of [
+  'FileFlow.app.tar.gz',
+  'FileFlow.app.tar.gz.sig',
+  'FileFlow_1.0.7_amd64.deb',
+  'FileFlowSetup_1.0.7_amd64.AppImage',
+  'FileFlowSetupCLI_x86_64-pc-windows-msvc.exe',
+]) {
+  if (!isDistributableArtifactName(asset)) throw new Error(`expected release artifact: ${asset}`);
+}
+const selectedWindowsSetup = selectWindowsSetupExecutable([
+  'C:\\FileFlowSetup\\fileflow-setup-cli.exe',
+  'C:\\FileFlowSetup\\Uninstall FileFlowSetup.exe',
+  'C:\\FileFlowSetup\\fileflow-setup.exe',
+]);
+if (!selectedWindowsSetup?.toLowerCase().endsWith('fileflow-setup.exe')) {
+  throw new Error(`Windows Setup smoke must select the GUI executable, got ${selectedWindowsSetup}`);
+}
+
 function run(script, args) {
   const result = spawnSync(node, [resolve(repo, script), ...args], { cwd: repo, stdio: 'inherit' });
   if (result.error) throw result.error;
@@ -33,6 +56,36 @@ function run(script, args) {
 function put(path, value) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, value);
+}
+
+const collectorTarget = `collector-self-test-${process.pid}`;
+const collectorApplicationBundle = applicationBundleRoot(repo, collectorTarget);
+const collectorSetupBundle = setupBundleRoot(repo, collectorTarget);
+const collectorOutput = resolve(repo, 'dist', 'release', collectorTarget);
+try {
+  put(join(collectorApplicationBundle, 'deb', 'control.tar.gz'), 'application-control');
+  put(join(collectorApplicationBundle, 'deb', 'data.tar.gz'), 'application-data');
+  put(join(collectorApplicationBundle, 'deb', 'FileFlow_1.0.7_amd64.deb'), 'application-deb');
+  put(join(collectorSetupBundle, 'deb', 'control.tar.gz'), 'setup-control');
+  put(join(collectorSetupBundle, 'deb', 'data.tar.gz'), 'setup-data');
+  put(join(collectorSetupBundle, 'deb', 'FileFlowSetup_1.0.7_amd64.deb'), 'setup-deb');
+  put(join(collectorSetupBundle, 'setup-cli', 'FileFlowSetupCLI_x86_64-unknown-linux-gnu.bin'), 'setup-cli');
+  run('scripts/release/collect-artifacts.mjs', ['--target', collectorTarget, '--include-setup']);
+  const collected = readdirSync(collectorOutput).sort();
+  if (collected.includes('control.tar.gz') || collected.includes('data.tar.gz')) {
+    throw new Error(`Debian internals leaked into release assets: ${collected.join(', ')}`);
+  }
+  for (const expected of [
+    'FileFlow_1.0.7_amd64.deb',
+    'FileFlowSetup_1.0.7_amd64.deb',
+    'FileFlowSetupCLI_x86_64-unknown-linux-gnu.bin',
+  ]) {
+    if (!collected.includes(expected)) throw new Error(`collector omitted ${expected}`);
+  }
+} finally {
+  rmSync(resolve(repo, 'target', collectorTarget), { recursive: true, force: true });
+  rmSync(resolve(repo, 'target', 'fileflow-setup', collectorTarget), { recursive: true, force: true });
+  rmSync(collectorOutput, { recursive: true, force: true });
 }
 
 const temp = mkdtempSync(join(tmpdir(), 'fileflow-release-tooling-'));

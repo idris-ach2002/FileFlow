@@ -2,7 +2,7 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { applicationBundleRoot, setupBundleRoot } from './artifact-layout.mjs';
+import { applicationBundleRoot, isDistributableArtifactName, setupBundleRoot } from './artifact-layout.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const args = new Map();
@@ -32,7 +32,6 @@ const output = resolve(root, 'dist', 'release', target);
 rmSync(output, { recursive: true, force: true });
 mkdirSync(output, { recursive: true });
 
-const allowed = (name) => /\.(dmg|msi|exe|deb|rpm|appimage|sig|gz|bin)$/i.test(name);
 function walk(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = join(directory, entry.name);
@@ -41,7 +40,7 @@ function walk(directory) {
 }
 
 const files = bundleRoots.flatMap((bundleRoot) => walk(bundleRoot))
-  .filter((path) => allowed(basename(path)));
+  .filter((path) => isDistributableArtifactName(basename(path)));
 if (!files.length) throw new Error(`no distributable artifacts found for ${target}`);
 
 const seen = new Set();

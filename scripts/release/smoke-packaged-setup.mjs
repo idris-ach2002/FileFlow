@@ -4,7 +4,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { setupBundleRoot } from './artifact-layout.mjs';
+import { selectWindowsSetupExecutable, setupBundleRoot } from './artifact-layout.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const args = new Map();
@@ -80,8 +80,7 @@ if (process.platform === 'darwin') {
   if (installed.error || installed.status !== 0) {
     throw new Error(`FileFlow Setup silent install failed: ${installed.stderr || installed.stdout || installed.error}`);
   }
-  executable = walk(installRoot).find((path) => path.toLowerCase().endsWith('.exe')
-    && !basename(path).toLowerCase().startsWith('uninstall'));
+  executable = selectWindowsSetupExecutable(walk(installRoot));
 }
 if (!executable || !existsSync(executable)) throw new Error('unable to locate packaged FileFlow Setup executable');
 

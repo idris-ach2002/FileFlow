@@ -7,6 +7,7 @@ import { detectOperatingSystem, detectPlatform } from '../public/platform.js';
 import { fetchReleaseManifest } from '../public/release-client.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const repositoryRoot = resolve(root, '..');
 const required = [
   'index.html', 'styles.css', 'interactions.css', 'app.js', 'platform.js',
   'install.sh', 'install.ps1', 'release-client.js', '_headers', '_redirects',
@@ -140,6 +141,10 @@ await assert.rejects(
   /page HTML/,
   'an HTML fallback must never surface as a raw JSON.parse error',
 );
+
+const deployWorkflow = readFileSync(resolve(repositoryRoot, '.github/workflows/site-cloudflare.yml'), 'utf8');
+assert.doesNotMatch(deployWorkflow, /cloudflare\/wrangler-action/, 'CI must not mutate the pnpm workspace to install Wrangler');
+assert.match(deployWorkflow, /npx --yes wrangler@4\.125\.0 pages deploy dist --project-name=fileflow-downloads/);
 
 const redirects = readFileSync(resolve(root, 'public/_redirects'), 'utf8');
 assert.ok(!redirects.includes('/*'), 'a static catch-all must not hide a missing API function');

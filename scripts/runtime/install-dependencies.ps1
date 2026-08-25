@@ -168,7 +168,7 @@ function Ensure-GitBashSupport {
     Refresh-Path
     if ($worked -and (Find-GitBash)) {
       $parts = $candidate.Split(':', 2)
-      Write-Host ('[OK]   Git Bash       installé via {0}' -f $parts[0])
+      Write-Host ('[OK]   Git Bash       installed via {0}' -f $parts[0])
       Write-OwnedPackage -Component 'support:git-bash' -Manager $parts[0] -Package $parts[1] -Kind 'integration'
       return
     }

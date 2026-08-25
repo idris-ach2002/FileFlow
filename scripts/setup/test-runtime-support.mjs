@@ -14,6 +14,8 @@ assert.match(windows, /Ensure-GitBashSupport/);
 assert.match(windows, /winget:Git\.Git/);
 assert.match(windows, /support:git-bash/);
 assert.match(windows, /-Kind 'integration'/);
+assert.ok([...windows].every((character) => character.codePointAt(0) <= 127),
+  'install-dependencies.ps1 must remain ASCII for Windows PowerShell 5.1');
 
 const setupUi = readFileSync('setup-ui/index.html', 'utf8');
 const setupScript = readFileSync('setup-ui/setup.js', 'utf8');
