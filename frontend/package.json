@@ -1,6 +1,6 @@
 {
   "name": "@fileflow/frontend",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "private": true,
   "scripts": {
     "start": "ng serve --host 127.0.0.1 --port 1420",

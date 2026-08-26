@@ -124,7 +124,7 @@ def main() -> None:
     ])
     require_tokens("scripts/release/verify-branding.mjs", [
         "src-tauri/icons/icon.icns", "src-tauri/icons/icon.ico", "Icon=fileflow",
-        "IconLocation=\"$Target,0\"", "icon_sources",
+        "IconLocation=($Target + ',0')", "icon_sources",
     ])
     require_tokens("scripts/release/validate-distribution.mjs", [
         "Linux application DEB", "Linux application RPM", "Linux Setup DEB",

@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "description": "FileFlow native real-conversion release corpus",
+  "cases": [
+    {
+      "id": "image-convert-webp",
+      "actionId": "image-convert",
+      "budgetMs": 30000
+    },
+    {
+      "id": "image-resize",
+      "actionId": "image-resize",
+      "budgetMs": 30000
+    },
+    {
+      "id": "images-to-pdf",
+      "actionId": "images-to-pdf",
+      "budgetMs": 30000
+    },
+    {
+      "id": "office-to-pdf",
+      "actionId": "office-to-pdf",
+      "budgetMs": 60000
+    },
+    {
+      "id": "pdf-merge",
+      "actionId": "pdf-merge",
+      "budgetMs": 30000
+    },
+    {
+      "id": "pdf-compress",
+      "actionId": "pdf-compress",
+      "budgetMs": 30000
+    },
+    {
+      "id": "pdf-to-images",
+      "actionId": "pdf-to-images",
+      "budgetMs": 30000
+    },
+    {
+      "id": "strip-metadata",
+      "actionId": "strip-metadata",
+      "budgetMs": 30000
+    },
+    {
+      "id": "pandoc-text",
+      "actionId": null,
+      "budgetMs": 30000
+    },
+    {
+      "id": "media-compatible",
+      "actionId": "media-compatible",
+      "budgetMs": 60000
+    },
+    {
+      "id": "audio-convert",
+      "actionId": "audio-convert",
+      "budgetMs": 30000
+    },
+    {
+      "id": "extract-audio",
+      "actionId": "extract-audio",
+      "budgetMs": 30000
+    },
+    {
+      "id": "video-to-gif",
+      "actionId": "video-to-gif",
+      "budgetMs": 30000
+    },
+    {
+      "id": "archive-zip-roundtrip",
+      "actionId": "archive-create",
+      "budgetMs": 30000
+    },
+    {
+      "id": "tar-zst-roundtrip",
+      "actionId": "archive-create",
+      "budgetMs": 30000
+    },
+    {
+      "id": "tar-lz4-roundtrip",
+      "actionId": "archive-create",
+      "budgetMs": 30000
+    },
+    {
+      "id": "html-to-pdf",
+      "actionId": null,
+      "budgetMs": 60000,
+      "optionalOn": [
+        "aarch64-unknown-linux-gnu"
+      ]
+    },
+    {
+      "id": "invalid-image-rejected",
+      "actionId": "image-convert",
+      "budgetMs": 15000
+    }
+  ]
+}

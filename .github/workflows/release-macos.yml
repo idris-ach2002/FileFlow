@@ -138,6 +138,8 @@ jobs:
           cargo build --release -p fileflow-setup --bin fileflow-setup-cli --target '${{ matrix.target }}'
           node scripts/release/package-setup-cli.mjs --target '${{ matrix.target }}'
       - name: Validate release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           VALIDATION_ARGS=()
           if [[ -n "$APPLE_ID" && -n "$APPLE_PASSWORD" && -n "$APPLE_TEAM_ID" ]]; then
@@ -147,7 +149,10 @@ jobs:
           node scripts/release/smoke-packaged-app.mjs --target '${{ matrix.target }}'
           node scripts/release/smoke-packaged-setup.mjs --target '${{ matrix.target }}'
           node scripts/release/e2e-native.mjs --target '${{ matrix.target }}' --version '${{ inputs.release_version }}'
+          cargo test -p fileflow-executor --all-features --locked
+          node scripts/release/conversion-e2e.mjs --target '${{ matrix.target }}' --version '${{ inputs.release_version }}' --output 'dist/conversion-attestations/${{ matrix.target }}.json'
           node scripts/release/collect-artifacts.mjs --target '${{ matrix.target }}' --include-setup
+          cp 'dist/conversion-attestations/${{ matrix.target }}.json' 'dist/release/${{ matrix.target }}/conversion-attestation.json'
           cp 'dist/e2e-attestations/${{ matrix.target }}.json' 'dist/release/${{ matrix.target }}/e2e-attestation.json'
       - uses: actions/upload-artifact@v7
         with:

@@ -1,6 +1,6 @@
 {
   "name": "fileflow-workspace",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "private": true,
   "scripts": {
     "frontend:dev": "pnpm --filter @fileflow/frontend start",
@@ -41,7 +41,7 @@
     "updater:setup": "node scripts/release/setup-updater.mjs",
     "release:preflight-macos": "bash scripts/release/preflight-macos.sh",
     "release:normalize": "node scripts/release/normalize-artifacts.mjs",
-    "release:self-test": "node scripts/release/verify-branding.mjs && node scripts/release/test-release-tooling.mjs && node scripts/release/test-e2e-gate.mjs",
+    "release:self-test": "node scripts/release/verify-branding.mjs && node scripts/release/test-release-tooling.mjs && node scripts/release/test-e2e-gate.mjs && node scripts/release/test-conversion-gate.mjs",
     "runtime:doctor": "bash scripts/runtime/doctor.sh",
     "runtime:install": "bash scripts/runtime/install-dependencies.sh",
     "setup:dev": "node scripts/setup/run-tauri.mjs dev",
@@ -49,14 +49,15 @@
     "setup:dev:release": "node scripts/setup/run-tauri.mjs --source release dev",
     "setup:build": "node scripts/setup/run-tauri.mjs build",
     "setup:cli": "cargo run -p fileflow-setup --bin fileflow-setup-cli --",
-    "setup:test": "cargo test -p fileflow-setup-core -p fileflow-setup && node scripts/setup/test-ui.cjs && node scripts/setup/test-local-source.mjs && node scripts/setup/test-engine-ownership.mjs && node scripts/setup/test-macos-bundled-cli.mjs && node scripts/setup/test-runtime-support.mjs",
+    "setup:test": "cargo test --locked -p fileflow-setup-core -p fileflow-setup && node scripts/setup/test-ui.cjs && node scripts/setup/test-local-source.mjs && node scripts/setup/test-engine-ownership.mjs && node scripts/setup/test-macos-bundled-cli.mjs && node scripts/setup/test-runtime-support.mjs",
     "site:build": "node website/scripts/build.mjs",
     "site:dev": "pnpm --filter @fileflow/download-portal dev",
     "site:test": "node website/scripts/test.mjs",
     "release:downloads-manifest": "node scripts/release/generate-download-manifest.mjs",
     "release:verify-live-downloads": "node scripts/release/verify-live-downloads.mjs",
     "release:branding": "node scripts/release/verify-branding.mjs",
-    "release:e2e-gate-test": "node scripts/release/test-e2e-gate.mjs"
+    "release:e2e-gate-test": "node scripts/release/test-e2e-gate.mjs",
+    "release:conversion-gate-test": "node scripts/release/test-conversion-gate.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.4"

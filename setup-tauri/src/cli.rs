@@ -200,7 +200,7 @@ fn print_help() {
         "FileFlow Setup CLI\n\n\
 Usage:\n  fileflow-setup-cli install [--app-only] [--yes]\n  \
 fileflow-setup-cli engines [--engines ffmpeg,zstd] [--yes]\n  \
-fileflow-setup-cli repair [--yes]\n  \
+fileflow-setup-cli repair [--app-only] [--yes]\n  \
 fileflow-setup-cli uninstall [--keep-engines] [--remove-preexisting-engines --engines id,id] [--remove-settings] [--remove-history] [--yes]\n  \
 fileflow-setup-cli doctor [--json]\n\n\
 Options:\n  --dry-run      Afficher le plan sans modifier la machine\n  \

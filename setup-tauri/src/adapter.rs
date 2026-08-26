@@ -603,17 +603,11 @@ impl SystemSetupAdapter {
             .and_then(Path::parent)
             .filter(|path| path.is_dir())
         {
-            run_checked(
-                "powershell.exe",
+            run_windows_powershell(
+                "$ErrorActionPreference='Stop'; Copy-Item -LiteralPath $env:FILEFLOW_PS_SOURCE -Destination $env:FILEFLOW_PS_DESTINATION -Recurse -Force",
                 &[
-                    OsStr::new("-NoProfile"),
-                    OsStr::new("-NonInteractive"),
-                    OsStr::new("-Command"),
-                    OsStr::new(
-                        "param([string]$Source,[string]$Destination); Copy-Item -LiteralPath $Source -Destination $Destination -Recurse -Force",
-                    ),
-                    existing.as_os_str(),
-                    backup.as_os_str(),
+                    ("FILEFLOW_PS_SOURCE", existing.as_os_str()),
+                    ("FILEFLOW_PS_DESTINATION", backup.as_os_str()),
                 ],
             )
             .await?;
@@ -765,11 +759,16 @@ impl SystemSetupAdapter {
         let ownership_report = self.operation_dir.join("installed-packages.tsv");
         remove_path_if_exists(&ownership_report).await?;
         let mut command = if cfg!(target_os = "windows") {
-            let mut value = Command::new("powershell.exe");
+            let mut value = Command::new(windows_powershell_program());
             value.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
             value.arg(&script);
             value
-        } else if cfg!(target_os = "linux") && !is_root() && command_exists("pkexec") {
+        } else if cfg!(target_os = "linux")
+            && !is_root()
+            && command_exists("pkexec")
+            && std::env::var_os("CI").is_none()
+            && std::env::var_os("GITHUB_ACTIONS").is_none()
+        {
             let mut value = Command::new("pkexec");
             value.arg("bash").arg(&script);
             value
@@ -2151,7 +2150,7 @@ fn clean_fileflow_database(
 
 async fn schedule_maintenance_removal(path: &Path) -> Result<(), String> {
     if cfg!(target_os = "windows") {
-        let mut command = Command::new("powershell.exe");
+        let mut command = Command::new(windows_powershell_program());
         command
             .args([
                 "-NoProfile",
@@ -2159,9 +2158,9 @@ async fn schedule_maintenance_removal(path: &Path) -> Result<(), String> {
                 "-WindowStyle",
                 "Hidden",
                 "-Command",
-                "Start-Sleep -Seconds 2; Remove-Item -LiteralPath $args[0] -Force -Recurse",
+                "Start-Sleep -Seconds 2; Remove-Item -LiteralPath $env:FILEFLOW_PS_REMOVE -Force -Recurse",
             ])
-            .arg(path)
+            .env("FILEFLOW_PS_REMOVE", path)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -2198,19 +2197,16 @@ async fn install_windows_integration(application: &Path) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let shortcut = programs.join("FileFlow.lnk");
     let working_directory = application.parent().unwrap_or_else(|| Path::new(r"C:\"));
-    let script = r#"& { param([string]$Target,[string]$Shortcut,[string]$WorkingDirectory); $shell=New-Object -ComObject WScript.Shell; $link=$shell.CreateShortcut($Shortcut); $link.TargetPath=$Target; $link.WorkingDirectory=$WorkingDirectory; $link.IconLocation="$Target,0"; $link.Description='FileFlow — conversion et organisation locale de fichiers'; $link.Save() }"#;
-    run_checked(
-        "powershell.exe",
+    let script = r#"$ErrorActionPreference='Stop'; $Target=$env:FILEFLOW_PS_TARGET; $Shortcut=$env:FILEFLOW_PS_SHORTCUT; $WorkingDirectory=$env:FILEFLOW_PS_WORKING_DIRECTORY; $shell=New-Object -ComObject WScript.Shell; $link=$shell.CreateShortcut($Shortcut); $link.TargetPath=$Target; $link.WorkingDirectory=$WorkingDirectory; $link.IconLocation=($Target + ',0'); $link.Description='FileFlow — conversion et organisation locale de fichiers'; $link.Save(); if (-not (Test-Path -LiteralPath $Shortcut)) { throw 'FileFlow shortcut was not created' }"#;
+    run_windows_powershell(
+        script,
         &[
-            OsStr::new("-NoProfile"),
-            OsStr::new("-NonInteractive"),
-            OsStr::new("-ExecutionPolicy"),
-            OsStr::new("Bypass"),
-            OsStr::new("-Command"),
-            OsStr::new(script),
-            application.as_os_str(),
-            shortcut.as_os_str(),
-            working_directory.as_os_str(),
+            ("FILEFLOW_PS_TARGET", application.as_os_str()),
+            ("FILEFLOW_PS_SHORTCUT", shortcut.as_os_str()),
+            (
+                "FILEFLOW_PS_WORKING_DIRECTORY",
+                working_directory.as_os_str(),
+            ),
         ],
     )
     .await?;
@@ -2532,9 +2528,45 @@ async fn run_checked<P: AsRef<OsStr>>(program: P, arguments: &[&OsStr]) -> Resul
     }
 }
 
+fn windows_powershell_program() -> &'static str {
+    if command_exists("pwsh.exe") {
+        "pwsh.exe"
+    } else {
+        "powershell.exe"
+    }
+}
+
+async fn run_windows_powershell(
+    script: &str,
+    environment: &[(&str, &OsStr)],
+) -> Result<String, String> {
+    let mut command = Command::new(windows_powershell_program());
+    command.args([
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        script,
+    ]);
+    for &(name, value) in environment {
+        command.env(name, value);
+    }
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    hide_process(&mut command);
+    let output = command.output().await.map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        return Err(if stderr.is_empty() { stdout } else { stderr });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
 fn doctor_command(script: &Path) -> Command {
     let mut command = if cfg!(target_os = "windows") {
-        let mut value = Command::new("powershell.exe");
+        let mut value = Command::new(windows_powershell_program());
         value.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
         value
     } else {
@@ -2603,26 +2635,12 @@ async fn terminate_process_tree(child: &mut tokio::process::Child) {
 
 #[cfg(windows)]
 async fn verify_windows_signature(path: &Path) -> Result<bool, String> {
-    let mut command = Command::new("powershell.exe");
-    command
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "& { param([string]$Path); (Get-AuthenticodeSignature -LiteralPath $Path).Status.ToString() }",
-        ])
-        .arg(path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    hide_process(&mut command);
-    let output = command.output().await.map_err(|error| error.to_string())?;
-    if !output.status.success() {
-        return Err(format!(
-            "contrôle Authenticode impossible: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    let status = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let status = run_windows_powershell(
+        "$ErrorActionPreference='Stop'; Import-Module Microsoft.PowerShell.Security -ErrorAction Stop; (Get-AuthenticodeSignature -LiteralPath $env:FILEFLOW_PS_PATH).Status.ToString()",
+        &[("FILEFLOW_PS_PATH", path.as_os_str())],
+    )
+    .await
+    .map_err(|error| format!("contrôle Authenticode impossible: {error}"))?;
     match status.as_str() {
         "Valid" => Ok(true),
         "NotSigned" => Ok(false),

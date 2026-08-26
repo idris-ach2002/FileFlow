@@ -327,6 +327,7 @@ if (descriptor.os === 'darwin') {
     releaseSetupCli,
     [
       'repair',
+      '--app-only',
       '--yes',
       '--no-launch',
     ],

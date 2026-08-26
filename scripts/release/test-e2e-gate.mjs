@@ -137,6 +137,53 @@ before(
   'Linux',
 );
 
+/* Native release hardening discovered by 1.0.9 Atomic Release */
+
+for (
+  const [label, workflow] of [
+    ['Windows', windows],
+    ['macOS', macos],
+    ['Linux', linux],
+  ]
+) {
+  assert.match(
+    workflow,
+    /GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}/,
+    `${label}: native E2E must authenticate GitHub API requests`,
+  );
+}
+
+assert.match(
+  windows,
+  /\$PSNativeCommandUseErrorActionPreference = \$true/,
+  'Windows native commands must fail the workflow immediately',
+);
+
+assert.match(
+  windows,
+  /cargo clippy --locked -p fileflow-setup -p fileflow-setup-core --all-targets/,
+  'Windows Setup regression clippy must not mutate Cargo.lock',
+);
+
+assert.ok(
+  JSON.parse(source('package.json'))
+    .scripts['setup:test']
+    .includes('cargo test --locked -p fileflow-setup-core -p fileflow-setup'),
+  'setup:test must run Cargo with --locked',
+);
+
+assert.match(
+  e2e,
+  /run\(\s*releaseSetupCli,\s*\[\s*'repair',\s*'--app-only',/m,
+  'integration-only repair must not reinstall runtime engines',
+);
+
+assert.match(
+  adapter,
+  /command_exists\("pkexec"\)[\s\S]{0,260}var_os\("CI"\)\.is_none\(\)/,
+  'Linux CI must not invoke interactive pkexec',
+);
+
 /* Atomic publication gate */
 
 assert.match(

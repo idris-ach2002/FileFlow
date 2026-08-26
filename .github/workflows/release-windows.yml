@@ -49,15 +49,26 @@ jobs:
       - name: Native Windows Setup regression tests
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
           node scripts/setup/test-windows-powershell-source.mjs
           pnpm run setup:test
-          cargo clippy -p fileflow-setup -p fileflow-setup-core --all-targets -- -D warnings
+          cargo clippy --locked -p fileflow-setup -p fileflow-setup-core --all-targets -- -D warnings
+
+          if (git status --porcelain) {
+            git status --short
+            throw 'Windows setup regression tests modified the working tree'
+          }
       - name: Validate tag and source
         shell: pwsh
         env:
           FILEFLOW_RELEASE_REF: ${{ inputs.release_ref }}
           FILEFLOW_RELEASE_VERSION: ${{ inputs.release_version }}
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
           $version = node -p "require('./src-tauri/tauri.conf.json').version"
           $expected = $env:FILEFLOW_RELEASE_VERSION.TrimStart('v')
           if ($env:FILEFLOW_RELEASE_REF -notmatch '^[0-9a-f]{40}$') { throw 'invalid release SHA' }
@@ -115,6 +126,8 @@ jobs:
           node scripts/release/package-setup-cli.mjs --target x86_64-pc-windows-msvc
       - name: Validate release
         shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           $validationArgs = @('--target', 'x86_64-pc-windows-msvc', '--require-setup')
           if (-not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_THUMBPRINT)) {
@@ -124,7 +137,10 @@ jobs:
           node scripts/release/smoke-packaged-app.mjs --target x86_64-pc-windows-msvc
           node scripts/release/smoke-packaged-setup.mjs --target x86_64-pc-windows-msvc
           node scripts/release/e2e-native.mjs --target x86_64-pc-windows-msvc --version '${{ inputs.release_version }}'
+          cargo test -p fileflow-executor --all-features --locked
+          node scripts/release/conversion-e2e.mjs --target x86_64-pc-windows-msvc --version '${{ inputs.release_version }}' --output dist/conversion-attestations/x86_64-pc-windows-msvc.json
           node scripts/release/collect-artifacts.mjs --target x86_64-pc-windows-msvc --include-setup
+          Copy-Item 'dist/conversion-attestations/x86_64-pc-windows-msvc.json' -Destination 'dist/release/x86_64-pc-windows-msvc/conversion-attestation.json' -Force
           Copy-Item 'dist/e2e-attestations/x86_64-pc-windows-msvc.json' -Destination 'dist/release/x86_64-pc-windows-msvc/e2e-attestation.json' -Force
       - uses: actions/upload-artifact@v7
         with:

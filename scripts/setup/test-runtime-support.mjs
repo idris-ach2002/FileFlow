@@ -38,7 +38,26 @@ assert.match(adapter, /GIO_EXTRA_MODULES/);
 assert.match(adapter, /"OWD"/);
 assert.match(adapter, /Icon=fileflow/);
 assert.match(adapter, /icon_sources/);
-assert.match(adapter, /IconLocation="\$Target,0"/);
+assert.match(
+  adapter,
+  /\$Target=\$env:FILEFLOW_PS_TARGET/,
+);
+assert.match(
+  adapter,
+  /\$Shortcut=\$env:FILEFLOW_PS_SHORTCUT/,
+);
+assert.match(
+  adapter,
+  /\$WorkingDirectory=\$env:FILEFLOW_PS_WORKING_DIRECTORY/,
+);
+assert.match(
+  adapter,
+  /IconLocation=\(\$Target \+ ',0'\)/,
+);
+assert.match(
+  adapter,
+  /Test-Path -LiteralPath \$Shortcut/,
+);
 assert.match(adapter, /FileFlow\.lnk/);
 assert.match(setupConfig, /\.\.\/src-tauri\/icons\/icon\.png/);
 assert.match(setupUi, /copy-diagnostic/);

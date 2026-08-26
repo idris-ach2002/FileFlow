@@ -67,7 +67,7 @@ const adapter = readFileSync(resolve(root, 'setup-tauri/src/adapter.rs'), 'utf8'
 for (const marker of [
   'Icon=fileflow',
   'fileflow.png',
-  'IconLocation="$Target,0"',
+  `IconLocation=($Target + ',0')`,
   'icon_sources',
 ]) {
   if (!adapter.includes(marker)) throw new Error(`system integration missing branding invariant: ${marker}`);

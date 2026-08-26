@@ -7,17 +7,22 @@ mod windows_tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    const AUTHENTICODE_SCRIPT: &str = "& { param([string]$Path); \
-         (Get-AuthenticodeSignature -LiteralPath $Path).Status.ToString() }";
+    const AUTHENTICODE_SCRIPT: &str = "$ErrorActionPreference='Stop'; \
+         Import-Module Microsoft.PowerShell.Security -ErrorAction Stop; \
+         (Get-AuthenticodeSignature -LiteralPath $env:FILEFLOW_PS_PATH).Status.ToString()";
 
-    const SHORTCUT_SCRIPT: &str = "& { param([string]$Target,[string]$Shortcut,[string]$WorkingDirectory); \
+    const SHORTCUT_SCRIPT: &str = "$ErrorActionPreference='Stop'; \
+         $Target=$env:FILEFLOW_PS_TARGET; \
+         $Shortcut=$env:FILEFLOW_PS_SHORTCUT; \
+         $WorkingDirectory=$env:FILEFLOW_PS_WORKING_DIRECTORY; \
          $shell=New-Object -ComObject WScript.Shell; \
          $link=$shell.CreateShortcut($Shortcut); \
          $link.TargetPath=$Target; \
          $link.WorkingDirectory=$WorkingDirectory; \
-         $link.IconLocation=\"$Target,0\"; \
+         $link.IconLocation=($Target + ',0'); \
          $link.Description='FileFlow Windows native regression test'; \
-         $link.Save() }";
+         $link.Save(); \
+         if (-not (Test-Path -LiteralPath $Shortcut)) { throw 'shortcut missing' }";
 
     fn test_directory(name: &str) -> std::path::PathBuf {
         let nanos = SystemTime::now()
@@ -37,8 +42,20 @@ mod windows_tests {
         path
     }
 
-    fn powershell(script: &str, args: &[&Path]) -> Output {
-        let mut command = Command::new("powershell.exe");
+    fn powershell_program() -> &'static str {
+        if Command::new("pwsh.exe")
+            .args(["-NoLogo", "-NoProfile", "-Command", "exit 0"])
+            .status()
+            .is_ok_and(|status| status.success())
+        {
+            "pwsh.exe"
+        } else {
+            "powershell.exe"
+        }
+    }
+
+    fn powershell(script: &str, environment: &[(&str, &Path)]) -> Output {
+        let mut command = Command::new(powershell_program());
 
         command.args([
             "-NoLogo",
@@ -50,11 +67,11 @@ mod windows_tests {
             script,
         ]);
 
-        for arg in args {
-            command.arg(arg);
+        for &(name, path) in environment {
+            command.env(name, path);
         }
 
-        command.output().expect("launch Windows PowerShell")
+        command.output().expect("launch PowerShell")
     }
 
     fn failure(output: &Output) -> String {
@@ -78,7 +95,10 @@ mod windows_tests {
         )
         .expect("copy executable");
 
-        let output = powershell(AUTHENTICODE_SCRIPT, &[target.as_path()]);
+        let output = powershell(
+            AUTHENTICODE_SCRIPT,
+            &[("FILEFLOW_PS_PATH", target.as_path())],
+        );
 
         assert!(
             output.status.success(),
@@ -117,7 +137,11 @@ mod windows_tests {
 
         let output = powershell(
             SHORTCUT_SCRIPT,
-            &[target.as_path(), shortcut.as_path(), app_dir.as_path()],
+            &[
+                ("FILEFLOW_PS_TARGET", target.as_path()),
+                ("FILEFLOW_PS_SHORTCUT", shortcut.as_path()),
+                ("FILEFLOW_PS_WORKING_DIRECTORY", app_dir.as_path()),
+            ],
         );
 
         assert!(

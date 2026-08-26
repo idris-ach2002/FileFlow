@@ -8,22 +8,40 @@ const source = readFileSync(
 
 assert.match(
   source,
-  /"& \{ param\(\[string\]\$Path\); \(Get-AuthenticodeSignature -LiteralPath \$Path\)\.Status\.ToString\(\) \}"/,
-  'Authenticode doit être exécuté dans un scriptblock PowerShell',
-);
-
-assert.doesNotMatch(
-  source,
-  /"param\(\[string\]\$Path\); \(Get-AuthenticodeSignature/,
-  'La forme PowerShell non enveloppée ne doit jamais revenir',
+  /fn windows_powershell_program\(\)/,
+  'PowerShell runner selection is required',
 );
 
 assert.match(
   source,
-  /let script = r#"& \{ param\(\[string\]\$Target,\[string\]\$Shortcut,\[string\]\$WorkingDirectory\);/,
-  'La création du raccourci doit utiliser un scriptblock PowerShell',
+  /FILEFLOW_PS_PATH/,
+  'Authenticode path must use environment binding',
+);
+
+assert.match(
+  source,
+  /Import-Module Microsoft\.PowerShell\.Security -ErrorAction Stop/,
+  'Authenticode security module must load explicitly',
+);
+
+assert.match(
+  source,
+  /FILEFLOW_PS_TARGET[\s\S]{0,500}FILEFLOW_PS_SHORTCUT[\s\S]{0,500}FILEFLOW_PS_WORKING_DIRECTORY/,
+  'shortcut paths must use environment binding',
+);
+
+assert.doesNotMatch(
+  source,
+  /param\(\[string\]\$Path\)/,
+  'positional Authenticode binding must not return',
+);
+
+assert.doesNotMatch(
+  source,
+  /Remove-Item -LiteralPath \$args\[0\]/,
+  'maintenance removal must not use positional path binding',
 );
 
 console.log(
-  '[windows-powershell-source] Authenticode + shortcut argument binding verified',
+  '[windows-powershell-source] safe PowerShell path binding verified',
 );
