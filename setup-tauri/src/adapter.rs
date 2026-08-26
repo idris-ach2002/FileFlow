@@ -2613,16 +2613,26 @@ async fn terminate_process_tree(child: &mut tokio::process::Child) {
         hide_process(&mut command);
         let _ = command.status().await;
     } else {
-        let _ = Command::new("kill")
-            .args(["-TERM", "--", &format!("-{pid}")])
-            .status()
-            .await;
+        let process_group = format!("-{pid}");
+
+        let mut term = Command::new("kill");
+        term.arg("-TERM");
+        if !cfg!(target_os = "macos") {
+            term.arg("--");
+        }
+        term.arg(&process_group);
+        let _ = term.status().await;
+
         tokio::time::sleep(Duration::from_millis(350)).await;
+
         if child.try_wait().ok().flatten().is_none() {
-            let _ = Command::new("kill")
-                .args(["-KILL", "--", &format!("-{pid}")])
-                .status()
-                .await;
+            let mut kill = Command::new("kill");
+            kill.arg("-KILL");
+            if !cfg!(target_os = "macos") {
+                kill.arg("--");
+            }
+            kill.arg(&process_group);
+            let _ = kill.status().await;
         }
     }
     if tokio::time::timeout(Duration::from_secs(2), child.wait())

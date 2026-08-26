@@ -233,6 +233,52 @@ for (
   );
 }
 
+const linuxArmEngineBlock =
+  gate.match(
+    /const linuxArmEngineIds = \[([\s\S]*?)\];/,
+  );
+
+assert.ok(
+  linuxArmEngineBlock,
+  'Linux ARM64 engine selection missing',
+);
+
+for (
+  const id of [
+    'ffmpeg',
+    'vips',
+    'imagemagick',
+    'qpdf',
+    'img2pdf',
+    'poppler',
+    'ghostscript',
+    'tesseract',
+    'ocrmypdf',
+    'libreoffice',
+    'pandoc',
+    'exiftool',
+    'sevenzip',
+    'zstd',
+    'lz4',
+  ]
+) {
+  assert.ok(
+    linuxArmEngineBlock[1].includes(`'${id}'`),
+    `Linux ARM64 engine selection missing ${id}`,
+  );
+}
+
+assert.ok(
+  !linuxArmEngineBlock[1].includes(`'browser'`),
+  'Linux ARM64 must not require Chromium',
+);
+
+assert.match(
+  gate,
+  /target ===\s*'aarch64-unknown-linux-gnu'[\s\S]{0,1800}'--engines'[\s\S]{0,300}linuxArmEngineIds\.join/,
+  'Linux ARM64 engine override is not wired',
+);
+
 console.log(
   `[conversion-gate] static contract verified: ` +
   `${corpus.cases.length} real cases × ` +

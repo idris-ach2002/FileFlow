@@ -12,3 +12,4 @@ frontend/.angular/
 workflow-errors-*.log
 
 .wrangler/
+setup-tauri/gen/schemas/windows-schema.json

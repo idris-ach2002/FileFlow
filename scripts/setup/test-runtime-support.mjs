@@ -66,4 +66,23 @@ assert.match(setupScript, /setup_update_status/);
 assert.match(setupScript, /Raccourci \+ icône vérifiés/);
 assert.match(cli, /--remove-preexisting-engines exige --engines id,id/);
 
+// macOS process-group cleanup: BSD kill accepts the negative
+// process-group id directly; GNU "--" remains Linux-only.
+assert.match(
+  adapter,
+  /let process_group = format!\("-\{pid\}"\);/,
+  'macOS process-group cleanup missing',
+);
+assert.match(
+  adapter,
+  /if !cfg!\(target_os = "macos"\) \{\s*term\.arg\("--"\);/,
+  'TERM GNU separator must be excluded on macOS',
+);
+assert.match(
+  adapter,
+  /if !cfg!\(target_os = "macos"\) \{\s*kill\.arg\("--"\);/,
+  'KILL GNU separator must be excluded on macOS',
+);
+
+
 console.log('[setup-support] privileges, locale-safe Windows process detection, AppImage isolation, desktop branding and diagnostic UX verified');

@@ -265,12 +265,51 @@ console.log(
  * Le Setup FileFlow de la release installe/vérifie lui-même
  * les moteurs qui seront utilisés par les conversions.
  */
+const linuxArmEngineIds = [
+  'ffmpeg',
+  'vips',
+  'imagemagick',
+  'qpdf',
+  'img2pdf',
+  'poppler',
+  'ghostscript',
+  'tesseract',
+  'ocrmypdf',
+  'libreoffice',
+  'pandoc',
+  'exiftool',
+  'sevenzip',
+  'zstd',
+  'lz4',
+];
+
+if (
+  target ===
+  'aarch64-unknown-linux-gnu'
+) {
+  console.log(
+    '[conversion-e2e] Linux ARM64: ' +
+    'Chromium excluded from Setup engine ' +
+    'postcheck; html-to-pdf is optional ' +
+    'on this native target.',
+  );
+}
+
 run(
   setupCli,
   [
     'engines',
     '--yes',
     '--no-launch',
+    ...(
+      target ===
+      'aarch64-unknown-linux-gnu'
+        ? [
+            '--engines',
+            linuxArmEngineIds.join(','),
+          ]
+        : []
+    ),
   ],
   {
     timeoutMs: 45 * 60_000,
