@@ -203,6 +203,17 @@ try {
   if (!liveDownloads.platforms['windows-x86_64']?.setupVariants?.msi) {
     throw new Error('Windows downloads must expose MSI as a Setup variant');
   }
+  for (const [platform, item] of Object.entries(liveDownloads.platforms)) {
+    if (item.application?.role !== 'application' || item.application?.target == null) {
+      throw new Error(`${platform} application artifact must expose role + target metadata`);
+    }
+    if (item.setup?.role !== 'setup' || item.setup?.target == null) {
+      throw new Error(`${platform} setup artifact must expose role + target metadata`);
+    }
+    if (item.cli && (item.cli.role !== 'setup-cli' || item.cli.target == null)) {
+      throw new Error(`${platform} setup CLI must expose role + target metadata`);
+    }
+  }
   for (const key of ['linux-x86_64', 'linux-aarch64']) {
     const variants = liveDownloads.platforms[key]?.setupVariants || {};
     for (const type of ['appimage', 'deb', 'rpm']) {

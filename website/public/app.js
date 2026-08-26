@@ -203,7 +203,7 @@ const GUIDES = {
     title: 'Windows', label: 'Windows 10 / 11 · x64',
     steps: [
       ['Télécharger FileFlow Setup','Le portail recommande automatiquement l’installateur Windows x64.','/assets/guides/windows/01.svg','Le Setup Windows est produit avec NSIS et MSI dans la chaîne de release.'],
-      ['Ouvrir FileFlowSetup.exe','Ouvrez le fichier téléchargé. Si Windows affiche un contrôle, vérifiez le nom FileFlowSetup.exe puis continuez.','/assets/guides/windows/02.svg','Aucun contournement de sécurité n’est demandé.'],
+      ['Ouvrir FileFlowSetup.exe','Ouvrez le fichier téléchargé. Si Microsoft Defender SmartScreen affiche « Windows a protégé votre ordinateur », choisissez Informations complémentaires puis Exécuter quand même.','/assets/guides/windows/02.svg','Vérifiez toujours que le fichier téléchargé s’appelle FileFlowSetup et provient du portail FileFlow.'],
       ['Suivre l’assistant FileFlow','Diagnostic, application, moteurs et post-contrôles restent visibles pendant l’installation.','/assets/guides/windows/03.svg','Précédent, Suivant et Annuler gardent le parcours sous contrôle.'],
       ['FileFlow est prêt','Le Setup termine ses contrôles puis peut ouvrir FileFlow. Il reste aussi disponible pour réparer ou désinstaller.','/assets/guides/windows/04.svg','La maintenance utilise le même Setup que l’installation.'],
     ],
@@ -250,6 +250,19 @@ function selectedSetupType(platform) {
   if (platform?.startsWith('linux-')) return linuxPackagePreference;
   if (platform === 'windows-x86_64') return windowsPackagePreference;
   return manifest?.platforms?.[platform]?.setup?.packageType || null;
+}
+
+
+function normalizePackagePreference(platform) {
+  if (!manifest || manifest.preview || !platform) return;
+  const variants = setupVariantsFor(platform);
+  if (platform.startsWith('linux-')) {
+    if (!variants[linuxPackagePreference]) {
+      linuxPackagePreference = ['deb', 'rpm', 'appimage'].find((type) => variants[type]) || linuxPackagePreference;
+    }
+  } else if (platform === 'windows-x86_64' && !variants[windowsPackagePreference]) {
+    windowsPackagePreference = ['exe', 'msi'].find((type) => variants[type]) || windowsPackagePreference;
+  }
 }
 
 function selectedSetupArtifact(platform) {
@@ -327,19 +340,18 @@ function renderPackageChoice() {
   document.querySelector('#package-choice-help').textContent = isLinux ? 'Linux et architecture sont détectés ; la distribution reste votre choix.' : 'Le .exe convient à la plupart des utilisateurs.';
   buttons.replaceChildren();
 
-  const available = manifest.preview ? definitions : definitions.filter(([type]) => variants[type]);
-  const current = isLinux ? linuxPackagePreference : windowsPackagePreference;
-  if (!variants[current] && available[0]) {
-    if (isLinux) linuxPackagePreference = available[0][0];
-    else windowsPackagePreference = available[0][0];
-  }
-
-  for (const [type, title, detail] of available) {
+  for (const [type, title, detail] of definitions) {
+    const available = manifest.preview || Boolean(variants[type]);
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = `package-option ${selectedSetupType(platform) === type ? 'active' : ''}`;
-    button.innerHTML = `<strong>${title}</strong><small>${detail}</small>`;
-    button.addEventListener('click', () => {
+    button.disabled = !available;
+    button.className = `package-option ${selectedSetupType(platform) === type && available ? 'active' : ''}`;
+    const strong = document.createElement('strong');
+    strong.textContent = title;
+    const small = document.createElement('small');
+    small.textContent = available ? detail : 'Indisponible pour cette release';
+    button.append(strong, small);
+    if (available) button.addEventListener('click', () => {
       if (isLinux) linuxPackagePreference = type;
       else windowsPackagePreference = type;
       if (isLinux) currentGuide = 'linux';
@@ -566,6 +578,7 @@ function updateDownloadExperience() {
 
 function updateRecommendedDownload() {
   const platform = deviceProfile.platform;
+  normalizePackagePreference(platform);
   const primary = document.querySelector('#download-primary');
   const labels = platform ? PLATFORM_LABELS[platform] : null;
   const setup = platform ? selectedSetupArtifact(platform) : null;

@@ -56,7 +56,7 @@ function pick(files, type, setup) {
   return candidates[0];
 }
 
-function artifact(path, packageType) {
+function artifact(path, packageType, { role, target } = {}) {
   const name = basename(path);
   const bytes = readFileSync(path);
   const signaturePath = `${path}.sig`;
@@ -67,6 +67,8 @@ function artifact(path, packageType) {
     size: statSync(path).size,
     signature: existsSync(signaturePath) ? readFileSync(signaturePath, 'utf8').trim() : null,
     packageType,
+    role: role || null,
+    target: target || null,
   };
 }
 
@@ -78,15 +80,15 @@ for (const [target, descriptor] of targets) {
   const setupVariants = Object.fromEntries(
     [...new Set(descriptor.setupVariants || [descriptor.type])].map((type) => [
       type,
-      artifact(pick(files, type, true), type),
+      artifact(pick(files, type, true), type, { role: 'setup', target }),
     ]),
   );
   const cliPath = files.find((path) => /fileflow[ _.-]?setup[ _.-]?cli/i.test(basename(path)) && !/\.(sig|sha256)$/i.test(path));
   platforms[descriptor.key] = {
-    application: artifact(applicationPath, descriptor.type),
-    setup: artifact(setupPath, descriptor.type),
+    application: artifact(applicationPath, descriptor.type, { role: 'application', target }),
+    setup: artifact(setupPath, descriptor.type, { role: 'setup', target }),
     setupVariants,
-    ...(cliPath ? { cli: artifact(cliPath, 'binary') } : {}),
+    ...(cliPath ? { cli: artifact(cliPath, 'binary', { role: 'setup-cli', target }) } : {}),
   };
 }
 

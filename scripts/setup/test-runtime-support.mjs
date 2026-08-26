@@ -35,9 +35,16 @@ assert.match(probe, /fileflow-desktop\.exe/);
 assert.match(adapter, /sanitize_appimage_environment/);
 assert.match(adapter, /APPIMAGE_ORIGINAL_LD_LIBRARY_PATH/);
 assert.match(adapter, /GIO_EXTRA_MODULES/);
+assert.match(adapter, /"OWD"/);
 assert.match(adapter, /Icon=fileflow/);
-assert.match(adapter, /512x512/);
+assert.match(adapter, /icon_sources/);
+assert.match(adapter, /IconLocation="\$Target,0"/);
+assert.match(adapter, /FileFlow\.lnk/);
 assert.match(setupConfig, /\.\.\/src-tauri\/icons\/icon\.png/);
+assert.match(setupUi, /copy-diagnostic/);
+assert.match(setupUi, /setup-update-action/);
+assert.match(setupScript, /setup_update_status/);
+assert.match(setupScript, /Raccourci \+ icône vérifiés/);
 assert.match(cli, /--remove-preexisting-engines exige --engines id,id/);
 
-console.log('[setup-support] privileges, locale-safe Windows process detection, AppImage isolation and Linux desktop integration verified');
+console.log('[setup-support] privileges, locale-safe Windows process detection, AppImage isolation, desktop branding and diagnostic UX verified');

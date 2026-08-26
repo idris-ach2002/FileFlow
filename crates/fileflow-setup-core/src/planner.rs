@@ -71,50 +71,112 @@ fn plan_install_or_repair(
         return;
     }
 
-    push_step(
-        steps,
-        "release",
-        "Source vérifiée",
-        "Téléchargement du manifeste public et validation de la signature, du checksum et de l’architecture.",
-        ComponentKind::Application,
-        PlannedOperation::Download,
-        10,
-        true,
-        false,
-        "Le fichier temporaire est supprimé et l’installation existante est conservée.",
-        json!({}),
-    );
+    let differential_repair = request.mode == SetupMode::Repair
+        && snapshot.application.installed
+        && snapshot.application.version.is_some()
+        && !snapshot.integration.healthy();
 
-    let operation = if snapshot.application.installed {
-        if request.mode == SetupMode::Repair {
-            PlannedOperation::Repair
-        } else {
-            PlannedOperation::Install
-        }
+    if differential_repair {
+        push_step(
+            steps,
+            "release",
+            "Vérification",
+            "Contrôle de l’installation existante sans retélécharger FileFlow inutilement.",
+            ComponentKind::Application,
+            PlannedOperation::Preserve,
+            2,
+            true,
+            false,
+            "Aucune modification de l’application.",
+            json!({ "differentialRepair": true }),
+        );
+        push_step(
+            steps,
+            "application",
+            "FileFlow",
+            "L’application existante est conservée ; le contrôle final décidera si une réinstallation complète est nécessaire.",
+            ComponentKind::Application,
+            PlannedOperation::Preserve,
+            2,
+            true,
+            false,
+            "Aucune modification de l’application.",
+            json!({ "installed": true, "differentialRepair": true }),
+        );
     } else {
-        PlannedOperation::Install
-    };
-    push_step(
-        steps,
-        "application",
-        "Application atomique",
-        "Installation en zone temporaire, contrôle du bundle puis activation atomique.",
-        ComponentKind::Application,
-        operation,
-        35,
-        false,
-        cfg!(target_os = "windows"),
-        "La version précédente est restaurée automatiquement.",
-        json!({ "installed": snapshot.application.installed }),
-    );
+        push_step(
+            steps,
+            "release",
+            "Vérification",
+            "Téléchargement du manifeste public puis validation du paquet, du checksum et de l’architecture.",
+            ComponentKind::Application,
+            PlannedOperation::Download,
+            10,
+            true,
+            false,
+            "Le fichier temporaire est supprimé et l’installation existante est conservée.",
+            json!({}),
+        );
+
+        push_step(
+            steps,
+            "application",
+            "FileFlow",
+            "Installation en zone temporaire, contrôle du bundle puis activation atomique.",
+            ComponentKind::Application,
+            if snapshot.application.installed {
+                PlannedOperation::Repair
+            } else {
+                PlannedOperation::Install
+            },
+            35,
+            false,
+            cfg!(target_os = "windows"),
+            "La version précédente est restaurée automatiquement.",
+            json!({ "installed": snapshot.application.installed }),
+        );
+    }
+
+    if snapshot.application.installed || !differential_repair {
+        push_step(
+            steps,
+            "integration",
+            "Intégration système",
+            match snapshot.platform {
+                crate::Platform::Macos => {
+                    "Vérification de l’application et de son icône dans macOS."
+                }
+                crate::Platform::Windows => {
+                    "Vérification ou recréation du raccourci FileFlow dans le menu Démarrer avec l’icône de l’application."
+                }
+                crate::Platform::Linux => {
+                    "Vérification ou recréation du lanceur, du wrapper et de l’icône FileFlow dans le menu Applications."
+                }
+            },
+            ComponentKind::Integration,
+            if snapshot.integration.healthy() {
+                PlannedOperation::Preserve
+            } else {
+                PlannedOperation::Repair
+            },
+            if snapshot.integration.healthy() { 2 } else { 8 },
+            true,
+            false,
+            "L’intégration précédente reste récupérable depuis l’application installée.",
+            json!({
+                "launcherInstalled": snapshot.integration.launcher_installed,
+                "iconInstalled": snapshot.integration.icon_installed,
+            }),
+        );
+    }
 
     plan_engines(snapshot, request, steps, warnings, false);
 
     push_step(
         steps,
         "maintenance",
-        "Centre de maintenance",
-        "Copie vérifiée de FileFlow Setup pour permettre réparation et désinstallation depuis l’application.",
+        "Maintenance",
+        "Copie vérifiée de FileFlow Setup pour permettre réparation et désinstallation ultérieures.",
         ComponentKind::Maintenance,
         PlannedOperation::Install,
         8,
@@ -126,8 +188,8 @@ fn plan_install_or_repair(
     push_step(
         steps,
         "postcheck",
-        "Contrôles après installation",
-        "Validation du bundle, de l’IPC, des moteurs, d’une conversion synthétique et de l’Updater.",
+        "Contrôle final",
+        "Validation de FileFlow, de l’intégration système, de l’IPC, des moteurs et de la version installée.",
         ComponentKind::Verification,
         PlannedOperation::Verify,
         15,
@@ -139,8 +201,8 @@ fn plan_install_or_repair(
     push_step(
         steps,
         "receipt",
-        "Reçu d’installation",
-        "Enregistrement des composants créés, préexistants et conservés.",
+        "Diagnostic d’installation",
+        "Enregistrement des composants, de l’intégration système et des moteurs réellement présents.",
         ComponentKind::Maintenance,
         PlannedOperation::WriteReceipt,
         2,
@@ -153,7 +215,7 @@ fn plan_install_or_repair(
         push_step(
             steps,
             "launch",
-            "Premier démarrage",
+            "Ouvrir FileFlow",
             "Ouverture de FileFlow après validation complète de l’installation.",
             ComponentKind::Application,
             PlannedOperation::Finalize,
@@ -167,6 +229,9 @@ fn plan_install_or_repair(
 
     if request.profile == SetupProfile::ApplicationOnly {
         warnings.push("Les moteurs locaux ne seront pas installés avec ce profil.".into());
+    }
+    if differential_repair {
+        warnings.push("Réparation différentielle : FileFlow et les moteurs valides sont conservés ; seule l’intégration système manquante est recréée.".into());
     }
 }
 
@@ -455,7 +520,8 @@ fn push_step(
 mod tests {
     use super::*;
     use crate::{
-        ApplicationState, Architecture, EngineState, InstallReceipt, Platform, ReceiptComponent,
+        ApplicationState, Architecture, EngineState, InstallReceipt, IntegrationState, Platform,
+        ReceiptComponent,
     };
     use chrono::Utc;
     use std::path::PathBuf;
@@ -469,6 +535,11 @@ mod tests {
                 version: Some("1.0.6".into()),
                 path: Some(PathBuf::from("/Applications/FileFlow.app")),
                 running: false,
+            },
+            integration: IntegrationState {
+                launcher_installed: true,
+                icon_installed: true,
+                maintenance_installed: true,
             },
             engines: vec![
                 EngineState {
@@ -548,6 +619,36 @@ mod tests {
                 .unwrap()
                 .metadata["missing"],
             json!(["zstd"])
+        );
+    }
+
+    #[test]
+    fn repair_only_recreates_missing_system_integration() {
+        let mut observed = snapshot();
+        observed.integration.launcher_installed = false;
+        observed.integration.icon_installed = false;
+        let plan = build_plan(
+            &observed,
+            SetupRequest {
+                mode: SetupMode::Repair,
+                ..SetupRequest::default()
+            },
+        );
+        assert_eq!(
+            plan.steps
+                .iter()
+                .find(|step| step.id == "application")
+                .unwrap()
+                .operation,
+            PlannedOperation::Preserve
+        );
+        assert_eq!(
+            plan.steps
+                .iter()
+                .find(|step| step.id == "integration")
+                .unwrap()
+                .operation,
+            PlannedOperation::Repair
         );
     }
 

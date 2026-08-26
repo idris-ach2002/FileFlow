@@ -28,6 +28,10 @@ pub struct DownloadManifest {
 pub struct PlatformDownloads {
     pub application: DownloadArtifact,
     pub setup: DownloadArtifact,
+    #[serde(default)]
+    pub setup_variants: BTreeMap<String, DownloadArtifact>,
+    #[serde(default)]
+    pub cli: Option<DownloadArtifact>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,6 +43,10 @@ pub struct DownloadArtifact {
     pub size: u64,
     pub signature: Option<String>,
     pub package_type: String,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub target: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -92,6 +100,12 @@ impl DownloadManifest {
                 .ok_or_else(|| ManifestError::MissingPlatform((*platform).into()))?;
             validate_artifact(&downloads.application, &prefix)?;
             validate_artifact(&downloads.setup, &prefix)?;
+            for artifact in downloads.setup_variants.values() {
+                validate_artifact(artifact, &prefix)?;
+            }
+            if let Some(cli) = downloads.cli.as_ref() {
+                validate_artifact(cli, &prefix)?;
+            }
         }
         Ok(())
     }
@@ -194,6 +208,8 @@ mod tests {
             size: 42,
             signature: None,
             package_type: "dmg".into(),
+            role: None,
+            target: None,
         }
     }
 
@@ -212,6 +228,8 @@ mod tests {
                         PlatformDownloads {
                             application: artifact(&format!("FileFlow-{platform}.dmg")),
                             setup: artifact(&format!("FileFlowSetup-{platform}.dmg")),
+                            setup_variants: BTreeMap::new(),
+                            cli: None,
                         },
                     )
                 })

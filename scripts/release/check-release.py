@@ -57,10 +57,11 @@ def main() -> None:
         "scripts/release/preflight-macos.sh", "scripts/release/verify-live-updater.mjs",
         "scripts/release/generate-download-manifest.mjs", "scripts/release/verify-live-downloads.mjs",
         "scripts/release/package-setup-cli.mjs",
+        "scripts/release/verify-branding.mjs",
         "scripts/release/artifact-layout.mjs",
         "scripts/release/assert-version-consistency.mjs", "scripts/release/assert-version-newer.mjs",
         "setup-tauri/Cargo.toml", "setup-tauri/tauri.conf.json", "setup-ui/index.html",
-        "scripts/setup/run-tauri.mjs",
+        "scripts/setup/run-tauri.mjs", "scripts/setup/create-macos-dmg.mjs",
         "website/wrangler.toml", "website/public/index.html",
         "src-tauri/tauri.windows.conf.json", "src-tauri/tauri.macos.conf.json", "src-tauri/tauri.linux.conf.json",
         ".github/workflows/ci.yml", ".github/workflows/native-linux.yml",
@@ -119,6 +120,15 @@ def main() -> None:
     require_tokens("scripts/release/publish-git-payload.py", ['"RUNTIME_MODE": "system"'])
     require_tokens("scripts/release/generate-download-manifest.mjs", [
         "setupVariants", "['exe', 'msi']", "['appimage', 'deb', 'rpm']",
+        "role: 'application'", "role: 'setup'", "role: 'setup-cli'", "target",
+    ])
+    require_tokens("scripts/release/verify-branding.mjs", [
+        "src-tauri/icons/icon.icns", "src-tauri/icons/icon.ico", "Icon=fileflow",
+        "IconLocation=\"$Target,0\"", "icon_sources",
+    ])
+    require_tokens("scripts/release/validate-distribution.mjs", [
+        "Linux application DEB", "Linux application RPM", "Linux Setup DEB",
+        "Linux Setup RPM", "Windows application MSI", "Windows Setup MSI", "hdiutil",
     ])
     engine_rs = require_tokens("crates/fileflow-engine/src/lib.rs", [
         "FILEFLOW_ENGINE_PATH", "/opt/homebrew/bin", "Microsoft/WinGet/Links", ".local/bin",
@@ -200,12 +210,14 @@ def main() -> None:
     if "workflow_run" in atomic_release or "actions/workflows" in atomic_release:
         raise SystemExit("atomic release must consume reusable build jobs, not query workflow history")
 
-    require_tokens(".github/workflows/release-promote.yml", [
+    promotion = require_tokens(".github/workflows/release-promote.yml", [
         "workflow_run:", "FileFlow Common Quality", "conclusion == 'success'",
         "assert-version-consistency.mjs", "assert-version-newer.mjs",
         "gh workflow run fileflow-release.yml", "actions: write",
         "TAG_SHA=$(git rev-list -n 1", "reprise automatique de la publication",
     ])
+    if "gh release create" in promotion:
+        raise SystemExit("promotion workflow must delegate to atomic release; it must never publish a partial release directly")
 
     site_workflow = require_tokens(".github/workflows/site-cloudflare.yml", [
         "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID",
@@ -225,6 +237,13 @@ def main() -> None:
     require_tokens("scripts/setup/run-tauri.mjs", [
         "FILEFLOW_SETUP_LOCAL_APPLICATION", "findLocalApplication", "--source",
         "FILEFLOW_SETUP_TARGET_DIR", "CARGO_TARGET_DIR", "target/fileflow-setup",
+        "createMacosSetupDmg", "wantsDmg",
+    ])
+    require_tokens("scripts/setup/macos-bundled-cli.mjs", [
+        "wantsDmg", "--bundles", "app", "Tauri's Finder/AppleScript DMG helper",
+    ])
+    require_tokens("scripts/setup/create-macos-dmg.mjs", [
+        "hdiutil", "FileFlowSetup_", "verify", "[setup-dmg] hdiutil attempt",
     ])
     require_tokens("website/public/release-client.js", [
         "content-type", "page HTML", "AbortError",
@@ -234,6 +253,7 @@ def main() -> None:
     ])
     require_tokens("scripts/verify.mjs", [
         "scripts/setup/test-ui.cjs", "scripts/setup/test-local-source.mjs",
+        "scripts/setup/test-runtime-support.mjs", "scripts/release/verify-branding.mjs",
         "website/scripts/test.mjs",
     ])
 

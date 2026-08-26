@@ -308,7 +308,8 @@ impl TransactionEngine {
 mod tests {
     use super::*;
     use crate::{
-        ApplicationState, Architecture, Platform, SetupRequest, SystemSnapshot, build_plan,
+        ApplicationState, Architecture, IntegrationState, Platform, SetupRequest, SystemSnapshot,
+        build_plan,
     };
     use std::sync::Mutex;
 
@@ -356,6 +357,11 @@ mod tests {
                     version: None,
                     path: None,
                     running: false,
+                },
+                integration: IntegrationState {
+                    launcher_installed: false,
+                    icon_installed: false,
+                    maintenance_installed: false,
                 },
                 engines: vec![],
                 receipt_path: PathBuf::from("receipt.json"),

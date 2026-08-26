@@ -27,35 +27,68 @@ function filesBelow(directory, label) {
   if (!existsSync(directory)) throw new Error(`${label} bundle root missing: ${directory}`);
   return walk(directory);
 }
+function execute(command, commandArgs) {
+  return spawnSync(command, commandArgs, { encoding: 'utf8' });
+}
 function run(command, commandArgs) {
-  const result = spawnSync(command, commandArgs, { encoding: 'utf8' });
+  const result = execute(command, commandArgs);
   if (result.error || result.status !== 0) {
     throw new Error(`${command} ${commandArgs.join(' ')} failed: ${result.stderr || result.stdout || result.error}`);
+  }
+  return result.stdout || '';
+}
+function commandExists(command) {
+  const result = execute(command, ['--version']);
+  return !result.error && result.status === 0;
+}
+function one(files, predicate, label) {
+  const matches = files.filter(predicate);
+  if (matches.length !== 1) {
+    throw new Error(`${label}: expected exactly one artifact, found ${matches.map((path) => basename(path)).join(', ') || 'none'}`);
+  }
+  return matches[0];
+}
+function isSetup(path) {
+  return /fileflow[ _.-]?setup/i.test(basename(path));
+}
+function isSetupCli(path) {
+  return /fileflow[ _.-]?setup[ _.-]?cli/i.test(basename(path));
+}
+function requireLinuxDesktopMetadata(packagePath, packageType, label) {
+  let listing = '';
+  if (packageType === 'deb') {
+    listing = run('dpkg-deb', ['--contents', packagePath]);
+  } else if (packageType === 'rpm' && commandExists('rpm')) {
+    listing = run('rpm', ['-qpl', packagePath]);
+  } else {
+    return;
+  }
+  if (!/usr\/share\/applications\/[^\n]*\.desktop/i.test(listing)) {
+    throw new Error(`${label} ${packageType.toUpperCase()} does not contain a freedesktop launcher`);
+  }
+  if (!/usr\/share\/icons\//i.test(listing)) {
+    throw new Error(`${label} ${packageType.toUpperCase()} does not contain application icons`);
   }
 }
 
 const applicationFiles = filesBelow(applicationBundleRoot(root, target), 'application');
-const setupFiles = requireSetup
-  ? filesBelow(setupBundleRoot(root, target), 'Setup')
-  : [];
+const setupFiles = requireSetup ? filesBelow(setupBundleRoot(root, target), 'Setup') : [];
 
 if (process.platform === 'darwin') {
-  const app = applicationFiles.find((path) => path.endsWith('FileFlow.app'));
-  const dmg = applicationFiles.find((path) => path.endsWith('.dmg')
-    && !/fileflow[ _.-]?setup/i.test(basename(path)));
-  if (!app || !dmg) throw new Error('macOS application APP/DMG missing');
+  const app = one(applicationFiles, (path) => path.endsWith('FileFlow.app'), 'macOS application APP');
+  const dmg = one(applicationFiles, (path) => path.endsWith('.dmg') && !isSetup(path), 'macOS application DMG');
   run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', app]);
+  run('hdiutil', ['verify', dmg]);
   if (strict) {
     run('xcrun', ['stapler', 'validate', app]);
     run('xcrun', ['stapler', 'validate', dmg]);
     run('spctl', ['--assess', '--type', 'execute', '--verbose=2', app]);
   }
   if (requireSetup) {
-    const setupApp = setupFiles.find((path) => path.endsWith('FileFlowSetup.app'));
-    const setupDmg = setupFiles.find((path) => path.endsWith('.dmg')
-      && /fileflow[ _.-]?setup/i.test(basename(path)));
-    if (!setupApp || !setupDmg) throw new Error('macOS Setup APP/DMG missing');
+    const setupApp = one(setupFiles, (path) => path.endsWith('FileFlowSetup.app'), 'macOS Setup APP');
+    const setupDmg = one(setupFiles, (path) => path.endsWith('.dmg') && isSetup(path), 'macOS Setup DMG');
     run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', setupApp]);
+    run('hdiutil', ['verify', setupDmg]);
     if (strict) {
       run('xcrun', ['stapler', 'validate', setupApp]);
       run('xcrun', ['stapler', 'validate', setupDmg]);
@@ -63,35 +96,35 @@ if (process.platform === 'darwin') {
     }
   }
 } else if (process.platform === 'win32') {
-  const installers = applicationFiles.filter((path) => /\.(exe|msi)$/i.test(path)
-    && !/fileflow[ _.-]?setup/i.test(basename(path)));
-  if (!installers.length) throw new Error('Windows application installers missing');
+  const appExe = one(applicationFiles, (path) => /\.exe$/i.test(path) && !isSetup(path), 'Windows application NSIS EXE');
+  one(applicationFiles, (path) => /\.msi$/i.test(path) && !isSetup(path), 'Windows application MSI');
   if (strict) {
-    for (const path of installers) {
-      const escaped = path.replaceAll("'", "''");
-      run('powershell', ['-NoProfile', '-Command', `$s=Get-AuthenticodeSignature -LiteralPath '${escaped}'; if ($s.Status -ne 'Valid') { Write-Error $s.Status; exit 2 }`]);
-    }
+    const escaped = appExe.replaceAll("'", "''");
+    run('powershell', ['-NoProfile', '-Command', `$s=Get-AuthenticodeSignature -LiteralPath '${escaped}'; if ($s.Status -ne 'Valid') { Write-Error $s.Status; exit 2 }`]);
   }
   if (requireSetup) {
-    const setup = setupFiles.find((path) => /\.exe$/i.test(path)
-      && /fileflow[ _.-]?setup/i.test(basename(path))
-      && !/cli/i.test(basename(path)));
-    if (!setup) throw new Error('Windows Setup EXE missing');
+    const setupExe = one(setupFiles, (path) => /\.exe$/i.test(path) && isSetup(path) && !isSetupCli(path), 'Windows Setup NSIS EXE');
+    one(setupFiles, (path) => /\.msi$/i.test(path) && isSetup(path), 'Windows Setup MSI');
+    one(setupFiles, (path) => /\.exe$/i.test(path) && isSetupCli(path), 'Windows Setup CLI');
     if (strict) {
-      const escaped = setup.replaceAll("'", "''");
+      const escaped = setupExe.replaceAll("'", "''");
       run('powershell', ['-NoProfile', '-Command', `$s=Get-AuthenticodeSignature -LiteralPath '${escaped}'; if ($s.Status -ne 'Valid') { Write-Error $s.Status; exit 2 }`]);
     }
   }
 } else {
-  const appImage = applicationFiles.find((path) => path.toLowerCase().endsWith('.appimage')
-    && !/fileflow[ _.-]?setup/i.test(basename(path)));
-  if (!appImage) throw new Error('Linux application AppImage missing');
+  const appImage = one(applicationFiles, (path) => path.toLowerCase().endsWith('.appimage') && !isSetup(path), 'Linux application AppImage');
+  const appDeb = one(applicationFiles, (path) => path.toLowerCase().endsWith('.deb') && !isSetup(path), 'Linux application DEB');
+  const appRpm = one(applicationFiles, (path) => path.toLowerCase().endsWith('.rpm') && !isSetup(path), 'Linux application RPM');
   run('file', [appImage]);
+  requireLinuxDesktopMetadata(appDeb, 'deb', 'FileFlow');
+  requireLinuxDesktopMetadata(appRpm, 'rpm', 'FileFlow');
   if (requireSetup) {
-    const setup = setupFiles.find((path) => path.toLowerCase().endsWith('.appimage')
-      && /fileflow[ _.-]?setup/i.test(basename(path)));
-    if (!setup) throw new Error('Linux Setup AppImage missing');
-    run('file', [setup]);
+    const setupAppImage = one(setupFiles, (path) => path.toLowerCase().endsWith('.appimage') && isSetup(path), 'Linux Setup AppImage');
+    const setupDeb = one(setupFiles, (path) => path.toLowerCase().endsWith('.deb') && isSetup(path), 'Linux Setup DEB');
+    const setupRpm = one(setupFiles, (path) => path.toLowerCase().endsWith('.rpm') && isSetup(path), 'Linux Setup RPM');
+    run('file', [setupAppImage]);
+    requireLinuxDesktopMetadata(setupDeb, 'deb', 'FileFlow Setup');
+    requireLinuxDesktopMetadata(setupRpm, 'rpm', 'FileFlow Setup');
   }
 }
 

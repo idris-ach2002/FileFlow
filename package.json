@@ -41,7 +41,7 @@
     "updater:setup": "node scripts/release/setup-updater.mjs",
     "release:preflight-macos": "bash scripts/release/preflight-macos.sh",
     "release:normalize": "node scripts/release/normalize-artifacts.mjs",
-    "release:self-test": "node scripts/release/test-release-tooling.mjs",
+    "release:self-test": "node scripts/release/verify-branding.mjs && node scripts/release/test-release-tooling.mjs",
     "runtime:doctor": "bash scripts/runtime/doctor.sh",
     "runtime:install": "bash scripts/runtime/install-dependencies.sh",
     "setup:dev": "node scripts/setup/run-tauri.mjs dev",
@@ -54,7 +54,8 @@
     "site:dev": "pnpm --filter @fileflow/download-portal dev",
     "site:test": "node website/scripts/test.mjs",
     "release:downloads-manifest": "node scripts/release/generate-download-manifest.mjs",
-    "release:verify-live-downloads": "node scripts/release/verify-live-downloads.mjs"
+    "release:verify-live-downloads": "node scripts/release/verify-live-downloads.mjs",
+    "release:branding": "node scripts/release/verify-branding.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.4"

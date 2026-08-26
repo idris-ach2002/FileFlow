@@ -45,15 +45,24 @@ export function macosBuildPipeline(forwarded, platform = process.platform) {
   const target = macosSetupBuild(forwarded, platform);
   if (!target) return null;
 
-  const bundleArgs = [...forwarded];
-  bundleArgs[0] = 'bundle';
+  const requestedBundles = forwardedValue(forwarded, '--bundles')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  const wantsDmg = requestedBundles.includes('dmg');
 
   const buildArgs = removeFlagWithValue(forwarded, '--bundles')
     .filter((value) => value !== '--no-sign' && value !== '--skip-stapling');
   if (!buildArgs.includes('--no-bundle')) buildArgs.push('--no-bundle');
 
+  // Tauri's Finder/AppleScript DMG helper has shown intermittent failures on
+  // hosted ARM64 runners. Bundle the signed .app with Tauri, then create the
+  // DMG deterministically with hdiutil in run-tauri.mjs.
+  const bundleArgs = removeFlagWithValue(forwarded, '--bundles');
+  bundleArgs[0] = 'bundle';
+  bundleArgs.push('--bundles', 'app');
   const cleanBundleArgs = bundleArgs.filter((value) => value !== '--no-bundle');
-  return { target, buildArgs, bundleArgs: cleanBundleArgs };
+  return { target, buildArgs, bundleArgs: cleanBundleArgs, wantsDmg };
 }
 
 export function signingIdentity({ project, forwarded }) {

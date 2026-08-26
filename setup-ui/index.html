@@ -24,6 +24,14 @@
         <div class="machine-pill" id="machine-pill">Analyse de votre appareil…</div>
       </header>
 
+      <aside class="setup-update hidden" id="setup-update" aria-live="polite">
+        <div>
+          <strong>FileFlow Setup <span id="setup-update-version"></span> est disponible.</strong>
+          <small>Utilisez le Setup le plus récent pour bénéficier des correctifs d’installation.</small>
+        </div>
+        <button class="quiet-action" id="setup-update-action" type="button">Télécharger le nouveau Setup</button>
+      </aside>
+
       <section class="hero" id="welcome-view">
         <div class="hero-copy">
           <p class="eyebrow">INSTALLATION GUIDÉE</p>
@@ -161,9 +169,9 @@
           <div class="terminal-toolbar">
             <div class="terminal-lights" aria-hidden="true"><i></i><i></i><i></i></div>
             <strong>Activité vérifiée</strong>
-            <button type="button" class="text-action" id="terminal-toggle" aria-expanded="true">Masquer</button>
+            <button type="button" class="text-action" id="terminal-toggle" aria-expanded="false">Afficher les détails techniques</button>
           </div>
-          <div class="terminal-output" id="terminal-output" role="log" aria-live="polite"></div>
+          <div class="terminal-output hidden" id="terminal-output" role="log" aria-live="polite"></div>
         </div>
         <div class="progress-footer">
           <span id="safe-cancel-copy">Vous pouvez annuler aux étapes sûres.</span>
@@ -179,6 +187,7 @@
         <div class="finish-stats" id="finish-stats"></div>
         <div class="hero-actions">
           <button class="primary-action" id="open-fileflow" type="button">Ouvrir FileFlow</button>
+          <button class="quiet-action" id="copy-diagnostic" type="button">Copier le diagnostic</button>
           <button class="quiet-action" id="close-setup" type="button">Fermer</button>
         </div>
       </section>

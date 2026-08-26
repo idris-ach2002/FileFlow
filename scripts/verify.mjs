@@ -89,15 +89,17 @@ console.log(`Node:  ${process.version}`);
 console.log(`pnpm:  ${outputPnpm(['--version'])}`);
 console.log(`Rust:  ${output(rustc, ['--version'])}`);
 
-runPnpm('1/9 Angular production build', ['run', 'frontend:build']);
-runPnpm('2/9 Angular tests', ['run', 'frontend:test']);
-run('3/9 Setup UI selection tests', process.execPath, ['scripts/setup/test-ui.cjs']);
-run('4/9 Setup local artifact resolver', process.execPath, ['scripts/setup/test-local-source.mjs']);
-run('5/9 Cloudflare download portal tests', process.execPath, ['website/scripts/test.mjs']);
-run('6/9 Rust formatting', cargo, ['fmt', '--all', '--', '--check']);
-run('7/9 Rust workspace check', cargo, ['check', '--workspace', '--locked']);
-run('8/9 Rust tests', cargo, ['test', '--workspace', '--locked']);
-run('9/9 Clippy (warnings are errors)', cargo, [
+runPnpm('1/11 Angular production build', ['run', 'frontend:build']);
+runPnpm('2/11 Angular tests', ['run', 'frontend:test']);
+run('3/11 Setup UI selection tests', process.execPath, ['scripts/setup/test-ui.cjs']);
+run('4/11 Setup local artifact resolver', process.execPath, ['scripts/setup/test-local-source.mjs']);
+run('5/11 Setup platform regression tests', process.execPath, ['scripts/setup/test-runtime-support.mjs']);
+run('6/11 FileFlow branding invariants', process.execPath, ['scripts/release/verify-branding.mjs']);
+run('7/11 Cloudflare download portal tests', process.execPath, ['website/scripts/test.mjs']);
+run('8/11 Rust formatting', cargo, ['fmt', '--all', '--', '--check']);
+run('9/11 Rust workspace check', cargo, ['check', '--workspace', '--locked']);
+run('10/11 Rust tests', cargo, ['test', '--workspace', '--locked']);
+run('11/11 Clippy (warnings are errors)', cargo, [
   'clippy', '--workspace', '--all-targets', '--all-features', '--locked', '--', '-D', 'warnings',
 ]);
 

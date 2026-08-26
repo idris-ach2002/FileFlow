@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { findLocalApplication } from './local-source.mjs';
 import { macosBuildPipeline, prepareMacosBundledCli } from './macos-bundled-cli.mjs';
+import { createMacosSetupDmg } from './create-macos-dmg.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const project = resolve(root, 'setup-tauri');
@@ -98,6 +99,13 @@ try {
       environment,
     });
     await runTauri(macosPipeline.bundleArgs);
+    if (macosPipeline.wantsDmg) {
+      createMacosSetupDmg({
+        target: macosPipeline.target,
+        targetDirectory: setupTargetDirectory,
+        project,
+      });
+    }
   } else {
     await runTauri(forwarded);
   }

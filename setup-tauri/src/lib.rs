@@ -1,7 +1,7 @@
 mod adapter;
 mod cli;
 
-use adapter::SystemSetupAdapter;
+use adapter::{SystemSetupAdapter, latest_setup_version};
 use fileflow_setup_core::{
     SetupEvent, SetupPlan, SetupRequest, TransactionEngine, build_plan, probe_system,
 };
@@ -42,6 +42,51 @@ impl SetupRuntime {
 #[tauri::command]
 fn setup_context(runtime: State<'_, SetupRuntime>) -> String {
     runtime.launch_mode.clone()
+}
+
+#[tauri::command]
+async fn setup_update_status() -> Result<serde_json::Value, String> {
+    let current = env!("CARGO_PKG_VERSION");
+    let latest = latest_setup_version().await?;
+    let tuple = |value: &str| {
+        let mut parts = value
+            .split(['-', '+'])
+            .next()
+            .unwrap_or_default()
+            .split('.')
+            .map(|part| part.parse::<u64>().unwrap_or(0));
+        (
+            parts.next().unwrap_or(0),
+            parts.next().unwrap_or(0),
+            parts.next().unwrap_or(0),
+        )
+    };
+    let update_available = tuple(&latest) > tuple(current);
+    Ok(serde_json::json!({
+        "current": current,
+        "latest": latest,
+        "updateAvailable": update_available,
+    }))
+}
+
+#[tauri::command]
+async fn setup_open_download_portal() -> Result<(), String> {
+    let url = "https://fileflow.idris-achabou.fit/#download";
+    let mut command = if cfg!(target_os = "windows") {
+        let mut command = tokio::process::Command::new("cmd.exe");
+        command.args(["/C", "start", "", url]);
+        command
+    } else if cfg!(target_os = "macos") {
+        let mut command = tokio::process::Command::new("open");
+        command.arg(url);
+        command
+    } else {
+        let mut command = tokio::process::Command::new("xdg-open");
+        command.arg(url);
+        command
+    };
+    command.spawn().map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -217,6 +262,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             setup_probe,
+            setup_update_status,
+            setup_open_download_portal,
             setup_context,
             setup_plan,
             setup_start,

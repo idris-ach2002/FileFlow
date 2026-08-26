@@ -32,8 +32,9 @@ assert.deepEqual(
       'build', '--target', 'x86_64-apple-darwin', '--config', 'tauri.release.conf.json', '--no-bundle',
     ],
     bundleArgs: [
-      'bundle', '--target', 'x86_64-apple-darwin', '--bundles', 'app,dmg', '--config', 'tauri.release.conf.json',
+      'bundle', '--target', 'x86_64-apple-darwin', '--config', 'tauri.release.conf.json', '--bundles', 'app',
     ],
+    wantsDmg: true,
   },
 );
 assert.deepEqual(
@@ -46,11 +47,28 @@ assert.deepEqual(
       'build', '--target', 'aarch64-apple-darwin', '--config', 'tauri.release.conf.json', '--no-bundle',
     ],
     bundleArgs: [
-      'bundle', '--target', 'aarch64-apple-darwin', '--bundles', 'app,dmg', '--config', 'tauri.release.conf.json', '--no-sign',
+      'bundle', '--target', 'aarch64-apple-darwin', '--config', 'tauri.release.conf.json', '--no-sign', '--bundles', 'app',
     ],
+    wantsDmg: true,
   },
 );
 assert.equal(macosBuildPipeline(['build', '--target', 'x86_64-apple-darwin'], 'linux'), null);
+
+assert.deepEqual(
+  macosBuildPipeline([
+    'build', '--target', 'aarch64-apple-darwin', '--bundles', 'app', '--config', 'tauri.release.conf.json',
+  ], 'darwin'),
+  {
+    target: 'aarch64-apple-darwin',
+    buildArgs: [
+      'build', '--target', 'aarch64-apple-darwin', '--config', 'tauri.release.conf.json', '--no-bundle',
+    ],
+    bundleArgs: [
+      'bundle', '--target', 'aarch64-apple-darwin', '--config', 'tauri.release.conf.json', '--bundles', 'app',
+    ],
+    wantsDmg: false,
+  },
+);
 
 const project = mkdtempSync(join(tmpdir(), 'fileflow-setup-signing-'));
 try {

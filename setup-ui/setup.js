@@ -22,7 +22,9 @@
     events: [],
     operationId: null,
     unlisten: null,
-    demoTimer: null
+    demoTimer: null,
+    updateStatus: null,
+    finalSnapshot: null
   };
 
   const byId = (id) => document.getElementById(id);
@@ -48,7 +50,10 @@
       byId('remove-preexisting-engines').checked = false;
       state.mode = state.snapshot.application.installed ? 'repair' : 'install';
       renderProbe();
-      if (invoke) await invoke('setup_smoke_ready');
+      if (invoke) {
+        await invoke('setup_smoke_ready');
+        void checkSetupUpdate();
+      }
       if (launchMode === 'uninstall' && state.snapshot.application.installed) {
         openCustomize('uninstall');
       } else if (launchMode === 'doctor') {
@@ -62,6 +67,20 @@
     } catch (error) {
       showToast(`Diagnostic impossible : ${String(error)}`);
       byId('machine-pill').textContent = 'Diagnostic indisponible';
+    }
+  }
+
+
+  async function checkSetupUpdate() {
+    if (!invoke) return;
+    try {
+      const status = await invoke('setup_update_status');
+      state.updateStatus = status;
+      if (!status?.updateAvailable) return;
+      byId('setup-update-version').textContent = status.latest || '';
+      byId('setup-update').classList.remove('hidden');
+    } catch (_) {
+      // Une vérification de mise à jour ne doit jamais bloquer l'installation.
     }
   }
 
@@ -390,6 +409,40 @@
     output.scrollTop = output.scrollHeight;
   }
 
+  function renderFinishStats(snapshot, done) {
+    const stats = byId('finish-stats');
+    stats.replaceChildren();
+    const items = [];
+    if (snapshot?.application?.installed) {
+      items.push(`FileFlow ${snapshot.application.version || 'installé'}`);
+    }
+    if (snapshot?.engines) {
+      const ready = snapshot.engines.filter((engine) => engine.installed).length;
+      items.push(`${ready}/${snapshot.engines.length} moteurs locaux`);
+    }
+    if (snapshot?.integration) {
+      items.push(snapshot.integration.launcherInstalled && snapshot.integration.iconInstalled
+        ? 'Raccourci + icône vérifiés'
+        : 'Intégration système à vérifier');
+    }
+    items.push(`${done} contrôles validés`, 'Journal disponible');
+    for (const copy of items) {
+      const pill = document.createElement('span');
+      pill.textContent = copy;
+      stats.append(pill);
+    }
+  }
+
+  async function refreshFinalSnapshot(done) {
+    if (!invoke) return;
+    try {
+      state.finalSnapshot = await invoke('setup_probe');
+      renderFinishStats(state.finalSnapshot, done);
+    } catch (_) {
+      // Le reçu transactionnel reste disponible si ce rafraîchissement UI échoue.
+    }
+  }
+
   function finish(success, message) {
     if (state.unlisten) { state.unlisten(); state.unlisten = null; }
     if (state.demoTimer) { clearInterval(state.demoTimer); state.demoTimer = null; }
@@ -409,10 +462,50 @@
       ? 'Les éléments sélectionnés ont été retirés. Vos fichiers produits sont restés intacts.'
       : enginesOnly
         ? 'Les moteurs sélectionnés ont été vérifiés sans télécharger ni modifier l’application.'
-        : 'L’application et ses moteurs ont passé les contrôles après installation.');
+        : 'L’application, son intégration système et ses moteurs ont passé les contrôles après installation.');
     byId('open-fileflow').classList.toggle('hidden', simulation || uninstall || enginesOnly || !success);
     const done = [...state.stepStates.values()].filter((value) => value === 'done').length;
-    byId('finish-stats').innerHTML = `<span>${done} contrôles validés</span><span>Journal enregistré</span><span>Résultats protégés</span>`;
+    renderFinishStats(state.snapshot, done);
+    if (success && !simulation && !uninstall) void refreshFinalSnapshot(done);
+  }
+
+  function diagnosticText() {
+    const snapshot = state.finalSnapshot || state.snapshot;
+    const engines = snapshot?.engines || [];
+    const ready = engines.filter((engine) => engine.installed).length;
+    const integration = snapshot?.integration;
+    const failed = state.events.filter((event) => event.level === 'error' || event.eventType === 'step-failed');
+    return [
+      `FileFlow Setup ${state.updateStatus?.current || '1.0.8'}`,
+      `Plateforme: ${snapshot ? platformLabel(snapshot.platform, snapshot.architecture) : 'inconnue'}`,
+      `Application: ${snapshot?.application?.installed ? `OK ${snapshot.application.version || ''}`.trim() : 'absente'}`,
+      `Moteurs: ${ready}/${engines.length}`,
+      `Raccourci: ${integration?.launcherInstalled ? 'OK' : 'absent/non vérifié'}`,
+      `Icône: ${integration?.iconInstalled ? 'OK' : 'absente/non vérifiée'}`,
+      `Maintenance: ${integration?.maintenanceInstalled ? 'OK' : 'non vérifiée'}`,
+      `Étapes: ${state.plan?.steps?.length || 0}`,
+      `Erreurs: ${failed.length}`,
+      ...failed.slice(-8).map((event) => `- ${event.message || event.eventType}`),
+    ].join('\n');
+  }
+
+  async function copyDiagnostic() {
+    const text = diagnosticText();
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('Diagnostic copié.');
+    } catch (_) {
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.append(area);
+      area.select();
+      document.execCommand('copy');
+      area.remove();
+      showToast('Diagnostic copié.');
+    }
   }
 
   function handleFatal(message) {
@@ -455,6 +548,7 @@
       platform: navigator.platform.toLowerCase().includes('mac') ? 'macos' : 'linux',
       architecture: 'aarch64',
       application: { installed: false, version: null, path: null, running: false },
+      integration: { launcherInstalled: false, iconInstalled: false, maintenanceInstalled: false },
       engines: Object.entries(engineLabels).map(([id, label], index) => ({ id, label, installed: index < 5, installedByFileflow: false })),
       warnings: []
     };
@@ -499,7 +593,7 @@
   byId('cancel-action').addEventListener('click', cancel);
   byId('terminal-toggle').addEventListener('click', () => {
     const output = byId('terminal-output'); const hidden = output.classList.toggle('hidden');
-    byId('terminal-toggle').textContent = hidden ? 'Afficher' : 'Masquer';
+    byId('terminal-toggle').textContent = hidden ? 'Afficher les détails techniques' : 'Masquer les détails techniques';
     byId('terminal-toggle').setAttribute('aria-expanded', String(!hidden));
   });
   byId('remove-preexisting-engines').addEventListener('change', () => {
@@ -523,6 +617,13 @@
     }
     renderEnginePicker();
   });
+  byId('setup-update-action').addEventListener('click', async () => {
+    try {
+      if (invoke) await invoke('setup_open_download_portal');
+      else showToast('Le portail de téléchargement serait ouvert ici.');
+    } catch (error) { showToast(String(error)); }
+  });
+  byId('copy-diagnostic').addEventListener('click', copyDiagnostic);
   byId('open-fileflow').addEventListener('click', async () => {
     try { if (invoke) await invoke('setup_open_fileflow'); else showToast('FileFlow serait ouvert ici.'); }
     catch (error) { showToast(String(error)); }

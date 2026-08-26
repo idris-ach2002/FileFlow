@@ -155,12 +155,27 @@ pub struct ApplicationState {
     pub running: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrationState {
+    pub launcher_installed: bool,
+    pub icon_installed: bool,
+    pub maintenance_installed: bool,
+}
+
+impl IntegrationState {
+    pub const fn healthy(&self) -> bool {
+        self.launcher_installed && self.icon_installed
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemSnapshot {
     pub platform: Platform,
     pub architecture: Architecture,
     pub application: ApplicationState,
+    pub integration: IntegrationState,
     pub engines: Vec<EngineState>,
     pub receipt_path: PathBuf,
     pub receipt: Option<InstallReceipt>,

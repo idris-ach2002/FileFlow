@@ -1,6 +1,6 @@
 use crate::{
-    ApplicationState, Architecture, EngineState, FILEFLOW_ENGINES, InstallReceipt, Platform,
-    SystemSnapshot,
+    ApplicationState, Architecture, EngineState, FILEFLOW_ENGINES, InstallReceipt,
+    IntegrationState, Platform, SystemSnapshot,
 };
 use std::{env, fs, path::PathBuf, process::Command};
 use thiserror::Error;
@@ -23,6 +23,11 @@ pub fn probe_system() -> Result<SystemSnapshot, ProbeError> {
     let receipt_path = receipt_path(platform);
     let receipt = read_receipt(&receipt_path)?;
     let application = probe_application(platform, receipt.as_ref());
+    let integration = probe_integration(platform, receipt.as_ref(), application.path.as_deref());
+    let mut warnings = Vec::new();
+    if application.installed && !integration.healthy() {
+        warnings.push("L’intégration système FileFlow est incomplète ; Réparer peut la recréer sans réinstaller les moteurs.".into());
+    }
     let engines = FILEFLOW_ENGINES
         .iter()
         .map(|definition| {
@@ -50,10 +55,11 @@ pub fn probe_system() -> Result<SystemSnapshot, ProbeError> {
         platform,
         architecture,
         application,
+        integration,
         engines,
         receipt_path,
         receipt,
-        warnings: Vec::new(),
+        warnings,
     })
 }
 
@@ -118,6 +124,9 @@ pub fn application_candidates(platform: Platform) -> Vec<PathBuf> {
                 .join("opt")
                 .join("fileflow")
                 .join("FileFlow.AppImage"),
+            home_dir().join("Applications").join("FileFlow.AppImage"),
+            PathBuf::from("/opt/FileFlow/FileFlow.AppImage"),
+            PathBuf::from("/opt/fileflow/FileFlow.AppImage"),
         ],
         Platform::Windows => {
             let local = env::var_os("LOCALAPPDATA")
@@ -137,6 +146,69 @@ pub fn application_candidates(platform: Platform) -> Vec<PathBuf> {
                 program_files.join("FileFlow").join("FileFlow.exe"),
                 program_files.join("FileFlow").join("fileflow-desktop.exe"),
             ]
+        }
+    }
+}
+
+fn probe_integration(
+    platform: Platform,
+    receipt: Option<&InstallReceipt>,
+    application: Option<&std::path::Path>,
+) -> IntegrationState {
+    let maintenance_installed = receipt
+        .into_iter()
+        .flat_map(|value| value.components.iter())
+        .find(|component| component.id == "fileflow-setup")
+        .and_then(|component| component.path.as_ref())
+        .is_some_and(|path| path.exists());
+
+    match platform {
+        Platform::Macos => {
+            let installed = application.is_some_and(std::path::Path::exists);
+            IntegrationState {
+                launcher_installed: installed,
+                icon_installed: installed,
+                maintenance_installed,
+            }
+        }
+        Platform::Linux => {
+            let home = home_dir();
+            let share = home.join(".local").join("share");
+            let launcher = share.join("applications").join("fileflow.desktop");
+            let wrapper = home.join(".local").join("bin").join("fileflow");
+            let icon = share
+                .join("icons")
+                .join("hicolor")
+                .join("512x512")
+                .join("apps")
+                .join("fileflow.png");
+            IntegrationState {
+                launcher_installed: launcher.is_file() && wrapper.is_file(),
+                icon_installed: icon.is_file(),
+                maintenance_installed,
+            }
+        }
+        Platform::Windows => {
+            let roaming = env::var_os("APPDATA")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home_dir().join("AppData").join("Roaming"));
+            let common = env::var_os("ProgramData")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
+            let candidates = [
+                roaming.join(r"Microsoft\Windows\Start Menu\Programs\FileFlow.lnk"),
+                roaming.join(r"Microsoft\Windows\Start Menu\Programs\FileFlow\FileFlow.lnk"),
+                common.join(r"Microsoft\Windows\Start Menu\Programs\FileFlow.lnk"),
+                common.join(r"Microsoft\Windows\Start Menu\Programs\FileFlow\FileFlow.lnk"),
+            ];
+            let launcher_installed = candidates.iter().any(|path| path.is_file());
+            IntegrationState {
+                launcher_installed,
+                // Windows shortcuts use the executable icon; if the executable is
+                // present the icon resource can be resolved even before a shortcut exists.
+                icon_installed: application.is_some_and(std::path::Path::is_file),
+                maintenance_installed,
+            }
         }
     }
 }

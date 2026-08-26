@@ -53,7 +53,7 @@ if (!script.includes("scroll-snap") && !readFileSync(resolve(root, 'public/style
   throw new Error('product and installation demos must move horizontally');
 }
 if (!script.includes('TAR.ZST') || !script.includes('Zstandard')) throw new Error('archive feature carousel must surface Zstandard/TAR.ZST');
-for (const marker of ['setupVariantsFor', 'linuxPackagePreference', 'Ubuntu / Debian', 'Fedora / RHEL', 'linuxInstallCommand', 'manifest.preview ? definitions']) {
+for (const marker of ['setupVariantsFor', 'linuxPackagePreference', 'Ubuntu / Debian', 'Fedora / RHEL', 'linuxInstallCommand', 'Indisponible pour cette release', 'SmartScreen']) {
   assert.ok(script.includes(marker), `portal must expose Linux package guidance: ${marker}`);
 }
 assert.doesNotMatch(html, /iLovePDF|Smallpdf|CloudConvert|TinyPNG|FreeConvert/i, 'portal must not compare FileFlow with named competitor sites');

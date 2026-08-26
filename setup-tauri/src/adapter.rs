@@ -29,6 +29,41 @@ use tokio::{
 const DOWNLOAD_ENDPOINT: &str =
     "https://github.com/idris-ach2002/FileFlow/releases/latest/download/downloads.json";
 
+pub async fn latest_setup_version() -> Result<String, String> {
+    let endpoint =
+        std::env::var("FILEFLOW_DOWNLOAD_ENDPOINT").unwrap_or_else(|_| DOWNLOAD_ENDPOINT.into());
+    if !endpoint.starts_with("https://") {
+        return Err("endpoint de mise à jour Setup non HTTPS".into());
+    }
+    let mut command = Command::new(curl_program());
+    command.args([
+        "--fail",
+        "--location",
+        "--silent",
+        "--show-error",
+        "--connect-timeout",
+        "5",
+        "--max-time",
+        "20",
+        "--retry",
+        "2",
+        "--retry-delay",
+        "1",
+        "--retry-all-errors",
+        &endpoint,
+    ]);
+    hide_process(&mut command);
+    isolate_process(&mut command);
+    let output = command.output().await.map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+    }
+    let manifest: DownloadManifest = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("downloads.json invalide: {error}"))?;
+    manifest.validate().map_err(|error| error.to_string())?;
+    Ok(manifest.version)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct InstalledPackage {
     component_id: String,
@@ -133,6 +168,8 @@ impl SystemSetupAdapter {
                 size: metadata.len(),
                 signature: None,
                 package_type: package_type.into(),
+                role: Some("application".into()),
+                target: None,
             };
 
             let manifest = DownloadManifest {
@@ -621,6 +658,7 @@ impl SystemSetupAdapter {
             .ok_or_else(|| {
                 "l’installateur Windows a terminé sans application détectable".to_string()
             })?;
+        install_windows_integration(&installed).await?;
         let mut state = self.state.lock().map_err(|error| error.to_string())?;
         state.installed_application = Some(installed.clone());
         state.application_backup = backup.exists().then_some(backup);
@@ -636,6 +674,69 @@ impl SystemSetupAdapter {
             None,
             None,
             json!({ "path": installed }),
+        );
+        Ok(())
+    }
+
+    async fn ensure_system_integration(
+        &self,
+        plan: &SetupPlan,
+        events: &dyn EventSink,
+    ) -> Result<(), String> {
+        let observed = probe_system().map_err(|error| error.to_string())?;
+        if observed.integration.healthy() {
+            self.emit(
+                events,
+                plan,
+                "integration-ready",
+                EventLevel::Success,
+                Some("integration"),
+                "Raccourci et icône FileFlow déjà valides",
+                None,
+                None,
+                None,
+                json!({ "platform": plan.platform, "changed": false }),
+            );
+            return Ok(());
+        }
+
+        let application = self
+            .state
+            .lock()
+            .map_err(|error| error.to_string())?
+            .installed_application
+            .clone()
+            .or_else(|| self.initial.application.path.clone())
+            .or_else(|| {
+                application_candidates(plan.platform)
+                    .into_iter()
+                    .find(|path| path.exists())
+            })
+            .ok_or_else(|| {
+                "FileFlow doit être installé avant de réparer son intégration système".to_string()
+            })?;
+
+        match plan.platform {
+            Platform::Linux => install_linux_integration(&application, &self.resource_dir).await?,
+            Platform::Windows => install_windows_integration(&application).await?,
+            Platform::Macos => {
+                if !application.exists() {
+                    return Err("FileFlow.app est absent de macOS".into());
+                }
+            }
+        }
+
+        self.emit(
+            events,
+            plan,
+            "integration-ready",
+            EventLevel::Success,
+            Some("integration"),
+            "Raccourci et icône FileFlow vérifiés",
+            None,
+            None,
+            None,
+            json!({ "platform": plan.platform, "changed": true }),
         );
         Ok(())
     }
@@ -819,6 +920,28 @@ impl SystemSetupAdapter {
                 if !snapshot.application.installed {
                     return Err("FileFlow est absent après l’installation".into());
                 }
+                if !snapshot.integration.healthy() {
+                    return Err(format!(
+                        "intégration système incomplète après installation (raccourci={}, icône={})",
+                        snapshot.integration.launcher_installed,
+                        snapshot.integration.icon_installed
+                    ));
+                }
+                self.emit(
+                    events,
+                    plan,
+                    "integration-verified",
+                    EventLevel::Success,
+                    Some("postcheck"),
+                    "FileFlow est visible dans le lanceur système avec son icône",
+                    None,
+                    None,
+                    None,
+                    json!({
+                        "launcher": snapshot.integration.launcher_installed,
+                        "icon": snapshot.integration.icon_installed,
+                    }),
+                );
                 self.smoke_installed_application(plan, events, cancellation)
                     .await?;
                 if let Some(script) = find_resource(&self.resource_dir, doctor_script_name())
@@ -873,7 +996,10 @@ impl SystemSetupAdapter {
             .manifest
             .as_ref()
             .map(|manifest| manifest.version.clone())
-            .ok_or_else(|| "version attendue absente du manifeste vérifié".to_string())?;
+            .or_else(|| self.initial.application.version.clone())
+            .ok_or_else(|| {
+                "version attendue absente du manifeste et de l’installation existante".to_string()
+            })?;
         let executable = application_executable(plan.platform, &application)?;
         let health_dir =
             std::env::temp_dir().join(format!("fileflow-setup-health-{}", plan.operation_id));
@@ -976,7 +1102,7 @@ impl SystemSetupAdapter {
                     .and_then(|receipt| receipt.components.iter().find(|item| item.id == id))
             };
             let mut components = Vec::new();
-            if let Some(path) = application_path {
+            if let Some(path) = application_path.clone() {
                 components.push(ReceiptComponent {
                     id: "fileflow".into(),
                     kind: ComponentKind::Application,
@@ -1009,6 +1135,27 @@ impl SystemSetupAdapter {
                     packages: Vec::new(),
                     checksum: None,
                     rollback_hint: None,
+                });
+            }
+            if observed.integration.healthy() {
+                components.push(ReceiptComponent {
+                    id: "fileflow-system-integration".into(),
+                    kind: ComponentKind::Integration,
+                    version: Some(version.clone()),
+                    path: match plan.platform {
+                        Platform::Linux => {
+                            Some(home_dir().join(".local/share/applications/fileflow.desktop"))
+                        }
+                        Platform::Windows => windows_shortcut_candidates()
+                            .into_iter()
+                            .find(|path| path.exists()),
+                        Platform::Macos => application_path.clone(),
+                    },
+                    installed_by_fileflow: true,
+                    package_manager: None,
+                    packages: Vec::new(),
+                    checksum: None,
+                    rollback_hint: Some("rebuild-system-integration".into()),
                 });
             }
             for engine in &observed.engines {
@@ -1127,8 +1274,18 @@ impl SystemSetupAdapter {
             hide_process(&mut command);
             let _ = command.status().await;
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        Ok(())
+
+        for _ in 0..10 {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let running = probe_system()
+                .map_err(|error| error.to_string())?
+                .application
+                .running;
+            if !running {
+                return Ok(());
+            }
+        }
+        Err("FileFlow n’a pas pu être fermé complètement".into())
     }
 
     async fn quarantine_application(&self) -> Result<(), String> {
@@ -1483,11 +1640,15 @@ impl SystemSetupAdapter {
             let local_share = home.join(".local").join("share");
             let applications = local_share.join("applications");
             let hicolor = local_share.join("icons").join("hicolor");
-            for path in [
+            let mut paths = vec![
                 home.join(".local/bin/fileflow"),
                 applications.join("fileflow.desktop"),
-                hicolor.join("512x512/apps/fileflow.png"),
-            ] {
+            ];
+            paths.extend(
+                [32, 64, 128, 256, 512]
+                    .map(|size| hicolor.join(format!("{size}x{size}/apps/fileflow.png"))),
+            );
+            for path in paths {
                 if let Err(error) = remove_path_if_exists(&path).await {
                     leftovers.push(format!("{}: {error}", path.display()));
                 }
@@ -1501,6 +1662,16 @@ impl SystemSetupAdapter {
                     &[OsStr::new("-f"), OsStr::new("-t"), hicolor.as_os_str()],
                 )
                 .await;
+            }
+        } else if self.initial.platform == Platform::Windows {
+            for path in windows_shortcut_candidates() {
+                // Never fail the uninstall only because another installer has already
+                // removed a Start Menu entry.
+                if path.exists()
+                    && let Err(error) = remove_path_if_exists(&path).await
+                {
+                    leftovers.push(format!("{}: {error}", path.display()));
+                }
             }
         }
         if packages_preserved.is_empty()
@@ -1695,11 +1866,31 @@ impl SetupActionAdapter for SystemSetupAdapter {
         match step.id.as_str() {
             "preflight" => {
                 if self.initial.application.running && plan.request.mode != SetupMode::Uninstall {
-                    return Err("FileFlow doit être fermé avant cette opération".into());
+                    self.emit(
+                        events,
+                        plan,
+                        "application-closing",
+                        EventLevel::Info,
+                        Some("preflight"),
+                        "FileFlow est ouvert ; fermeture propre avant de continuer",
+                        None,
+                        None,
+                        None,
+                        json!({}),
+                    );
+                    self.stop_application().await?;
+                    if probe_system()
+                        .map_err(|error| error.to_string())?
+                        .application
+                        .running
+                    {
+                        return Err("FileFlow est toujours ouvert après la tentative de fermeture automatique".into());
+                    }
                 }
             }
             "release" => self.fetch_release(plan, events, cancellation).await?,
             "application" => self.install_application(plan, events).await?,
+            "integration" => self.ensure_system_integration(plan, events).await?,
             "engines" => {
                 self.install_engines(plan, step, events, cancellation)
                     .await?
@@ -1982,23 +2173,62 @@ async fn schedule_maintenance_removal(path: &Path) -> Result<(), String> {
     }
 }
 
+fn windows_shortcut_candidates() -> Vec<PathBuf> {
+    let roaming = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().join("AppData").join("Roaming"));
+    let common = std::env::var_os("ProgramData")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
+    vec![
+        roaming.join(r"Microsoft\Windows\Start Menu\Programs\FileFlow.lnk"),
+        roaming.join(r"Microsoft\Windows\Start Menu\Programs\FileFlow\FileFlow.lnk"),
+        common.join(r"Microsoft\Windows\Start Menu\Programs\FileFlow.lnk"),
+        common.join(r"Microsoft\Windows\Start Menu\Programs\FileFlow\FileFlow.lnk"),
+    ]
+}
+
+async fn install_windows_integration(application: &Path) -> Result<(), String> {
+    let roaming = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().join("AppData").join("Roaming"));
+    let programs = roaming.join(r"Microsoft\Windows\Start Menu\Programs");
+    fs::create_dir_all(&programs)
+        .await
+        .map_err(|error| error.to_string())?;
+    let shortcut = programs.join("FileFlow.lnk");
+    let working_directory = application.parent().unwrap_or_else(|| Path::new(r"C:\"));
+    let script = r#"param([string]$Target,[string]$Shortcut,[string]$WorkingDirectory); $shell=New-Object -ComObject WScript.Shell; $link=$shell.CreateShortcut($Shortcut); $link.TargetPath=$Target; $link.WorkingDirectory=$WorkingDirectory; $link.IconLocation="$Target,0"; $link.Description='FileFlow — conversion et organisation locale de fichiers'; $link.Save()"#;
+    run_checked(
+        "powershell.exe",
+        &[
+            OsStr::new("-NoProfile"),
+            OsStr::new("-NonInteractive"),
+            OsStr::new("-ExecutionPolicy"),
+            OsStr::new("Bypass"),
+            OsStr::new("-Command"),
+            OsStr::new(script),
+            application.as_os_str(),
+            shortcut.as_os_str(),
+            working_directory.as_os_str(),
+        ],
+    )
+    .await?;
+    if !shortcut.is_file() {
+        return Err("le raccourci FileFlow du menu Démarrer n’a pas été créé".into());
+    }
+    Ok(())
+}
+
 async fn install_linux_integration(app: &Path, resource_dir: &Path) -> Result<(), String> {
     let home = home_dir();
     let local_share = home.join(".local").join("share");
     let bin = home.join(".local").join("bin");
     let applications = local_share.join("applications");
-    let icons = local_share
-        .join("icons")
-        .join("hicolor")
-        .join("512x512")
-        .join("apps");
     fs::create_dir_all(&bin)
         .await
         .map_err(|error| error.to_string())?;
     fs::create_dir_all(&applications)
-        .await
-        .map_err(|error| error.to_string())?;
-    fs::create_dir_all(&icons)
         .await
         .map_err(|error| error.to_string())?;
 
@@ -2006,7 +2236,7 @@ async fn install_linux_integration(app: &Path, resource_dir: &Path) -> Result<()
     fs::write(
         &wrapper,
         format!(
-            "#!/usr/bin/env bash\nexport APPIMAGE_EXTRACT_AND_RUN=1\nexec \"{}\" \"$@\"\n",
+            "#!/usr/bin/env bash\nset -e\nexport APPIMAGE_EXTRACT_AND_RUN=1\nexec \"{}\" \"$@\"\n",
             app.display()
         ),
     )
@@ -2014,19 +2244,36 @@ async fn install_linux_integration(app: &Path, resource_dir: &Path) -> Result<()
     .map_err(|error| error.to_string())?;
     run_checked("chmod", &[OsStr::new("+x"), wrapper.as_os_str()]).await?;
 
-    let icon_source = find_resource(resource_dir, "fileflow-desktop-icon.png")
-        .or_else(|| find_resource(resource_dir, "icon.png"))
-        .ok_or_else(|| "icône FileFlow absente des ressources du Setup".to_string())?;
-    let icon_destination = icons.join("fileflow.png");
-    fs::copy(&icon_source, &icon_destination)
-        .await
-        .map_err(|error| format!("copie de l’icône FileFlow impossible: {error}"))?;
+    let icon_sources = [
+        (32, "32x32.png"),
+        (64, "64x64.png"),
+        (128, "128x128.png"),
+        (256, "128x128@2x.png"),
+        (512, "icon.png"),
+    ];
+    for (size, resource_name) in icon_sources {
+        let icon_source = find_resource(resource_dir, resource_name)
+            .or_else(|| find_resource(resource_dir, "icon.png"))
+            .ok_or_else(|| "icône FileFlow absente des ressources du Setup".to_string())?;
+        let icons = local_share
+            .join("icons")
+            .join("hicolor")
+            .join(format!("{size}x{size}"))
+            .join("apps");
+        fs::create_dir_all(&icons)
+            .await
+            .map_err(|error| error.to_string())?;
+        fs::copy(&icon_source, icons.join("fileflow.png"))
+            .await
+            .map_err(|error| format!("copie de l’icône FileFlow impossible: {error}"))?;
+    }
 
     let desktop_path = applications.join("fileflow.desktop");
     fs::write(
         &desktop_path,
         format!(
-            "[Desktop Entry]\nVersion=1.0\nType=Application\nName=FileFlow\nComment=Conversion, compression et organisation locale de fichiers\nExec=\"{}\" %U\nIcon=fileflow\nTerminal=false\nCategories=Utility;Office;FileTools;\nStartupNotify=true\nStartupWMClass=FileFlow\nKeywords=PDF;Image;Video;Archive;OCR;Conversion;\n",
+            "[Desktop Entry]\nVersion=1.0\nType=Application\nName=FileFlow\nGenericName=File converter\nComment=Conversion, compression et organisation locale de fichiers\nExec=\"{}\" %U\nTryExec={}\nIcon=fileflow\nTerminal=false\nCategories=Utility;Office;FileTools;\nStartupNotify=true\nStartupWMClass=FileFlow\nKeywords=PDF;Image;Video;Archive;OCR;Conversion;\nMimeType=application/pdf;image/png;image/jpeg;image/webp;video/mp4;audio/mpeg;application/zip;\n",
+            wrapper.display(),
             wrapper.display()
         ),
     )
@@ -2034,8 +2281,8 @@ async fn install_linux_integration(app: &Path, resource_dir: &Path) -> Result<()
     .map_err(|error| error.to_string())?;
     run_checked("chmod", &[OsStr::new("+x"), desktop_path.as_os_str()]).await?;
 
-    // Les caches ne sont pas requis par la spécification freedesktop, mais les
-    // rafraîchir lorsqu'ils existent rend l'icône et le lanceur visibles tout de suite.
+    // Les caches sont facultatifs dans freedesktop, mais les rafraîchir rend le
+    // lanceur et le logo visibles immédiatement sur GNOME/KDE lorsqu'ils existent.
     if command_exists("update-desktop-database") {
         let _ = run_checked("update-desktop-database", &[applications.as_os_str()]).await;
     }
@@ -2046,6 +2293,15 @@ async fn install_linux_integration(app: &Path, resource_dir: &Path) -> Result<()
             &[OsStr::new("-f"), OsStr::new("-t"), hicolor.as_os_str()],
         )
         .await;
+    }
+
+    if !desktop_path.is_file()
+        || !wrapper.is_file()
+        || !local_share
+            .join("icons/hicolor/512x512/apps/fileflow.png")
+            .is_file()
+    {
+        return Err("le lanceur ou l’icône FileFlow n’a pas été installé correctement".into());
     }
     Ok(())
 }
@@ -2664,7 +2920,7 @@ fn sanitize_appimage_environment(command: &mut Command) {
     ] {
         command.env_remove(variable);
     }
-    for variable in ["APPDIR", "APPIMAGE", "ARGV0"] {
+    for variable in ["APPDIR", "APPIMAGE", "ARGV0", "OWD"] {
         command.env_remove(variable);
     }
 }
