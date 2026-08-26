@@ -123,7 +123,9 @@ jobs:
           node scripts/release/validate-distribution.mjs @validationArgs
           node scripts/release/smoke-packaged-app.mjs --target x86_64-pc-windows-msvc
           node scripts/release/smoke-packaged-setup.mjs --target x86_64-pc-windows-msvc
+          node scripts/release/e2e-native.mjs --target x86_64-pc-windows-msvc --version '${{ inputs.release_version }}'
           node scripts/release/collect-artifacts.mjs --target x86_64-pc-windows-msvc --include-setup
+          Copy-Item 'dist/e2e-attestations/x86_64-pc-windows-msvc.json' -Destination 'dist/release/x86_64-pc-windows-msvc/e2e-attestation.json' -Force
       - uses: actions/upload-artifact@v7
         with:
           name: native-x86_64-pc-windows-msvc

@@ -97,7 +97,9 @@ jobs:
           node scripts/release/validate-distribution.mjs --target '${{ matrix.target }}' --require-setup
           xvfb-run -a node scripts/release/smoke-packaged-app.mjs --target '${{ matrix.target }}'
           xvfb-run -a node scripts/release/smoke-packaged-setup.mjs --target '${{ matrix.target }}'
+          xvfb-run -a node scripts/release/e2e-native.mjs --target '${{ matrix.target }}' --version '${{ inputs.release_version }}'
           node scripts/release/collect-artifacts.mjs --target '${{ matrix.target }}' --include-setup
+          cp 'dist/e2e-attestations/${{ matrix.target }}.json' 'dist/release/${{ matrix.target }}/e2e-attestation.json'
       - uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.target }}

@@ -13,6 +13,11 @@ on:
         description: Version exacte X.Y.Z à publier
         required: true
         type: string
+      validation_only:
+        description: Exécuter la gate E2E native complète sans publier de release
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -44,7 +49,7 @@ jobs:
     secrets: inherit
 
   publish:
-    name: Verify five targets and publish
+    name: Verify five native E2E targets and publish
     needs: [linux, macos, windows]
     runs-on: ubuntu-22.04
     permissions:
@@ -84,11 +89,14 @@ jobs:
           git fetch origin main:refs/remotes/origin/main
           git merge-base --is-ancestor HEAD origin/main
           node scripts/release/normalize-artifacts.mjs --root dist/release
+          node scripts/release/verify-e2e-attestations.mjs --root dist/release --version "$VERSION" --sha "$FILEFLOW_RELEASE_REF" --output E2E-ATTESTATIONS.json
+          find dist/release -type f -name e2e-attestation.json -delete
           node scripts/release/generate-updater-manifest.mjs --root dist/release --version "$VERSION" --repository "$GITHUB_REPOSITORY" --output latest.json
           node scripts/release/generate-download-manifest.mjs --root dist/release --version "$VERSION" --repository "$GITHUB_REPOSITORY" --output downloads.json
           node scripts/release/generate-checksums.mjs --root dist/release --output SHA256SUMS
           node scripts/release/verify-release.mjs --root dist/release --latest latest.json --checksums SHA256SUMS
-      - name: Publish only after every platform is green
+      - name: Publish only after every native E2E platform is green
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.validation_only != true }}
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -109,8 +117,9 @@ jobs:
           fi
           gh release view "$TAG" >/dev/null 2>&1 && { echo "Release already exists" >&2; exit 2; } || true
           mapfile -d '' ASSETS < <(find dist/release -type f -print0 | sort -z)
-          gh release create "$TAG" "${ASSETS[@]}" latest.json downloads.json SHA256SUMS --verify-tag --title "FileFlow ${VERSION}" --notes "Release atomique signée de FileFlow, FileFlow Setup et son CLI pour macOS, Windows et Linux. Provenance: ${SOURCE_SHA}."
+          gh release create "$TAG" "${ASSETS[@]}" latest.json downloads.json SHA256SUMS E2E-ATTESTATIONS.json --verify-tag --title "FileFlow ${VERSION}" --notes "Release atomique signée de FileFlow, FileFlow Setup et son CLI pour macOS, Windows et Linux. Provenance: ${SOURCE_SHA}."
       - name: Verify public updater endpoint and artifacts
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.validation_only != true }}
         shell: bash
         run: |
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
@@ -124,3 +133,6 @@ jobs:
             --require-platforms darwin-aarch64,darwin-x86_64,windows-x86_64,linux-x86_64,linux-aarch64 \
             --attempts 18 \
             --delay-ms 5000
+      - name: Validation-only native E2E gate result
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.validation_only == true }}
+        run: echo "Native E2E gate validated for all five targets; publication intentionally skipped."

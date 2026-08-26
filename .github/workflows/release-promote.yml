@@ -55,7 +55,7 @@ jobs:
           node scripts/release/assert-version-newer.mjs "$VERSION" "${LATEST#v}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "publish=true" >> "$GITHUB_OUTPUT"
-      - name: Dispatch the atomic five-platform release
+      - name: Dispatch the atomic five-platform E2E candidate
         if: steps.release.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -66,4 +66,4 @@ jobs:
             --ref main \
             -f release_sha="$VALIDATED_SHA" \
             -f version="$VERSION"
-          echo "FileFlow ${VERSION} envoyé au workflow atomique depuis ${VALIDATED_SHA}."
+          echo "FileFlow ${VERSION} envoyé à la gate atomique E2E depuis ${VALIDATED_SHA}."
