@@ -2198,7 +2198,7 @@ async fn install_windows_integration(application: &Path) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let shortcut = programs.join("FileFlow.lnk");
     let working_directory = application.parent().unwrap_or_else(|| Path::new(r"C:\"));
-    let script = r#"param([string]$Target,[string]$Shortcut,[string]$WorkingDirectory); $shell=New-Object -ComObject WScript.Shell; $link=$shell.CreateShortcut($Shortcut); $link.TargetPath=$Target; $link.WorkingDirectory=$WorkingDirectory; $link.IconLocation="$Target,0"; $link.Description='FileFlow — conversion et organisation locale de fichiers'; $link.Save()"#;
+    let script = r#"& { param([string]$Target,[string]$Shortcut,[string]$WorkingDirectory); $shell=New-Object -ComObject WScript.Shell; $link=$shell.CreateShortcut($Shortcut); $link.TargetPath=$Target; $link.WorkingDirectory=$WorkingDirectory; $link.IconLocation="$Target,0"; $link.Description='FileFlow — conversion et organisation locale de fichiers'; $link.Save() }"#;
     run_checked(
         "powershell.exe",
         &[
@@ -2609,7 +2609,7 @@ async fn verify_windows_signature(path: &Path) -> Result<bool, String> {
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "param([string]$Path); (Get-AuthenticodeSignature -LiteralPath $Path).Status.ToString()",
+            "& { param([string]$Path); (Get-AuthenticodeSignature -LiteralPath $Path).Status.ToString() }",
         ])
         .arg(path)
         .stdout(Stdio::piped())

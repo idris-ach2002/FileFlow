@@ -46,6 +46,12 @@ jobs:
           shared-key: release-windows-x64
           cache-on-failure: true
       - run: pnpm install --frozen-lockfile
+      - name: Native Windows Setup regression tests
+        shell: pwsh
+        run: |
+          node scripts/setup/test-windows-powershell-source.mjs
+          pnpm run setup:test
+          cargo clippy -p fileflow-setup -p fileflow-setup-core --all-targets -- -D warnings
       - name: Validate tag and source
         shell: pwsh
         env:
